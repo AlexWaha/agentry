@@ -1,0 +1,11 @@
+# Native agent memory: local tier is per-machine, never committed.
+# The project tier (.claude/agent-memory/) IS committed and shared - do not ignore it.
+agent-memory-local/
+
+# Personal local settings (already gitignored at repo level; listed for portability)
+settings.local.json
+
+# Codegraph index lives at the PROJECT root (.codegraph/) - gitignore it there.
+
+# Python bytecode from hook/tool runs
+__pycache__/

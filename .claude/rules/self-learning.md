@@ -1,0 +1,115 @@
+# Self-Learning
+
+Meta-rule. The team must capture every mistake/surprise so it never repeats. Applies to Orchestrator and every agent.
+
+---
+
+## The Loop
+
+After ANY of the following, update the knowledge base immediately - same session, before moving on:
+
+1. **Mistake made** - wrong assumption, missed precondition, broke convention, redid existing work
+2. **Surprise hit** - API behaved differently than expected, library has non-obvious quirk, tool failed unexpectedly
+3. **CEO correction** - explicit "don't do that", "do it this way next time"
+4. **Workflow friction** - same manual step repeated 3+ times, same clarification asked repeatedly
+
+### Where to record
+
+| Trigger | Update target |
+|---------|---------------|
+| Generalizable coding/architecture mistake | `.claude/rules/<area>.md` (add a "Common mistakes" or "Pre-flight checks" subsection) |
+| Agent produced wrong output / missed step | `.claude/agents/<agent>.md` (tighten instructions) |
+| Tool/API quirk specific to this project | `.claude/project/` overlay (stack.md or a new "Quirks" section) |
+| External library behavior | `.claude/project/` overlay or rules file for that domain |
+| Personal preference / workflow style | `.claude/project/` overlay (project operational fact) or `.claude/rules/<area>.md` (generalizable norm) |
+
+> **STRICT - never store project knowledge in the runtime/home memory dir.** Every lesson, fact, preference, and workflow note lives INSIDE the project (`.claude/rules/`, `.claude/project/`, or `.claude/agent-memory/<agent>/`) so it is committed to git and portable across machines. NEVER write project knowledge to the host/runtime memory location (e.g. a per-project dir under the agent host's home `.claude/projects/.../memory/`) - it is machine-local, uncommitted, and lost on reinstall or when working from another machine. This mirrors the global file-storage rule. If your runtime auto-creates a home memory file, treat it as a redirect stub only: it must contain nothing but a pointer to the in-project locations above.
+
+### Format
+
+Each captured lesson must contain:
+- **What happened** (the mistake/surprise) - one sentence
+- **Why** (root cause) - one sentence
+- **Rule** (what to do/not do next time) - imperative, specific, checkable
+
+No vague "be careful with X". Bad: "be careful with services". Good: "before creating any new file/class/module, run `Glob` for the target path AND `Grep` for the class/symbol name - if either matches, READ the existing file before assuming it needs creation".
+
+---
+
+## Native Agent Memory (two-tier)
+
+Agents whose frontmatter declares `memory: project` get a persistent, committed
+memory dir at `.claude/agent-memory/<agent>/`. Claude Code auto-injects the first
+~200 lines / 25KB of that agent's `MEMORY.md` at startup and auto-enables
+Read/Write/Edit on the dir. Currently enabled for: reviewer, security-engineer,
+qa-engineer, architect, senior-backend-dev, senior-frontend-dev, devops-engineer,
+data-engineer, incident-response-commander, feedback-synthesizer.
+
+Pick the tier when recording a lesson:
+
+| Lesson scope | Where it goes |
+|--------------|---------------|
+| Only THIS agent needs it (operational gotcha, per-role pattern) | `.claude/agent-memory/<agent>/MEMORY.md` |
+| EVERY agent should follow it (convention, architecture, API quirk) | `.claude/rules/<area>.md` (the table above) |
+
+The `self-learning` skill standardizes the record / recall / curate procedure -
+invoke it instead of free-handing the format. Canonical lesson format
+(SIGNATURE / TRIGGER / WHAT / WHY / FIX / DATE) lives in that skill.
+
+**Guardrails:** memory is committed to git - record the METHOD, never a secret,
+credential, or PII value. When a `MEMORY.md` nears the injection window, curate
+(merge duplicates, drop obsolete) so the highest-value lessons stay visible.
+This is persistence + disciplined recall, NOT autonomous self-improvement -
+curation is manual.
+
+### Automated triggers
+
+Two hooks keep the loop honest (both fail-open, both quiet unless actionable):
+
+- **SubagentStop** (`tools/hooks/subagent_stop.py`): when a memory-enabled agent
+  finishes, the orchestrator gets a one-line reminder to record any lesson from
+  its report, and a curation nudge if that agent's `MEMORY.md` nears the
+  injection window (180 lines / 22KB soft threshold).
+- **SessionStart** (`tools/hooks/session_start.py`): prints a memory health line
+  only when some `MEMORY.md` exceeds the threshold - silence means healthy.
+
+Note: the code knowledge graph (codegraph, see `rules/code-retrieval.md`) does
+NOT store lessons - it indexes code structure only. Lessons live here, in
+markdown, under version control.
+
+---
+
+## Mandatory Pre-Flight Checks
+
+Before creating ANY new artifact (a new file, class, module, migration, controller, request validator, resource, command, job, factory, seeder, test file, or any other named unit of code), do this check first:
+
+1. **Glob the target path** - does the file already exist?
+2. **Grep the class/symbol name** - is it referenced or declared anywhere?
+3. **Read the task file fully** - does it say "implement" or "extend/fix"?
+4. **Check `git log --all --oneline -- <path>`** if Glob suggests the file was once there and was removed
+
+If ANY check turns up a hit: STOP, READ the existing artifact, and decide if the task is "create" (rare - only if the existing one is broken) or "extend/refactor" (common). Report the finding to Orchestrator before writing code.
+
+**Why:** Recreating an existing artifact wastes a full agent cycle, creates merge conflicts, and produces a worse-quality second copy that the original tests don't cover. This has happened in practice: an agent started rewriting a service that already existed because it didn't Glob first. Reading takes seconds; rewriting takes minutes and introduces drift.
+
+---
+
+## Anti-patterns
+
+- **"I'll just write it from scratch, faster than reading"** - false. Reading takes seconds; rewriting takes minutes and introduces bugs
+- **"It's a small lesson, not worth recording"** - false. The 4th time you "almost" repeat a mistake, you wish you had written it down the first time
+- **"I'll write it down later"** - false. Context window evaporates; "later" never arrives
+- **Vague rules ("be careful with X")** - useless. Rules must be checkable: "before X, do Y"
+- **Recording the symptom, not the cause** - useless. "Tests failed" is not a lesson. "This test framework requires explicit base-class binding in submodule tests because its auto-discovery doesn't cross module boundaries" is a lesson
+
+---
+
+## Orchestrator Responsibility
+
+The Orchestrator must:
+- Notice when an agent made a mistake/surprise during a task report
+- Decide where the lesson belongs (rule / agent / `project/` overlay / memory)
+- Write the update IN THE SAME SESSION, before delegating the next task
+- If the mistake came from a missing pre-flight check, ALWAYS update agent prompts to include that check by default
+
+If you finish a task without writing down at least one lesson, ask: "did really nothing surprise me?" If something did, capture it.

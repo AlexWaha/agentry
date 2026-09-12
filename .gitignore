@@ -1,0 +1,5 @@
+# Codegraph index - per-machine artifact built by the codegraph CLI.
+.codegraph/
+
+# Pipeline runtime state - per-project, never committed.
+.claude/state/

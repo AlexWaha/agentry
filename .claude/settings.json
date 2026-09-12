@@ -1,0 +1,134 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker compose *)",
+      "Bash(docker exec *)",
+      "Bash(docker ps *)",
+      "Bash(docker logs *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git branch *)",
+      "Bash(git checkout *)",
+      "Bash(git switch *)",
+      "Bash(git stash *)",
+      "Bash(git fetch *)",
+      "Bash(git merge *)",
+      "Bash(git rebase *)",
+      "Bash(codegraph *)",
+      "Bash(ls *)",
+      "Bash(mkdir *)",
+      "Bash(rm -f nul *)",
+      "Bash(rm -f NUL *)",
+      "Read",
+      "Edit",
+      "Write"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/session_start.py\"",
+            "timeout": 60,
+            "statusMessage": "Session start: pipeline state, codegraph sync, memory health..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/pretool_gate.py\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/stop_gate.py\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "architect|product-manager|sprint-prioritizer|rapid-prototyper",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/memory/inject.py\" --layers l1,l3",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "spec-developer",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/memory/inject.py\" --layers l1,l2",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "senior-backend-dev|senior-frontend-dev|data-engineer|devops-engineer|qa-engineer|reviewer|security-engineer",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/memory/inject.py\" --layers l2",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/subagent_stop.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/state.py\" --resume",
+            "timeout": 10,
+            "statusMessage": "Preserving pipeline state through compaction..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "rm -f nul NUL",
+            "timeout": 5,
+            "statusMessage": "Cleaning up NUL files..."
+          }
+        ]
+      }
+    ]
+  },
+  "autoMemoryEnabled": true
+}

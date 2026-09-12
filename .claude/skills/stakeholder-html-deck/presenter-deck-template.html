@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deck Template</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<!--
+  STARTER TEMPLATE for stakeholder-html-deck skill.
+  Replace brand colors (:root), the slides, and NOTES[]. Keep the chrome + presenter JS.
+  Verify by serving over http (python -m http.server) and driving a browser. file:// is blocked in automation.
+-->
+<style>
+  :root{
+    /* === replace these four with REAL brand colors extracted from the company site === */
+    --navy:#00295b;        /* deep brand / headings */
+    --accent:#348303;      /* primary brand accent -> maps to positive/HIGH/MATCH */
+    --blue:#33619e;        /* secondary accent */
+    --text:#3a3f47;
+
+    --bg:#eef2f6; --surface:#fff; --surface-2:#f6f8fa;
+    --muted:#6b7280; --faint:#9aa3af; --line:#e3e8ee; --line-strong:#cdd5df;
+    --accent-soft:#e6f2da; --navy-soft:#e4ecf6;
+    --hi:#2f7a05; --hi-bg:#e4f1d8; --med:#a85c08; --med-bg:#fbeacc;
+    --low:#c2410c; --low-bg:#ffe6d5; --none:#5b6675; --none-bg:#eef1f5;
+    --match:#2f7a05; --match-bg:#e4f1d8; --nomatch:#b3261e; --nomatch-bg:#fbe2e0;
+    --shadow:0 1px 2px rgba(0,41,91,.05),0 14px 34px -16px rgba(0,41,91,.20);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:'Inter',system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text);overflow:hidden;-webkit-font-smoothing:antialiased}
+
+  #deck{position:fixed;inset:0}
+  .slide{position:absolute;inset:0;display:none;flex-direction:column;padding:clamp(30px,5vw,72px) clamp(34px,7vw,118px) 96px;opacity:0;transition:opacity .45s ease}
+  .slide.active{display:flex;opacity:1;animation:in .5s cubic-bezier(.16,.84,.44,1)}
+  @keyframes in{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+  .slide.active .reveal{animation:rise .55s cubic-bezier(.16,.84,.44,1) backwards}
+  .slide.active .reveal:nth-child(1){animation-delay:.04s}
+  .slide.active .reveal:nth-child(2){animation-delay:.12s}
+  .slide.active .reveal:nth-child(3){animation-delay:.20s}
+  .slide.active .reveal:nth-child(4){animation-delay:.28s}
+  @keyframes rise{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+
+  .kicker{display:inline-flex;align-items:center;gap:8px;font-size:.72rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);background:var(--accent-soft);padding:7px 14px;border-radius:999px;width:fit-content;margin-bottom:20px}
+  .kicker::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--accent)}
+  h1{font-size:clamp(2.4rem,6vw,5rem);font-weight:900;line-height:1.02;letter-spacing:-.03em;color:var(--navy)}
+  h2{font-size:clamp(1.8rem,3.6vw,2.9rem);font-weight:850;line-height:1.06;letter-spacing:-.025em;color:var(--navy);margin-bottom:6px}
+  .sub{font-size:clamp(1rem,1.5vw,1.28rem);color:var(--muted);font-weight:500;line-height:1.55;max-width:64ch}
+  .slide-head{margin-bottom:clamp(16px,2.3vh,32px)}
+  .grad{background:linear-gradient(100deg,var(--navy),var(--blue));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .title-slide{justify-content:center;background:radial-gradient(1200px 620px at 86% -12%,rgba(52,131,3,.09),transparent 60%),var(--surface)}
+  .chip{display:inline-flex;align-items:center;gap:9px;background:var(--surface);border:1px solid var(--line);padding:11px 18px;border-radius:12px;font-weight:600;color:var(--navy);box-shadow:var(--shadow)}
+  .chip .dot{width:9px;height:9px;border-radius:50%;background:var(--accent)}
+  .meta{display:flex;flex-wrap:wrap;gap:13px;margin-top:36px}
+
+  /* badges / verdicts */
+  .badge{display:inline-flex;align-items:center;gap:6px;padding:4px 11px;border-radius:999px;font-size:.76rem;font-weight:800}
+  .badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+  .b-hi{color:var(--hi);background:var(--hi-bg)} .b-med{color:var(--med);background:var(--med-bg)}
+  .b-low{color:var(--low);background:var(--low-bg)} .b-none{color:var(--none);background:var(--none-bg)}
+  .verdict{display:inline-flex;align-items:center;gap:7px;padding:5px 13px;border-radius:8px;font-weight:800;font-size:.82rem}
+  .v-match{color:var(--match);background:var(--match-bg)} .v-no{color:var(--nomatch);background:var(--nomatch-bg)}
+
+  /* table */
+  .tbl{background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:var(--shadow);width:100%;max-width:980px}
+  table{width:100%;border-collapse:collapse;font-size:clamp(.82rem,1.05vw,1rem)}
+  thead th{text-align:left;font-weight:800;font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--surface-2);padding:13px 18px;border-bottom:1px solid var(--line)}
+  tbody td{padding:11px 18px;border-bottom:1px solid var(--line);font-weight:600;color:var(--text)}
+  tbody tr:last-child td{border-bottom:none}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;font-weight:800;color:var(--navy)}
+  td.who{font-weight:800;color:var(--navy)}
+
+  /* insight callout */
+  .insight{background:linear-gradient(120deg,var(--accent-soft),#eef6e3);border:1px solid #cfe4b4;border-radius:18px;padding:clamp(20px,2.3vw,30px);box-shadow:var(--shadow);display:flex;gap:20px;align-items:flex-start;margin-top:22px}
+  .insight .em{flex:none;width:54px;height:54px;border-radius:14px;background:#fff;display:grid;place-items:center;box-shadow:var(--shadow)}
+  .insight .em svg{width:30px;height:30px}
+  .insight h3{font-size:1.3rem;font-weight:850;margin-bottom:8px;color:var(--navy)}
+  .insight p{color:var(--text);font-size:1.02rem;line-height:1.6;font-weight:500;max-width:82ch}
+  .insight b{color:var(--accent);font-weight:800}
+
+  /* visual formula */
+  .eq{display:flex;align-items:center;gap:16px;flex-wrap:wrap;font-weight:800;color:var(--navy);font-size:clamp(1rem,1.5vw,1.35rem)}
+  .frac{display:inline-flex;flex-direction:column;text-align:center;line-height:1.2}
+  .frac .top{padding:0 16px 9px;color:var(--accent)} .frac .bot{padding:9px 16px 0;border-top:2.5px solid var(--navy);color:var(--blue)}
+  .eq .op{color:var(--muted)}
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(14px,1.6vw,22px)}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:clamp(18px,2vw,28px);box-shadow:var(--shadow);display:flex;flex-direction:column;gap:9px}
+  .card .ico{width:50px;height:50px;border-radius:13px;display:grid;place-items:center;background:var(--navy-soft);margin-bottom:6px}
+  .card .ico svg{width:27px;height:27px}
+  .card h3{font-size:1.18rem;font-weight:800;color:var(--navy)}
+  .card p{color:var(--muted);font-size:.97rem;line-height:1.55;font-weight:500}
+  .stat .num{font-size:clamp(2.1rem,4.4vw,3.4rem);font-weight:900;color:var(--accent);line-height:1}
+  .stat .lab{color:var(--muted);font-weight:600;font-size:.93rem}
+
+  /* chrome */
+  #progress{position:fixed;top:0;left:0;height:4px;width:0;background:linear-gradient(90deg,var(--navy),var(--accent));z-index:60;transition:width .4s cubic-bezier(.16,.84,.44,1)}
+  #chrome{position:fixed;left:0;right:0;bottom:0;height:62px;display:flex;align-items:center;z-index:50;padding:0 clamp(22px,4vw,46px);pointer-events:none}
+  #chrome .zone{flex:1;display:flex;align-items:center}
+  #chrome .zC{justify-content:center}#chrome .zR{justify-content:flex-end;gap:8px}
+  .brand{font-weight:800;font-size:.78rem;letter-spacing:.06em;color:var(--faint)}
+  .brand b{color:var(--accent)}
+  #dots{display:flex;gap:9px;pointer-events:auto}
+  #dots button{width:9px;height:9px;border-radius:50%;border:none;background:var(--line-strong);cursor:pointer;padding:0;transition:.25s}
+  #dots button.on{background:var(--accent);width:26px;border-radius:6px}
+  #chrome .zR button{pointer-events:auto;height:40px;width:40px;border-radius:11px;border:1px solid var(--line);background:var(--surface);color:var(--navy);cursor:pointer;box-shadow:var(--shadow);display:grid;place-items:center;font-size:1.1rem;transition:.2s}
+  #chrome .zR button:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+  #chrome .zR button:disabled{opacity:.35}
+  #counter{display:grid;place-items:center;height:40px;padding:0 14px;border-radius:11px;border:1px solid var(--line);background:var(--surface);font-weight:800;font-size:.82rem;color:var(--muted);box-shadow:var(--shadow)}
+  #present svg{width:18px;height:18px}
+</style>
+</head>
+<body>
+<div id="progress"></div>
+<div id="deck">
+
+  <!-- TITLE -->
+  <section class="slide title-slide">
+    <div class="reveal kicker">Team or context label</div>
+    <h1 class="reveal">The <span class="grad">Project Name</span></h1>
+    <p class="reveal sub" style="margin-top:22px;font-size:clamp(1.1rem,1.8vw,1.45rem)">One plain sentence on what this does and why anyone should care. No jargon.</p>
+    <div class="reveal meta">
+      <span class="chip"><span class="dot"></span>Benefit one</span>
+      <span class="chip"><span class="dot"></span>Benefit two</span>
+    </div>
+  </section>
+
+  <!-- FORMULA + CARDS -->
+  <section class="slide">
+    <div class="slide-head"><div class="reveal kicker">How we score</div><h2 class="reveal">Two simple ideas behind the numbers</h2></div>
+    <div class="reveal eq" style="margin:18px 0 8px">
+      <span>Match Score</span><span class="op">=</span>
+      <span class="frac"><span class="top">what the person can do</span><span class="bot">what the role needs</span></span>
+      <span class="op">&times;</span><span>100</span>
+    </div>
+    <p class="reveal sub" style="margin-bottom:18px">100 or more means good fit. It can climb past 100 when someone is stronger than the role asks.</p>
+    <div class="reveal cards">
+      <div class="card"><div class="ico"><svg viewBox="0 0 48 48" fill="none" stroke="#00295b" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 24s7-11 18-11 18 11 18 11-7 11-18 11S6 24 6 24z"/><circle cx="24" cy="24" r="5"/></svg></div><h3>Clear</h3><p>Every answer breaks down into one number a manager can see.</p></div>
+      <div class="card"><div class="ico"><svg viewBox="0 0 48 48" fill="none" stroke="#00295b" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M24 8 41 17 24 26 7 17z"/><path d="M7 24l17 9 17-9"/><path d="M7 31l17 9 17-9"/></svg></div><h3>Flexible</h3><p>New cases are a setup task, not a rebuild.</p></div>
+      <div class="card stat"><span class="num" data-count="100" data-suffix="%">0</span><span class="lab">animated stat counter</span></div>
+    </div>
+  </section>
+
+  <!-- TABLE + INSIGHT -->
+  <section class="slide">
+    <div class="slide-head"><div class="reveal kicker">The verdict</div><h2 class="reveal">Does the candidate fit</h2></div>
+    <div class="reveal tbl">
+      <table>
+        <thead><tr><th>Candidate</th><th>Role</th><th style="text-align:right">Score</th><th>Verdict</th></tr></thead>
+        <tbody>
+          <tr><td class="who">Example A</td><td>Role One</td><td class="num">115.4%</td><td><span class="verdict v-match">MATCH</span></td></tr>
+          <tr><td class="who">Example A</td><td>Role Two</td><td class="num">69.2%</td><td><span class="verdict v-no">NO MATCH</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="reveal insight">
+      <div class="em"><svg viewBox="0 0 48 48" fill="none" stroke="#348303" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="24" cy="24" r="16"/><path d="M16 24.5l5.5 5.5L33 18.5"/></svg></div>
+      <div><h3>State what the table proves, in plain words</h3><p>One or two sentences. Name the concrete reason behind the numbers. This callout is what makes the table persuasive.</p></div>
+    </div>
+  </section>
+
+</div>
+
+<div id="chrome">
+  <div class="zone"><span class="brand">PROJECT <b>NAME</b></span></div>
+  <div class="zone zC"><div id="dots"></div></div>
+  <div class="zone zR">
+    <button id="present" title="Presenter view (S)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8"/></svg></button>
+    <button id="prev">&#8249;</button><div id="counter">01 / 03</div><button id="next">&#8250;</button>
+  </div>
+</div>
+
+<!-- Presenter popup template: STATIC HTML ONLY, no script. The opener drives it. -->
+<script type="text/html" id="presTpl">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Presenter view</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',system-ui,Segoe UI,sans-serif;background:#0b1424;color:#e6ecf5;height:100vh;display:flex;flex-direction:column;padding:26px 30px}
+  #bar{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #1e2c44;padding-bottom:16px}
+  #tag{font-size:.74rem;font-weight:800;letter-spacing:.18em;color:#7dd35b}
+  #clock{font-size:1.5rem;font-weight:800;font-variant-numeric:tabular-nums}
+  #pos{font-size:.95rem;font-weight:700;color:#8b9ab4}
+  #body{flex:1;display:flex;flex-direction:column;justify-content:center;padding:26px 4px}
+  #cur{font-size:.74rem;font-weight:800;letter-spacing:.16em;color:#5d7290;margin-bottom:10px}
+  #title{font-size:2.1rem;font-weight:850;line-height:1.1;margin-bottom:26px;color:#fff}
+  #notes{list-style:none;display:flex;flex-direction:column;gap:16px}
+  #notes li{display:flex;gap:14px;font-size:1.28rem;line-height:1.45;font-weight:500;color:#cdd8ea}
+  #notes li::before{content:"";flex:none;width:9px;height:9px;border-radius:50%;background:#7dd35b;margin-top:10px}
+  #foot{display:flex;align-items:center;justify-content:space-between;border-top:1px solid #1e2c44;padding-top:16px}
+  #next{font-size:1.02rem;font-weight:600;color:#8b9ab4} #next b{color:#cdd8ea;font-weight:800}
+  #btns{display:flex;gap:10px}
+  #btns button{height:48px;padding:0 22px;border-radius:12px;border:1px solid #2a3b5a;background:#13203a;color:#e6ecf5;font-size:1rem;font-weight:700;cursor:pointer;transition:.18s}
+  #btns button:hover{background:#7dd35b;color:#0b1424;border-color:#7dd35b}
+</style></head>
+<body>
+  <div id="bar"><span id="tag">PRESENTER VIEW</span><span id="clock">00:00</span><span id="pos">- / -</span></div>
+  <div id="body"><div id="cur">SLIDE</div><h1 id="title">Waiting for the deck...</h1><ul id="notes"></ul></div>
+  <div id="foot"><div id="next">Next up: <b>-</b></div><div id="btns"><button id="p">&#8249; Prev</button><button id="n">Next &#8250;</button></div></div>
+</body></html>
+</script>
+
+<script>
+(function(){
+  const slides=[...document.querySelectorAll('.slide')];
+  const total=slides.length;
+  let i=0, animated=new Set();
+  const $=id=>document.getElementById(id);
+  const progress=$('progress'), counter=$('counter'), dotsWrap=$('dots');
+  const prevBtn=$('prev'), nextBtn=$('next'), presentBtn=$('present');
+
+  const titles=slides.map(s=>{const h=s.querySelector('h1,h2');return h?h.textContent.replace(/\s+/g,' ').trim():'Slide';});
+
+  // one entry per slide; keep in sync with the separate *-script.md
+  const NOTES=[
+    ["Open with the one-line value proposition.","Say you will show it working on real data."],
+    ["Two simple ideas behind the numbers.","The match score is what the person can do over what the role needs.","A hundred or more means good fit."],
+    ["State the verdict.","Name the concrete reason behind the numbers.","That reason is the proof."]
+  ];
+
+  let presWin=null, presTimer=null, presStart=0;
+  function openPresenter(){
+    if(presWin && !presWin.closed){presWin.focus();return;}
+    presWin=window.open('about:blank','deck_presenter','width=860,height=660');
+    if(!presWin){alert('Please allow pop-ups so the presenter view can open.');return;}
+    const doc=presWin.document;
+    doc.open(); doc.write($('presTpl').textContent); doc.close();
+    presStart=Date.now();
+    doc.getElementById('n').onclick=()=>next();
+    doc.getElementById('p').onclick=()=>prev();
+    presWin.addEventListener('keydown',e=>{
+      if(['ArrowRight','ArrowDown',' '].includes(e.key)){e.preventDefault();next();}
+      else if(['ArrowLeft','ArrowUp'].includes(e.key)){e.preventDefault();prev();}
+    });
+    if(presTimer)clearInterval(presTimer);
+    presTimer=setInterval(()=>{
+      if(!presWin||presWin.closed){clearInterval(presTimer);return;}
+      const s=Math.floor((Date.now()-presStart)/1000), el=presWin.document.getElementById('clock');
+      if(el)el.textContent=String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
+    },1000);
+    renderPresenter();
+  }
+  function renderPresenter(){
+    if(!presWin||presWin.closed)return;
+    const doc=presWin.document, t=doc.getElementById('title'); if(!t)return;
+    doc.getElementById('pos').textContent=(i+1)+' / '+total;
+    doc.getElementById('cur').textContent='SLIDE '+(i+1);
+    t.textContent=titles[i];
+    const ul=doc.getElementById('notes'); ul.innerHTML='';
+    (NOTES[i]||[]).forEach(n=>{const li=doc.createElement('li');li.textContent=n;ul.appendChild(li);});
+    doc.getElementById('next').innerHTML='Next up: <b>'+(titles[i+1]||'End of deck')+'</b>';
+  }
+
+  slides.forEach((_,n)=>{const b=document.createElement('button');b.onclick=()=>go(n);dotsWrap.appendChild(b);});
+  const dots=[...dotsWrap.children];
+  const pad=n=>String(n+1).padStart(2,'0');
+
+  function animateCounts(slide){
+    if(animated.has(slide))return; animated.add(slide);
+    slide.querySelectorAll('[data-count]').forEach(el=>{
+      const target=parseFloat(el.dataset.count), suffix=el.dataset.suffix||'';
+      if(el.dataset.plain){el.textContent=target+suffix;return;}
+      const dur=900,start=performance.now();
+      (function tick(now){const p=Math.min(1,(now-start)/dur),e=1-Math.pow(1-p,3);
+        el.textContent=Math.round(target*e)+suffix;if(p<1)requestAnimationFrame(tick);})(start);
+    });
+  }
+  function render(){
+    slides.forEach((s,n)=>s.classList.toggle('active',n===i));
+    progress.style.width=((i+1)/total*100)+'%';
+    counter.textContent=pad(i)+' / '+String(total).padStart(2,'0');
+    dots.forEach((d,n)=>d.classList.toggle('on',n===i));
+    prevBtn.disabled=i===0; nextBtn.disabled=i===total-1;
+    animateCounts(slides[i]); renderPresenter();
+  }
+  function go(n){i=Math.max(0,Math.min(total-1,n));render();}
+  function next(){go(i+1);} function prev(){go(i-1);}
+
+  nextBtn.onclick=next; prevBtn.onclick=prev; presentBtn.onclick=openPresenter;
+  document.addEventListener('keydown',e=>{
+    if(['ArrowRight','ArrowDown',' ','PageDown'].includes(e.key)){e.preventDefault();next();}
+    else if(['ArrowLeft','ArrowUp','PageUp'].includes(e.key)){e.preventDefault();prev();}
+    else if(e.key==='Home')go(0); else if(e.key==='End')go(total-1);
+    else if(e.key==='s'||e.key==='S')openPresenter();
+    else if(e.key==='f'||e.key==='F'){document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();}
+  });
+  let sx=0;
+  document.addEventListener('touchstart',e=>sx=e.touches[0].clientX,{passive:true});
+  document.addEventListener('touchend',e=>{const d=e.changedTouches[0].clientX-sx;if(Math.abs(d)>50)d<0?next():prev();},{passive:true});
+  render();
+})();
+</script>
+</body>
+</html>

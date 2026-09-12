@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Diff Review - __TASK__</title>
+<style>
+  :root { --bg:#1e1e26; --panel:#26262f; --line:#3a3a46; --text:#d8d8e0;
+          --dim:#8a8a96; --add-bg:#12351c; --del-bg:#3d1a1e; --sel:#2d4a6e;
+          --accent:#4a9eff; --green:#2ea043; --red:#d64545; }
+  * { box-sizing:border-box; margin:0; }
+  body { font:13px/1.45 "Consolas","SF Mono",monospace; background:var(--bg);
+         color:var(--text); height:100vh; display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; gap:14px; padding:10px 16px;
+           background:var(--panel); border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; font-weight:600; }
+  header .meta { color:var(--dim); font-size:12px; }
+  header .spacer { flex:1; }
+  button { font:600 13px/1 system-ui; padding:9px 16px; border-radius:6px;
+           border:1px solid var(--line); cursor:pointer; color:#fff; }
+  #btn-approve { background:var(--green); border-color:var(--green); }
+  #btn-changes { background:var(--red); border-color:var(--red); }
+  #btn-changes:disabled { opacity:.4; cursor:not-allowed; }
+  .wrap { flex:1; display:flex; min-height:0; }
+  #filelist { width:300px; overflow-y:auto; background:var(--panel);
+              border-right:1px solid var(--line); padding:6px 0; flex-shrink:0; }
+  .file { padding:6px 12px; cursor:pointer; display:flex; gap:8px; align-items:center;
+          white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .file:hover { background:#2e2e3a; }
+  .file.active { background:var(--sel); }
+  .badge { font-size:10px; font-weight:700; padding:1px 5px; border-radius:3px; flex-shrink:0; }
+  .badge.A { background:#1f4d2c; color:#7ee2a8; } .badge.M { background:#4d3d1f; color:#e2c97e; }
+  .badge.D { background:#4d1f27; color:#e27e8f; } .badge.R { background:#1f3a4d; color:#7ec4e2; }
+  .counts { color:var(--dim); font-size:11px; margin-left:auto; flex-shrink:0; }
+  .file .cdot { color:var(--accent); font-size:16px; line-height:0; }
+  #diff { flex:1; overflow:auto; }
+  table.diff { border-collapse:collapse; width:100%; table-layout:fixed; }
+  td.num { width:44px; min-width:44px; text-align:right; padding:0 8px 0 4px;
+           color:var(--dim); user-select:none; cursor:pointer; font-size:11px;
+           border-right:1px solid var(--line); vertical-align:top; }
+  td.num:hover { color:#fff; background:#33334a; }
+  td.code { width:50%; padding:0 10px; white-space:pre-wrap; word-break:break-all;
+            vertical-align:top; }
+  tr.add td.code.right, tr.add td.num.right { background:var(--add-bg); }
+  tr.del td.code.left, tr.del td.num.left { background:var(--del-bg); }
+  tr.rep td.code.left, tr.rep td.num.left { background:var(--del-bg); }
+  tr.rep td.code.right, tr.rep td.num.right { background:var(--add-bg); }
+  tr.commented td { outline:1px solid var(--accent); outline-offset:-1px; }
+  tr.selecting-left td.num.left, tr.selecting-left td.code.left { background:var(--sel); }
+  tr.selecting-right td.num.right, tr.selecting-right td.code.right { background:var(--sel); }
+  .tok-k { color:#c792ea; } .tok-s { color:#a5d6a7; } .tok-c { color:#6a737d; font-style:italic; }
+  .tok-n { color:#f78c6c; } .tok-f { color:#82aaff; }
+  #cbox { position:fixed; display:none; z-index:10; background:var(--panel);
+          border:1px solid var(--accent); border-radius:8px; padding:12px; width:420px;
+          box-shadow:0 8px 30px rgba(0,0,0,.5); }
+  #cbox textarea { width:100%; height:80px; background:var(--bg); color:var(--text);
+                   border:1px solid var(--line); border-radius:4px; padding:8px;
+                   font:12px/1.4 monospace; resize:vertical; }
+  #cbox .row { display:flex; gap:8px; margin-top:8px; align-items:center; }
+  #cbox .row .hint { color:var(--dim); font-size:11px; flex:1; }
+  #comments { max-height:180px; overflow-y:auto; background:var(--panel);
+              border-top:1px solid var(--line); padding:8px 16px; display:none; }
+  .citem { display:flex; gap:10px; padding:4px 0; font-size:12px; align-items:baseline; }
+  .citem .loc { color:var(--accent); cursor:pointer; white-space:nowrap; }
+  .citem .del { color:var(--red); cursor:pointer; }
+  #done { display:none; position:fixed; inset:0; background:rgba(20,20,28,.92);
+          z-index:20; align-items:center; justify-content:center; flex-direction:column;
+          gap:12px; font:600 20px system-ui; }
+</style></head><body>
+<header>
+  <h1>__TASK__</h1>
+  <span class="meta">__NFILES__ file(s) &middot; base __BASE7__ &rarr; head __HEAD7__ &middot; round __ROUND__</span>
+  <span class="spacer"></span>
+  <span class="meta" id="ccount">0 comments</span>
+  <button id="btn-changes" disabled>Request changes</button>
+  <button id="btn-approve">Approve</button>
+</header>
+<div class="wrap">
+  <div id="filelist"></div>
+  <div id="diff"><p style="padding:20px;color:var(--dim)">Select a file.</p></div>
+</div>
+<div id="comments"></div>
+<div id="cbox">
+  <div style="margin-bottom:6px;font-size:12px" id="cbox-loc"></div>
+  <textarea id="cbox-text" placeholder="What must change here..."></textarea>
+  <div class="row">
+    <span class="hint">Click a line number to anchor. Shift-click another to extend the range.</span>
+    <button onclick="cboxCancel()" style="background:#3a3a46">Cancel</button>
+    <button onclick="cboxSave()" style="background:var(--accent)">Add comment</button>
+  </div>
+</div>
+<div id="done"><div id="done-msg"></div><div style="font-size:13px;color:#aaa">
+  You can close this tab. The review server has shut down.</div></div>
+<script>
+const FILES = __FILES__;
+let current = null, comments = [], nextId = 1, anchor = null;
+let drag = null, suppressClick = false;
+
+const KW = {
+  code: /\b(function|return|if|else|elseif|for|foreach|while|switch|case|break|continue|class|interface|trait|extends|implements|new|public|private|protected|static|const|var|let|def|import|from|export|default|async|await|try|catch|finally|throw|use|namespace|match|fn|enum|type|struct|impl|pub|mod|package|void|int|string|bool|float|null|true|false|None|True|False|this|self|require|include)\b/g
+};
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function hl(line){
+  let out = '', rest = line;
+  const re = /(\/\/.*$|#.*$|\/\*.*?\*\/|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|\b\d+(?:\.\d+)?\b)/;
+  while (rest.length){
+    const m = rest.match(re);
+    if (!m){ out += plain(rest); break; }
+    out += plain(rest.slice(0, m.index));
+    const t = m[0];
+    if (t[0]==='"'||t[0]==="'"||t[0]==='`') out += '<span class="tok-s">'+esc(t)+'</span>';
+    else if (t.startsWith('//')||t[0]==='#'||t.startsWith('/*')) out += '<span class="tok-c">'+esc(t)+'</span>';
+    else out += '<span class="tok-n">'+esc(t)+'</span>';
+    rest = rest.slice(m.index + t.length);
+  }
+  return out;
+}
+function plain(s){
+  return esc(s)
+    .replace(KW.code, '<span class="tok-k">$&</span>')
+    .replace(/\b([A-Za-z_][A-Za-z0-9_]*)\s*(?=\()/g, '<span class="tok-f">$1</span>');
+}
+
+function renderFileList(){
+  const el = document.getElementById('filelist');
+  el.innerHTML = '';
+  FILES.forEach(f => {
+    const d = document.createElement('div');
+    d.className = 'file' + (current===f.path ? ' active' : '');
+    d.dataset.path = f.path;
+    const n = comments.filter(c => c.file===f.path).length;
+    d.innerHTML = '<span class="badge '+f.status+'">'+f.status+'</span>'
+      + '<span style="overflow:hidden;text-overflow:ellipsis">'+esc(f.path)+'</span>'
+      + (n ? '<span class="cdot" title="'+n+' comment(s)">&bull;</span>' : '')
+      + '<span class="counts">+'+f.added+' -'+f.removed+'</span>';
+    el.appendChild(d);
+  });
+}
+
+async function loadFile(path){
+  cboxCancel();
+  current = path; anchor = null; drag = null; renderFileList();
+  const el = document.getElementById('diff');
+  try {
+    const r = await fetch('/api/diff?path=' + encodeURIComponent(path));
+    const d = await r.json();
+    if (d.error){
+      el.innerHTML = '<p style="padding:20px;color:var(--red)">Error loading diff: '+esc(String(d.error))+'</p>';
+      return;
+    }
+    if (d.binary){ el.innerHTML = '<p style="padding:20px;color:var(--dim)">Binary file - no diff view.</p>'; return; }
+    if (!Array.isArray(d.opcodes)){
+      el.innerHTML = '<p style="padding:20px;color:var(--red)">Unexpected response from server - no opcodes.</p>';
+      return;
+    }
+    const rows = [];
+    d.opcodes.forEach(([tag, i1, i2, j1, j2]) => {
+      if (tag === 'equal'){
+        for (let k = 0; k < i2 - i1; k++) rows.push(['eq', i1+k, j1+k]);
+      } else {
+        const n = Math.max(i2 - i1, j2 - j1);
+        for (let k = 0; k < n; k++){
+          const li = i1 + k < i2 ? i1 + k : null;
+          const rj = j1 + k < j2 ? j1 + k : null;
+          rows.push([li !== null && rj !== null ? 'rep' : (li !== null ? 'del' : 'add'), li, rj]);
+        }
+      }
+    });
+    let html = '<table class="diff"><tbody>';
+    rows.forEach(([cls, li, rj]) => {
+      const lnum = li !== null ? li + 1 : '', rnum = rj !== null ? rj + 1 : '';
+      const lline = li !== null ? hl(d.base_lines[li] ?? '') : '';
+      const rline = rj !== null ? hl(d.head_lines[rj] ?? '') : '';
+      html += '<tr class="'+cls+'" data-l="'+lnum+'" data-r="'+rnum+'">'
+        + '<td class="num left" data-side="before" data-line="'+lnum+'">'+lnum+'</td>'
+        + '<td class="code left">'+lline+'</td>'
+        + '<td class="num right" data-side="after" data-line="'+rnum+'">'+rnum+'</td>'
+        + '<td class="code right">'+rline+'</td></tr>';
+    });
+    el.innerHTML = html + '</tbody></table>';
+    markCommented();
+  } catch (err) {
+    el.innerHTML = '<p style="padding:20px;color:var(--red)">Failed to render diff: '+esc(String((err && err.message) || err))+'</p>';
+  }
+}
+
+function rowSideLine(tr){
+  const rNum = parseInt(tr.dataset.r || '0');
+  const lNum = parseInt(tr.dataset.l || '0');
+  if (rNum) return { side: 'after', line: rNum };
+  if (lNum) return { side: 'before', line: lNum };
+  return null;
+}
+function sideLineFor(tr, side){
+  const attr = side === 'after' ? tr.dataset.r : tr.dataset.l;
+  if (!attr) return null;
+  const n = parseInt(attr, 10);
+  return n ? n : null;
+}
+function clearSelecting(){
+  document.querySelectorAll('tr.selecting-left, tr.selecting-right').forEach(tr =>
+    tr.classList.remove('selecting-left', 'selecting-right'));
+}
+function applySelecting(side, startLine, endLine){
+  clearSelecting();
+  const lo = Math.min(startLine, endLine), hi = Math.max(startLine, endLine);
+  const cls = side === 'after' ? 'selecting-right' : 'selecting-left';
+  document.querySelectorAll('table.diff tr').forEach(tr => {
+    const n = sideLineFor(tr, side);
+    if (n !== null && n >= lo && n <= hi) tr.classList.add(cls);
+  });
+}
+function openCbox(tr, e){
+  if (!anchor) return;
+  const box = document.getElementById('cbox');
+  document.getElementById('cbox-loc').textContent =
+    current + ' [' + anchor.side + '] lines ' + anchor.start + '-' + anchor.end;
+  box.style.display = 'block';
+  const anchorEl = (e && e.target && e.target.closest && e.target.closest('td')) || tr;
+  const r = anchorEl ? anchorEl.getBoundingClientRect() : { right: 100, top: 100 };
+  box.style.left = Math.min(window.innerWidth - 440, r.right + 12) + 'px';
+  box.style.top = Math.min(window.innerHeight - 220, r.top) + 'px';
+  document.getElementById('cbox-text').focus();
+  clearSelecting();
+}
+function pickLine(tr, e){
+  const sl = rowSideLine(tr);
+  if (!sl) return;
+  const { side, line } = sl;
+  if (e.shiftKey && anchor && anchor.side === side){
+    anchor.end = Math.max(anchor.start0, line);
+    anchor.start = Math.min(anchor.start0, line);
+  } else {
+    anchor = { file: current, side, start: line, end: line, start0: line };
+  }
+  openCbox(tr, e);
+}
+function cboxCancel(){
+  document.getElementById('cbox').style.display = 'none';
+  clearSelecting();
+}
+function cboxSave(){
+  const text = document.getElementById('cbox-text').value.trim();
+  if (!text || !anchor) return;
+  comments.push({ id: nextId++, file: anchor.file, side: anchor.side,
+                  start_line: anchor.start, end_line: anchor.end, text });
+  document.getElementById('cbox-text').value = '';
+  cboxCancel(); refreshComments(); markCommented(); renderFileList();
+}
+function delComment(id){
+  comments = comments.filter(c => c.id !== id);
+  refreshComments(); markCommented(); renderFileList();
+}
+function refreshComments(){
+  const el = document.getElementById('comments');
+  document.getElementById('ccount').textContent = comments.length + ' comments';
+  document.getElementById('btn-changes').disabled = comments.length === 0;
+  if (!comments.length){ el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.innerHTML = comments.map(c =>
+    '<div class="citem"><span class="loc" onclick="loadFile(\''+c.file.replace(/'/g,"\\'")+'\')">'
+    + esc(c.file)+':'+c.start_line+(c.end_line!==c.start_line?'-'+c.end_line:'')+' ['+c.side+']</span>'
+    + '<span style="flex:1">'+esc(c.text)+'</span>'
+    + '<span class="del" onclick="delComment('+c.id+')">delete</span></div>').join('');
+}
+function markCommented(){
+  document.querySelectorAll('tr.commented').forEach(tr => tr.classList.remove('commented'));
+  comments.filter(c => c.file === current).forEach(c => {
+    document.querySelectorAll('table.diff tr').forEach(tr => {
+      const n = parseInt((c.side === 'before' ? tr.dataset.l : tr.dataset.r) || '0');
+      if (n >= c.start_line && n <= c.end_line) tr.classList.add('commented');
+    });
+  });
+}
+async function sendVerdict(verdict){
+  const label = verdict === 'approved' ? 'APPROVED' : 'CHANGES REQUESTED';
+  if (!confirm(label + ' - submit this verdict?')) return;
+  const r = await fetch('/api/verdict', { method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ verdict, comments }) });
+  if (r.ok){
+    document.getElementById('done-msg').textContent = 'Verdict recorded: ' + label;
+    document.getElementById('done').style.display = 'flex';
+  } else { alert('Failed to record the verdict: ' + await r.text()); }
+}
+document.getElementById('filelist').addEventListener('click', (e) => {
+  const item = e.target.closest('.file');
+  if (item && item.dataset.path) loadFile(item.dataset.path);
+});
+document.getElementById('diff').addEventListener('click', (e) => {
+  if (suppressClick){ suppressClick = false; return; }
+  const tr = e.target.closest('table.diff tr');
+  if (tr) pickLine(tr, e);
+});
+document.getElementById('diff').addEventListener('mousedown', (e) => {
+  const tr = e.target.closest('table.diff tr');
+  if (!tr) return;
+  const sl = rowSideLine(tr);
+  if (!sl) return;
+  e.preventDefault();
+  drag = { side: sl.side, startLine: sl.line, endLine: sl.line, moved: false };
+  applySelecting(drag.side, drag.startLine, drag.endLine);
+});
+document.getElementById('diff').addEventListener('mousemove', (e) => {
+  if (!drag) return;
+  const tr = e.target.closest('table.diff tr');
+  if (!tr) return;
+  const sl = rowSideLine(tr);
+  if (!sl || sl.side !== drag.side) return;
+  if (sl.line !== drag.endLine) drag.moved = true;
+  drag.endLine = sl.line;
+  applySelecting(drag.side, drag.startLine, drag.endLine);
+});
+document.addEventListener('mouseup', (e) => {
+  if (!drag) return;
+  const d = drag; drag = null;
+  const sel = window.getSelection && window.getSelection();
+  if (sel && sel.removeAllRanges) sel.removeAllRanges();
+  if (!d.moved){ clearSelecting(); return; }
+  suppressClick = true;
+  anchor = { file: current, side: d.side, start: Math.min(d.startLine, d.endLine),
+             end: Math.max(d.startLine, d.endLine), start0: d.startLine };
+  const tr = (e.target && e.target.closest && e.target.closest('table.diff tr'))
+    || document.querySelector('table.diff tr[data-l="'+d.endLine+'"], table.diff tr[data-r="'+d.endLine+'"]');
+  openCbox(tr, e);
+});
+document.getElementById('btn-approve').onclick = () => sendVerdict('approved');
+document.getElementById('btn-changes').onclick = () => sendVerdict('changes_requested');
+renderFileList();
+if (FILES.length) loadFile(FILES[0].path);
+</script></body></html>

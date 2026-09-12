@@ -1,0 +1,35 @@
+{
+  "_comment": "Copy this file to settings.local.json and add your personal permissions / MCP servers / preferences. settings.local.json is gitignored and must never be committed. Stack-specific permissions (test/build/format commands) that everyone on the team needs belong in settings.json, not here.",
+
+  "permissions": {
+    "allow": [
+      "__EXAMPLE_STACK_COMMANDS__: add project-specific commands below",
+      "Bash({{TEST_CMD}}:*)",
+      "Bash({{FORMAT_CMD}}:*)",
+      "Bash({{LINT_CMD}}:*)",
+      "Bash({{BUILD_CMD}}:*)",
+      "Bash({{DEV_CMD}}:*)",
+
+      "__EXAMPLE_NPM_YARN__: uncomment if project uses Node.js",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(npx *:*)",
+
+      "__EXAMPLE_GIT_EXTRAS__: additional git commands beyond the global allowlist",
+      "Bash(git commit -m *)",
+      "Bash(git push *)",
+
+      "__EXAMPLE_WEBFETCH__: per-domain WebFetch allowlist",
+      "WebFetch(domain:example.com)",
+
+      "__EXAMPLE_MCP__: MCP server tool allowlist",
+      "mcp__plugin_playwright_playwright__browser_navigate",
+      "mcp__plugin_playwright_playwright__browser_snapshot"
+    ]
+  },
+
+  "enableAllProjectMcpServers": false,
+  "enabledMcpjsonServers": [],
+  "spinnerTipsEnabled": true,
+  "autoMemoryDirectory": ".claude/memory"
+}
