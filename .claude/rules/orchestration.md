@@ -172,6 +172,96 @@ approvals level, taking a new task is itself a CEO checkpoint: the orchestrator
 asks which task to start, and `advance.py` moves the file `backlog/ -> active/`
 once it registers.
 
+### A started task gets finished
+
+The default is not negotiable by convenience: **once a task is started, it is
+carried to done.** Do not set work aside because something looks more
+interesting, because a better ordering occurred to you, or because a gate
+failed - a gate failure is fixed and re-run, and after the retry budget the task
+parks `blocked` and is surfaced. Half-finished tasks are how a working tree ends
+up carrying changes nobody owns.
+
+### Force majeure: the exact sequence
+
+Only the CEO declares one, by asking for something immediately. Then, in this
+order and without improvising:
+
+1. **Commit what exists on the current task's branch.** Whatever state it is in,
+   it gets committed so nothing is lost and the working tree is clean. This is
+   the one place a commit is made mid-stage; say in the message that the task was
+   preempted and what is incomplete.
+
+   Two things this step needs stated, because the harness denies the naive
+   reading of it and an instruction the gate refuses is worse than no
+   instruction. `pretool_gate.py` blocks `git commit` until the commit
+   checkpoint is recorded, and `git-workflow.md` puts a passing test run before
+   every commit - a preempted mid-stage tree satisfies neither by definition:
+   - **The CEO's force-majeure declaration IS the commit approval** for the
+     preempted task. It is not a second question to ask him, and you do not park
+     waiting for one. Record it the normal way and say what it was for: `python
+     .claude/tools/pipeline/approve.py --task task-XXXX --gate commit`. That is
+     the only step between the declaration and the commit.
+   - **The pre-commit test gate is waived for a preempt commit, and for nothing
+     else.** A mid-stage tree is expected to be red; the commit exists to lose
+     no work, not to claim a green stack. Say so in the commit message ("gates
+     not run - preempted mid-stage"), and run the full gate normally when the
+     task resumes at step 4. No other commit in this pipeline may skip it.
+2. **Return to `main`.** Never branch the urgent task off the preempted one -
+   `branch-base-must-be-main` still holds, and the gate enforces it.
+3. **Branch and register the urgent task**, then work it normally.
+4. **Resume the preempted task afterwards** by re-running `advance.py` on it.
+
+If the preempted task has NO commits and no edits - nothing was written yet -
+step 1 is skipped, and that is the only case where it may be. Say so explicitly
+in the record, because "nothing to commit" and "forgot to commit" look identical
+in git a week later.
+
+**Known gap, do not paper over it:** `run.db` has no paused state. `blocked` is
+reachable only by exhausting the retry budget, editing `run.db` by hand is
+forbidden, `approve.py --reject` moves a task the wrong way (to `implement`), and
+`stop_gate.decide()`'s in-flight branch outranks its drift reconciler, so moving
+the file back to `backlog/` does not quiet the hook either. Until `task-0059`
+lands, a preempted run keeps being demanded by the Stop hook. If you silence it
+with a busy marker, write into the marker's `note` field that it is NOT a
+dispatch - a signal you have to lie to is a missing state, and an undocumented
+lie in the pipeline's own records is worse than the nagging it avoids.
+
+## Steering a running agent (do not wait for the report)
+
+A dispatched agent can be messaged while it works, and it keeps its full
+context. That makes a mid-flight correction far cheaper than the alternative:
+waiting for the report, rejecting the stage, and re-dispatching, which throws
+away everything the agent had already read and pays for it again.
+
+Use it when:
+
+- **Your own dispatch was wrong.** The most common case. A reviewer was told to
+  read `git diff main...HEAD` on a branch carrying zero commits, which returns
+  nothing; correcting it mid-flight stopped it reporting "no changes to review".
+- **You measured something that contradicts the agent's premise.** An agent
+  justified a design with "os.kill(pid, 0) kills the process on Windows";
+  measurement showed signal 0 is special-cased and does not. The correction
+  reached it before it had built more prose on the false claim - and its own
+  re-measurement then found a real bug.
+- **You found a lead inside its scope.** A live run surfaced a defect in the
+  stall detector; handing it to the QA agent already auditing that file cost one
+  message instead of a second dispatch.
+- **A decision lands mid-flight.** The CEO decides something the agent was told
+  to leave alone. Say plainly that it overrides the earlier instruction.
+
+Do NOT use it to:
+
+- Add scope the dispatch did not have. New scope is a new task, not a message.
+- Micromanage an agent that is working correctly. Every message costs its
+  context too.
+- Ask for progress. There is no progress to report between tool rounds, and a
+  task notification arrives when it stops.
+
+Write the message as you would the dispatch: the correction first, the evidence
+under it, and an explicit statement of which earlier instruction it replaces. An
+agent given a contradiction without being told which side wins will pick one,
+and it may not be yours.
+
 ## Subagent enforcement
 
 Obedience is enforced by the harness, not by prompt text. Every dispatched agent
