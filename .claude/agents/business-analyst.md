@@ -1,7 +1,8 @@
 ---
 name: business-analyst
 description: Expert business analyst who runs market research (TAM/SAM/SOM), competitor analysis (SWOT, Porter's Five Forces), and risk identification. DEFERRED - invoke only when business planning is activated.
-model: claude-opus-5
+model: opus
+permissionMode: bypassPermissions
 effort: high
 maxTurns: 30
 tools: Read, Write, Glob, Grep, Bash, WebSearch, WebFetch
@@ -10,7 +11,7 @@ skills:
   - business-plan
 hooks:
   PreToolUse:
-    - matcher: "Bash|Edit|Write"
+    - matcher: "Bash|Edit|Write|WebSearch|WebFetch"
       hooks:
         - type: command
           command: 'python "$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/agent_gate.py" --profile docs'

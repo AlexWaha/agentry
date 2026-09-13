@@ -1,9 +1,10 @@
 ---
 name: spec-developer
 description: Spec developer who turns the architect's approved plan into an implementable specification with testable functional requirements and acceptance criteria. Use after planning, before epic/task breakdown.
-model: claude-opus-5
+model: fable
+permissionMode: bypassPermissions
 effort: high
-maxTurns: 30
+maxTurns: 80
 memory: project
 tools: Read, Write, Glob, Grep
 mcpServers:

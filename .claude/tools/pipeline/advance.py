@@ -34,8 +34,9 @@ import re
 import subprocess
 import sys
 import time
-from datetime import date
+from pathlib import Path
 
+import approvals
 import git_state
 import mode
 import state
@@ -197,7 +198,7 @@ def stage_owner(pipeline: dict, name: str, task: str = "", which: str = state.BU
     return owner
 
 
-def _diff_review_repo(pipeline: dict, stage_def: dict) -> "Path":
+def _diff_review_repo(pipeline: dict, stage_def: dict) -> Path:
     """Resolve the diff-review git repo dir from stage/pipeline cwd, mirroring
     gate.py's cwd resolution so multi-repo workspaces (repo in a subdir, root
     not a repo) target the actual git repo."""
@@ -241,9 +242,10 @@ def _append_review_feedback(task: str, verdict: dict) -> bool:
         if not path.is_file():
             return False
         rnd = int(verdict.get("round", 1))
+        today = state.today()  # local date - this line is read by the dev and the CEO
         lines = [f"\n## CEO Review Feedback (round {rnd})\n",
-                 f"> Recorded {date.today().isoformat()} via diff-review. Address "
-                 f"EVERY comment before the task can pass diff-review again.\n"]
+                 (f"> Recorded {today} via diff-review. Address "
+                  f"EVERY comment before the task can pass diff-review again.\n")]
         for c in verdict.get("comments", []):
             loc = f"{c.get('file', '?')}:{c.get('start_line', '?')}"
             if c.get("end_line") and c.get("end_line") != c.get("start_line"):
@@ -401,6 +403,10 @@ def main() -> int:
     # Default (key absent / empty) keeps both checkpoints human-approved.
     if stage_def.get("checkpoints"):
         auto = {str(c).lower() for c in (stage_def.get("auto_approve") or [])}
+        # The push is routed through approvals.granted() rather than read out of
+        # auto_approve directly: approvals.NEVER_GRANTED refuses it at every
+        # level and for every stage list, so the config key cannot re-grant it.
+        push_auto = approvals.granted(approvals.PUSH, sorted(auto))
         aw = run["awaiting_human"]
         if aw == "":
             fields = {"awaiting_human": "commit"}
@@ -409,7 +415,7 @@ def main() -> int:
             state.set_fields(conn, args.task, **fields)
         elif aw == "commit" and run["commit_approved"]:
             fields = {"awaiting_human": "push"}
-            if "push" in auto:
+            if push_auto:
                 fields["push_approved"] = 1
             state.set_fields(conn, args.task, **fields)
         elif aw == "push" and run["push_approved"]:
@@ -422,10 +428,11 @@ def main() -> int:
                        "Stage files and perform the git commit now, then re-run advance.py."
                        if "commit" in auto else
                        "Review passed. Stage files, surface the full diff, and wait for "
-                       "CEO commit approval (approve.py --gate commit). git commit is hook-blocked until then."),
-            "push": ("Checkpoint 'push' auto-approved (auto_approve in pipeline.json). "
-                     "Perform the git push now, then re-run advance.py."
-                     if "push" in auto else
+                       "CEO commit approval (approve.py --gate commit). "
+                       "git commit is hook-blocked until then."),
+            "push": ("Checkpoint 'push' auto-approved. Perform the git push now, "
+                     "then re-run advance.py."
+                     if push_auto else
                      "Committed. Wait for CEO push approval (approve.py --gate push). "
                      "git push is hook-blocked until then."),
         }
@@ -453,8 +460,9 @@ def main() -> int:
                          retries=0, continuations=0)
         run = state.get_run(conn, args.task)
         conn.close()
+        owner = stage_owner(pipeline, nxt, args.task, which)
         return result("advanced", args.task, run,
-                      f"gate passed: '{cur}' -> '{nxt}' (owner: {stage_owner(pipeline, nxt, args.task, which)}). Proceed.")
+                      f"gate passed: '{cur}' -> '{nxt}' (owner: {owner}). Proceed.")
 
     retries = run["retries"] + 1
     if retries >= budget:

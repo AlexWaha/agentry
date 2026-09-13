@@ -29,6 +29,25 @@ These restrictions apply to all AI agents without exception:
 - **NEVER delete remote branches** without CEO approval
 - **NEVER skip pre-commit checks** - git hooks are disabled; linter and tests must be run manually before every commit
 
+### Push is never automatic, at any approval level
+
+`git push` requires the CEO's explicit approval in chat every single time. No
+approvals level grants it, no per-stage `auto_approve` entry may list it, and no
+"he approved the last one" carries over. A push is the moment work leaves the
+machine, and the CEO has asked for that decision to stay his without exception.
+
+This is enforced, not just written: `approvals.NEVER_GRANTED` refuses `PUSH` at
+every level, and `granted()` checks it before both the level and the per-stage
+`auto_approve` list, so neither can re-grant it. `advance.py` reads the push
+checkpoint through `granted()` for the same reason.
+
+SIGNATURE: push-always-needs-approval
+TRIGGER:   reaching the push checkpoint, or reading any approvals-level description
+WHAT:      ran with approvals at `auto`, which grants the push, and told the CEO that commit and push would both happen silently. He had to interrupt to say push is always his.
+WHY:       `skills/pipeline/SKILL.md` describes `auto` as granting everything through the push, while `git-workflow.md` forbids pushing without approval. Two project documents disagreed and the orchestrator followed the permissive one.
+FIX:       treat push as unconditionally CEO-gated. When two project documents disagree about a safety boundary, follow the stricter one and report the contradiction instead of quietly picking.
+DATE:      2026-09-13
+
 ### Deterministic checkpoint enforcement
 
 When a task runs under the execution pipeline (`rules/orchestration.md`), the

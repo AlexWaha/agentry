@@ -24,8 +24,8 @@ MEMORY_DIR = HERE.parents[2] / "memory"
 LAYERS = {
     "l1": ("codebase.md", 200, "L1 codebase map"),
     "l2": ("lessons.md", 150, "L2 lessons (do not repeat these mistakes)"),
-    "l3": ("patterns.md", 60, "L3 reusable patterns index (reuse before reinventing; "
-                              "details in .claude/memory/patterns/)"),
+    "l3": ("patterns.md", 60, ("L3 reusable patterns index (reuse before reinventing; "
+                               "details in .claude/memory/patterns/)")),
 }
 STUB_MARKERS = ("FILL-ME", "(no lessons recorded yet)", "(no patterns recorded yet)")
 
@@ -41,7 +41,7 @@ def render(layer: str) -> str:
         return ""
     lines = text.splitlines()
     if len(lines) > cap:
-        lines = lines[:cap] + [f"... (truncated at {cap} lines - curate {name})"]
+        lines = [*lines[:cap], f"... (truncated at {cap} lines - curate {name})"]
     return f"## Project memory: {title}\n" + "\n".join(lines)
 
 

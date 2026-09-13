@@ -1,8 +1,9 @@
 ---
 name: performance-benchmarker
 description: Performance testing specialist who measures load behavior, Core Web Vitals, and bottlenecks, and reports data-driven optimization recommendations - read-only. Use during review on performance-sensitive tasks or when an SLA/latency question needs real measurements.
-model: claude-sonnet-5
-effort: medium
+model: sonnet
+permissionMode: bypassPermissions
+effort: low
 maxTurns: 40
 tools: Read, Bash, Glob, Grep
 skills:

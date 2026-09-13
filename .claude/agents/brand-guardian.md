@@ -1,8 +1,9 @@
 ---
 name: brand-guardian
 description: Expert brand strategist who develops brand identity (purpose, vision, mission, values, personality), visual identity systems, voice/messaging, and consistency guardrails. Use for brand foundation work, rebrand initiatives, or auditing brand consistency across touchpoints.
-model: claude-opus-5
-effort: high
+model: sonnet
+permissionMode: bypassPermissions
+effort: medium
 maxTurns: 30
 tools: Read, Write, Edit, Glob, Grep
 hooks:

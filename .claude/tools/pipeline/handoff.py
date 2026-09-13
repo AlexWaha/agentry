@@ -33,7 +33,6 @@ import json
 import re
 import subprocess
 import sys
-from datetime import date
 from pathlib import Path
 
 import state
@@ -319,8 +318,9 @@ def scaffold(task: str, force: bool = False) -> tuple[bool, str]:
         template = FALLBACK_TEMPLATE
     commit, files = _merge_facts(task)
     text = template
+    today = state.today()  # local date - the handoff doc is read by a human
     for token, value in (("{{TASK}}", task), ("{{TITLE}}", _task_title(task)),
-                         ("{{DATE}}", date.today().isoformat()),
+                         ("{{DATE}}", today),
                          ("{{MERGE_COMMIT}}", commit), ("{{FILES}}", files)):
         text = text.replace(token, value)
     path.write_text(text, encoding="utf-8")
@@ -335,9 +335,10 @@ def waive(task: str, reason: str) -> str:
     d = handoff_dir()
     d.mkdir(parents=True, exist_ok=True)
     path = handoff_path(task)
+    today = state.today()  # local date - the handoff doc is read by a human
     path.write_text(
         f"---\ntask: {task}\nwaived: true\nreason: {reason}\n"
-        f"date: {date.today().isoformat()}\n---\n\n"
+        f"date: {today}\n---\n\n"
         f"# Handoff: {task} - WAIVED\n\n"
         f"Handoff doc waived by CEO decision: {reason}\n",
         encoding="utf-8")
@@ -349,7 +350,8 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="report handoff debt (exit 1 on debt)")
     parser.add_argument("--for", dest="scaffold_for", metavar="TASK", help="scaffold a doc for a done task")
     parser.add_argument("--force", action="store_true", help="overwrite an existing doc when scaffolding")
-    parser.add_argument("--waive", metavar="TASK", help="waive the handoff for a task (orchestrator-only, CEO approval required)")
+    parser.add_argument("--waive", metavar="TASK",
+                         help="waive the handoff for a task (orchestrator-only, CEO approval required)")
     parser.add_argument("--reason", default="", help="reason for --waive")
     args = parser.parse_args()
 

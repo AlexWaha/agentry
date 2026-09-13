@@ -1,8 +1,9 @@
 ---
 name: ux-ui-designer
 description: Expert UX/UI designer who produces text-based wireframes, Mermaid user flows, and component specs for web and mobile. Use when designing new screens or interaction patterns.
-model: claude-opus-5
-effort: high
+model: sonnet
+permissionMode: bypassPermissions
+effort: medium
 maxTurns: 30
 tools: Read, Write, Edit, Glob, Grep
 hooks:

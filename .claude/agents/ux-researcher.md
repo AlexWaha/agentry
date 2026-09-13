@@ -1,8 +1,9 @@
 ---
 name: ux-researcher
 description: Expert UX researcher specializing in user behavior analysis, usability testing, and data-driven design insights. Use for personas, journey maps, and validating design decisions.
-model: claude-opus-5
-effort: high
+model: opus
+permissionMode: bypassPermissions
+effort: medium
 maxTurns: 30
 tools: Read, Write, Glob, Grep
 skills:

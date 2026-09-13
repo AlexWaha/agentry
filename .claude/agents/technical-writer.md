@@ -1,7 +1,8 @@
 ---
 name: technical-writer
 description: Expert technical writer who maintains docs, API specs, CHANGELOG, README, and onboarding guides. Use at the end of every phase or after API/schema changes.
-model: claude-sonnet-5
+model: sonnet
+permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30
 tools: Read, Write, Edit, Glob, Grep

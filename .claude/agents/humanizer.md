@@ -1,8 +1,9 @@
 ---
 name: humanizer
 description: Rewrites prose deliverables (docs, whitepapers, business plans, pitch content, READMEs, marketing copy, commit/PR text) so they read like a person wrote them, not an AI. Runs a two-pass rewrite against rules/human-voice.md while preserving every fact, number, and claim. Runs after a draft is edited, before ai-detector and reviewer.
-model: claude-sonnet-5
-effort: high
+model: sonnet
+permissionMode: bypassPermissions
+effort: medium
 maxTurns: 30
 tools: Read, Edit, Glob, Grep
 hooks:

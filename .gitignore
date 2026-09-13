@@ -1,5 +1,77 @@
-# Codegraph index - per-machine artifact built by the codegraph CLI.
+# =============================================================================
+# Python artifacts
+# Byte-compiled caches, linter caches, packaging metadata, virtualenvs.
+# pyproject.toml at the root is real config and stays tracked - it is not
+# matched by any pattern below.
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+
+# =============================================================================
+# Codegraph index
+# Per-machine code knowledge graph built by the codegraph CLI.
+# =============================================================================
 .codegraph/
 
-# Pipeline runtime state - per-project, never committed.
+# =============================================================================
+# Pipeline runtime state
+# SQLite run state and other per-machine pipeline artifacts.
+# =============================================================================
 .claude/state/
+
+# =============================================================================
+# Per-machine local settings
+# May hold personal tokens or paths; never shared across machines.
+# =============================================================================
+.claude/settings.local.json
+
+# =============================================================================
+# Project work product (plans, specs, tasks, memory)
+# These are generated while running a project through the pipeline and do not
+# belong in the published template. Only the scaffolding a fresh clone needs
+# (templates, contract docs, and the directory skeleton) is kept - see the
+# negations below. Contents are excluded rather than the directory itself, so
+# the negations can re-include specific files inside.
+# =============================================================================
+.claude/plans/
+.claude/specs/*
+.claude/memory/*
+.claude/agent-memory/
+.claude/project/*
+
+# Memory layer contract survives for a fresh clone.
+!.claude/memory/README.md
+
+# Spec template survives for a fresh clone, same scaffolding role as
+# .claude/tasks/templates/.
+!.claude/specs/_template.md
+
+# Project overlay contract, and every overlay document, survive for a fresh
+# clone: rules/self-learning.md sends agents here to record project quirks, so a
+# newly created .claude/project/quirks.md must be tracked, not silently dropped.
+# Markdown only - anything else under the overlay stays excluded.
+!.claude/project/*.md
+
+# Task work product is excluded per-folder (not via .claude/tasks/) so the
+# templates/ folder and the pipeline's directory skeleton stay tracked.
+.claude/tasks/backlog/*
+.claude/tasks/active/*
+.claude/tasks/done/*
+.claude/tasks/epics/*
+.claude/tasks/handoffs/*
+
+# Keep the empty-directory placeholders so git tracks the skeleton itself.
+!.claude/tasks/backlog/.gitkeep
+!.claude/tasks/active/.gitkeep
+!.claude/tasks/done/.gitkeep
+!.claude/tasks/epics/.gitkeep
+!.claude/tasks/handoffs/.gitkeep

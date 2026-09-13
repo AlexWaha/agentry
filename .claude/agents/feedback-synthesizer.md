@@ -1,8 +1,9 @@
 ---
 name: feedback-synthesizer
 description: Expert in collecting, analyzing, and synthesizing user feedback from multiple channels to extract actionable product insights. Use to turn support tickets, reviews, surveys, and interviews into prioritized product decisions.
-model: claude-opus-5
-effort: high
+model: opus
+permissionMode: bypassPermissions
+effort: medium
 maxTurns: 30
 memory: project
 tools: Read, Write, Glob, Grep
