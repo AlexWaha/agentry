@@ -7,6 +7,9 @@ Wired to Claude Code's `PreToolUse` event (matchers: Bash, Edit|Write). It denie
   - `git push` runs while push is not approved, or targets ANY protected branch
     (main and master always, plus the configured trunk and pipeline.json
     "protected_branches" - default staging / production);
+  - `git merge` runs while HEAD sits on a protected branch, unless the project
+    is in `solo` workflow mode AND the source is an approved task branch - see
+    check_trunk_merge();
   - a code file is edited while the active task sits in the read-only `review`
     stage (bookkeeping under .claude/ and docs/ is always allowed);
   - a code file is edited while handoff debt exists and no task is mid-stage
@@ -491,6 +494,140 @@ def check_branch_base(command: str, cwd: str, name: str, rest: list, main_branch
         f"branch. (branch-base-must-be-main - see .claude/rules/git-workflow.md).")
 
 
+# --- Workflow mode (config: pipeline.json "workflow") -----------------------
+# Two shapes of project, named rather than flagged, because a name says what
+# kind of repository this is while a flag only says what it does:
+#   pr   - collaborative. Nothing commits on the trunk; the branch is pushed and
+#          a human opens the pull request. The DEFAULT, so an adopter inherits
+#          the safe shape and opts into the looser one deliberately.
+#   solo - single-author. There is no second party to review or to merge, so a
+#          LOCAL merge of an approved task branch into the trunk is allowed.
+# Pushing to a protected branch is refused in BOTH modes - that is the one
+# protection the mode must not touch. push_needs_approval is likewise
+# independent of the mode: "I work alone" says nothing about whether an
+# unattended run may write to the remote at four in the morning.
+WORKFLOW_PR = "pr"
+WORKFLOW_SOLO = "solo"
+
+# `git merge` options that consume the NEXT argv entry, so their argument is
+# never mistaken for the source branch (`git merge -m "msg" feature/task-1`).
+MERGE_OPTS_WITH_ARG = frozenset({"-m", "-s", "--strategy", "-X",
+                                 "--strategy-option", "-F", "--file"})
+
+
+def workflow_cfg() -> dict:
+    cfg = state.load_pipeline().get("workflow", {})
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def workflow_mode() -> str:
+    """`solo` only when configured so; anything else (missing, unknown value,
+    unreadable config) is the collaborative default."""
+    mode = str(workflow_cfg().get("mode") or WORKFLOW_PR).strip().lower()
+    return WORKFLOW_SOLO if mode == WORKFLOW_SOLO else WORKFLOW_PR
+
+
+def push_needs_approval() -> bool:
+    """Default true, and only an explicit `false` turns it off - a typo or a
+    junk value must not silently open the remote."""
+    return workflow_cfg().get("push_needs_approval", True) is not False
+
+
+def merge_sources(args: list) -> list:
+    """Commit-ish positional arguments of a `git merge` argv."""
+    sources = []
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok == "--":
+            sources.extend(a for a in args[i + 1:] if a)
+            break
+        if tok.startswith("-"):
+            i += 2 if tok in MERGE_OPTS_WITH_ARG else 1
+            continue
+        sources.append(tok)
+        i += 1
+    return sources
+
+
+def merge_invocations(command: str) -> list:
+    """Argv of every `git merge` call in `command`.
+
+    Resolved through git_invocations() rather than matched textually: that is
+    what sees `git -C dir merge x` and `git status&&git merge x`, both of which
+    a hand-rolled check misses. It also distinguishes the `merge-base`
+    subcommand token from `merge`, so read-only base checks are untouched."""
+    return [args for sub, args in git_invocations(command) if sub == "merge"]
+
+
+def check_merge_source(source: str, trunk: str) -> int:
+    """The three conditions a source branch must meet to reach the trunk. Each
+    failure names WHICH condition failed: repeating the generic branch-name
+    message would send the reader hunting the wrong thing at three in the
+    morning."""
+    task = task_from_branch(source)
+    if not task or not valid_work_branch(source):
+        return deny(
+            f"Merge into protected branch '{trunk}' refused - condition 1 of 3 failed "
+            f"(source branch): '{source}' is not a task branch <type>/task-<id> "
+            f"(types: {', '.join(BRANCH_TYPES)}). Only an approved task branch may "
+            f"reach the trunk, even in solo workflow mode.")
+    try:
+        conn = state.connect()
+        try:
+            run = state.get_run(conn, task)
+        finally:
+            conn.close()
+    except Exception:
+        return deny(
+            f"Merge into protected branch '{trunk}' refused - the pipeline run state "
+            f"(.claude/state/run.db) could not be read, so the commit approval for "
+            f"{task} cannot be verified. This path fails closed on purpose: only an "
+            f"approved task reaches the trunk.")
+    if run is None:
+        return deny(
+            f"Merge into protected branch '{trunk}' refused - condition 2 of 3 failed "
+            f"(pipeline run): {task} has no row in run.db, so it never went through "
+            f"the pipeline. Register it first: python .claude/tools/pipeline/advance.py "
+            f"--task {task} --type <type>.")
+    if not run["commit_approved"]:
+        return deny(
+            f"Merge into protected branch '{trunk}' refused - condition 3 of 3 failed "
+            f"(commit approval): the commit checkpoint for {task} was never approved. "
+            f"After the CEO approves: python .claude/tools/pipeline/approve.py --task "
+            f"{task} --gate commit.")
+    return allow()
+
+
+def check_trunk_merge(command: str, trunk: str) -> int:
+    """Deny `git merge` while HEAD sits on a protected branch, except the one
+    case solo mode exists for: merging an already-approved task branch locally.
+
+    In `pr` mode every such merge is refused - the human opens the pull request.
+    In `solo` mode the three conditions in check_merge_source() still gate it;
+    they guard against merging UNREVIEWED work, which is not a collaboration
+    question and therefore holds in both modes."""
+    if workflow_mode() != WORKFLOW_SOLO:
+        return deny(
+            f"Merge into protected branch '{trunk}' is forbidden in '{WORKFLOW_PR}' "
+            f"workflow mode: push the task branch and let the human open the pull "
+            f"request. A single-author project can set workflow.mode to "
+            f"'{WORKFLOW_SOLO}' in .claude/pipeline.json to merge locally instead. "
+            f"See .claude/rules/git-workflow.md.")
+    sources = [src for args in merge_invocations(command) for src in merge_sources(args)]
+    if not sources:
+        return deny(
+            f"Merge into protected branch '{trunk}' refused - condition 1 of 3 failed "
+            f"(source branch): this command names no source branch the gate can read "
+            f"(a bare `git merge` takes FETCH_HEAD). Name the branch: git merge "
+            f"<type>/task-<id>.")
+    for source in sources:
+        verdict = check_merge_source(source, trunk)
+        if verdict != 0:
+            return verdict
+    return allow()
+
+
 def push_protected_branches() -> set:
     """Every branch a push may never target: main + master always, the
     configured trunk, and pipeline.json "protected_branches" (default staging /
@@ -579,9 +716,10 @@ def check_push_target(command: str, branch: str) -> int:
         if name in protected:
             return deny(
                 f"Push to protected branch '{name}' is forbidden (protected: "
-                f"{', '.join(sorted(protected))}). Push your work branch instead - "
-                f"the CEO merges into '{name}' via a PR. See "
-                f".claude/rules/git-workflow.md.")
+                f"{', '.join(sorted(protected))}) in every workflow mode. Push your "
+                f"work branch instead - '{name}' is reached by a pull request in 'pr' "
+                f"mode or by an approved local merge in 'solo' mode, never by a push. "
+                f"See .claude/rules/git-workflow.md.")
     return allow()
 
 
@@ -835,7 +973,11 @@ def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
 
     is_commit = git_invokes(command, "commit")
     is_push = git_invokes(command, "push")
-    if not (is_commit or is_push):
+    # Not git_invokes(command, "merge"): its substring safety net would match
+    # `git merge-base --is-ancestor main HEAD`, the read-only base check every
+    # task runs. Argv resolution tells the two subcommand tokens apart.
+    is_merge = bool(merge_invocations(command))
+    if not (is_commit or is_push or is_merge):
         return allow()
 
     pipeline = state.load_pipeline()
@@ -853,6 +995,15 @@ def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
 
     if is_push:
         verdict = check_push_target(command, branch)
+        if verdict != 0:
+            return verdict
+
+    # A merge onto a protected branch commits there, which is exactly what the
+    # trunk rule refuses - unless solo mode allows it for an approved task. A
+    # merge while HEAD is a work branch (pulling main into a feature branch) is
+    # untouched, as is a merge the gate cannot place (branch unreadable).
+    if is_merge and branch in push_protected_branches():
+        verdict = check_trunk_merge(command, branch)
         if verdict != 0:
             return verdict
 
@@ -874,7 +1025,7 @@ def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
     if is_commit and not run["commit_approved"]:
         return deny(f"Commit for {task} is not approved yet. Surface the diff and wait for CEO "
                     f"approval, then: python .claude/tools/pipeline/approve.py --task {task} --gate commit.")
-    if is_push and not run["push_approved"]:
+    if is_push and push_needs_approval() and not run["push_approved"]:
         return deny(f"Push for {task} is not approved yet. Wait for CEO approval, then: "
                     f"python .claude/tools/pipeline/approve.py --task {task} --gate push.")
     return allow()
@@ -915,10 +1066,27 @@ def handle_edit(file_path: str, content: str = "", orch: bool = False) -> int:
     return allow()
 
 
+def read_payload() -> dict:
+    """The hook payload from stdin, decoded as UTF-8 explicitly.
+
+    sys.stdin's own encoding follows the host locale - cp1252 on Windows, where
+    byte 0x97 decodes to U+2014 and 0x96 to U+2013. Non-ASCII content (Cyrillic,
+    in the case that surfaced this) therefore arrived carrying em dashes it never
+    contained, and the dash gate refused the edit. Reading the raw bytes fixes
+    the DECODE; the dash rule itself stays exactly as strict.
+
+    The text fallback covers a stdin with no binary buffer (test doubles, some
+    embedded runtimes) - it is the same JSON, not a bypass."""
+    raw = sys.stdin.buffer.read() if hasattr(sys.stdin, "buffer") else sys.stdin.read()
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    return json.loads(raw)
+
+
 def main() -> int:
     try:
-        payload = json.load(sys.stdin)
-    except (ValueError, OSError):
+        payload = read_payload()
+    except (ValueError, OSError, UnicodeDecodeError):
         return allow()
     try:
         tool = payload.get("tool_name", "")

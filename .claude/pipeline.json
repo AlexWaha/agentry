@@ -6,6 +6,11 @@
   "main_branch": "main",
   "protected_branches": ["staging", "production"],
   "branch_pattern": "{type}/{task}",
+  "workflow": {
+    "_comment": "What kind of project this is, read by tools/pipeline/pretool_gate.py. mode 'pr' (DEFAULT when absent) is the collaborative shape: nothing commits on the trunk, the branch is pushed and a human opens the pull request. mode 'solo' is the single-author shape: there is no second party to review or merge, so a LOCAL `git merge` of an approved task branch into the trunk is allowed - the task must still match <type>/task-NNNN, have a row in run.db, and carry an approved commit checkpoint, because those guard against merging unreviewed work rather than against working alone. Pushing to a protected branch is refused in BOTH modes. push_needs_approval is independent of the mode (default true): working alone says nothing about whether an unattended run may write to the remote. See .claude/rules/git-workflow.md.",
+    "mode": "solo",
+    "push_needs_approval": true
+  },
   "memory": {
     "_comment": "Post-task memory review gate (tools/memory/update.py): every done task above baseline must be distilled into .claude/memory/ (lessons/patterns/codebase rows) and stamped before the next task starts. Enforced by stop_gate.py. baseline semantics match handoff.baseline; '' = every done task covered. enabled=false disables the gate.",
     "enabled": true,

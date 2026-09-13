@@ -222,7 +222,9 @@ class MainFailOpenTest(unittest.TestCase):
             self.assertEqual(pretool_gate.main(), 0)
 
     def test_unreadable_stdin_fails_open(self):
-        with unittest.mock.patch("json.load", side_effect=OSError("boom")):
+        # json.loads, not json.load: the gate now reads stdin's raw bytes and
+        # decodes UTF-8 itself, so patching the old entry point asserted nothing.
+        with unittest.mock.patch("json.loads", side_effect=OSError("boom")):
             self.assertEqual(pretool_gate.main(), 0)
 
 

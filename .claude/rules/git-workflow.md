@@ -6,13 +6,56 @@ Sacred rules for version control. These rules are absolute and cannot be overrid
 
 ---
 
+## Workflow modes (`pr` / `solo`)
+
+Not every repository has a second party. A pull request, a reviewer and a
+protected trunk are a collaboration protocol; in a solo pet project there is
+nobody on the other side of them, and git is version tracking rather than
+coordination. The shape of the project is therefore config, not prose:
+`workflow.mode` in `.claude/pipeline.json`, enforced by
+`tools/pipeline/pretool_gate.py`.
+
+| | `pr` (default) | `solo` |
+|---|---|---|
+| Trunk commits | none - the trunk is written only by a merged PR | a local `git merge` of an approved task branch |
+| Who merges | the human, in the web UI | the pipeline, locally |
+| Push to a protected branch | forbidden | forbidden (unchanged) |
+| Push approval | `workflow.push_needs_approval` | `workflow.push_needs_approval` |
+
+`pr` is the default, so a project that never sets the key keeps the
+collaborative behaviour. In `solo` mode the local merge is still gated on three
+conditions, all required: the source branch matches `<type>/task-NNNN`, that
+task has a row in `run.db`, and its commit checkpoint was approved. Those guard
+against merging unreviewed work, which has nothing to do with working alone, so
+they hold in both modes.
+
+`workflow.push_needs_approval` (default `true`) is independent of the mode.
+Working alone says nothing about whether an unattended run may write to the
+remote, and conflating the two is how something gets published at four in the
+morning.
+
+**What applies in which mode:** everything in this document applies in both
+modes - branch naming, branch base, the pre-commit gates, commit message rules,
+deploy-actions reporting, protected-branch pushes - with two exceptions. "Before
+Every PR" and the PR sections of "Task-Branch Integration" apply to `pr` mode
+only; in `solo` mode the task file's step 6 is the local merge instead. And
+"ALL changes reach `main` through Pull Requests" below is the `pr`-mode rule; in
+`solo` mode the trunk is reached by the gated local merge, never by a direct
+commit and never by a push.
+
+---
+
 ## The Sacred Rule
 
 **`main` is SACRED.**
 
 No direct commits. No direct pushes. No force pushes. No exceptions. Ever.
 
-ALL changes reach `main` through Pull Requests only. This is non-negotiable.
+In `pr` mode, ALL changes reach `main` through Pull Requests only. In `solo`
+mode they reach it through the gated local merge described above - which is not
+an exception to this rule but the same rule with a different merge mechanic: no
+direct commit on the trunk, no push to the trunk, and nothing unapproved merged
+into it.
 
 ---
 

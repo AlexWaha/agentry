@@ -28,7 +28,6 @@ bug here must never brick an agent.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 
@@ -302,8 +301,12 @@ def main() -> int:
         return allow()  # bad wiring must not brick the agent
 
     try:
-        payload = json.load(sys.stdin)
-    except (ValueError, OSError):
+        # Shared with the main-thread gate: raw bytes decoded as UTF-8, because
+        # sys.stdin's locale encoding (cp1252 on Windows) turns byte 0x97 into
+        # U+2014 and 0x96 into U+2013 - so Cyrillic content arrived carrying em
+        # dashes it never contained and the dash gate refused the edit.
+        payload = pretool_gate.read_payload()
+    except (ValueError, OSError, UnicodeDecodeError):
         return allow()
     try:
         tool = payload.get("tool_name", "")
