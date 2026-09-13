@@ -75,7 +75,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/memory/inject.py\" --layers l1,l3",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/memory/inject.py\" --kinds module,pattern,lesson --limit 8",
             "timeout": 10
           }
         ]
@@ -85,7 +85,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/memory/inject.py\" --layers l1,l2",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/memory/inject.py\" --kinds module,lesson --limit 8",
             "timeout": 10
           }
         ]
@@ -95,7 +95,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/memory/inject.py\" --layers l2",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/memory/inject.py\" --kinds lesson,pattern --limit 6",
             "timeout": 10
           }
         ]
@@ -138,5 +138,5 @@
       }
     ]
   },
-  "autoMemoryEnabled": true
+  "autoMemoryEnabled": false
 }

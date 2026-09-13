@@ -88,28 +88,27 @@ Hard rules:
    - orchestrator_gate.enabled true
    Ensure NO `{{...}}` remain and the JSON is valid.
 
-5. MEMORY MIGRATION. The NEW-layer files are: codebase.md, codebase.meta.json,
-   lessons.md, patterns.md, patterns/, README.md. Any OTHER .md files under
-   .claude/memory/, a populated MEMORY.md index, and any docs/memory/ at the
-   project root are OLD memory that must be migrated. Also scan
-   .claude/agent-memory/<agent>/ for extra per-fact .md files beyond MEMORY.md and
-   fold their reusable lessons into lessons.md - but LEAVE agent-memory files in
-   place (do not move them). Route each old fact per source memory/README.md:
-   - module / where-things-live / architecture -> codebase.md L1 rows (path,
-     responsibility, key symbols / entry points)
-   - mistakes / caveats / gotchas / env-quirks -> lessons.md L2 as
-     `- [L-NNN] YYYY-MM-DD <area>: <mistake> -> <rule>` (sequential L-001..; use a
-     plausible date from the file or today if none)
-   - reusable code patterns used more than once -> patterns.md index line +
-     patterns/P-NNN-<name>.md detail file
+5. MEMORY MIGRATION. Memory is one store: .claude/memory/memory.db (see
+   memory/README.md). Any .md file under .claude/memory/, any .claude/agent-memory/
+   tree, and any docs/memory/ at the project root is OLD markdown memory that must
+   be migrated into it. Run the built-in migrator first - it reads the legacy
+   layouts and is idempotent:
+   `python "ROOT/.claude/tools/memory/memory.py" --migrate`
+   Then route by hand whatever it did not recognise, with
+   `memory.py --record --kind <lesson|pattern|module>`:
+   - module / where-things-live / architecture -> --kind module (path,
+     responsibility, symbols, notes)
+   - mistakes / caveats / gotchas / env-quirks -> --kind lesson (signature,
+     trigger, what, why, fix; single-line fields, prose is refused)
+   - reusable code patterns used more than once -> --kind pattern (name, use-when)
    - profile / project-overview prose -> fold into project/project-context.md
+   Verify by count (`memory.py --stats`) BEFORE removing any markdown, then MOVE
+   the migrated files into .claude/memory/legacy/ (create it; delete nothing).
    SECURITY: never copy secret VALUES (passwords, tokens, keys) into memory -
    record only the method / where-to-find, and note secrets were omitted.
-   After distilling, MOVE the old per-fact files and old MEMORY.md into
-   .claude/memory/legacy/ (create it; delete nothing). Keep agent-memory/ as-is.
    Respect the project .gitignore (some gitignore .claude/memory - still migrate
-   on disk). If there is NO old memory (only the seeds), just ensure codebase.md
-   L1 is seeded from project/architecture.md. Then stamp:
+   on disk). If there is NO old memory, just record one module row per top-level
+   module from project/architecture.md. Then stamp:
    `python "ROOT/.claude/tools/memory/codebase_sync.py" --stamp`
 
 6. VERIFY (run; report each). Windows-safe, no unix redirects:

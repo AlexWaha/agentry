@@ -36,6 +36,16 @@ _SKIP_DIRS = {".git", "node_modules", "vendor", ".claude", "storage",
 
 DEPENDS_RE = re.compile(r"^depends_on:\s*\[(.*?)\]", re.MULTILINE)
 TASK_ID_RE = re.compile(r"(task-\d+)")
+# A task whose work was folded into another task stays on disk as a pointer to
+# its successor - it must never be offered as ready, and it will never reach
+# done/ either, which is why dep_satisfied resolves through the pointer.
+SUPERSEDED_RE = re.compile(r"^superseded_by:[ \t]*(task-\d+)", re.MULTILINE)
+# A task waiting on something no other task can satisfy - a CEO ruling, a vendor
+# answer, an external decision - records it in blocked_on. depends_on cannot
+# express that, so without this the queue re-offers the task every turn and an
+# unattended run never settles. The negative lookahead is what keeps the blank
+# `blocked_on:` the template ships on every task from meaning "blocked".
+BLOCKED_RE = re.compile(r"^blocked_on:[ \t]*(?!\s*$)\S", re.MULTILINE)
 
 BACKLOG_DIR = state.BACKLOG_DIR
 ACTIVE_DIR = state.ACTIVE_DIR
@@ -52,12 +62,28 @@ def allow() -> int:
     return 0
 
 
+def frontmatter(text: str) -> str:
+    """The leading `---` block, or the whole text when there is none. Field
+    regexes run against this and not the body: task files quote field names in
+    their prose, and a false positive there would silently drop a ready task
+    out of the queue."""
+    if not text.startswith("---"):
+        return text
+    end = text.find("\n---", 3)
+    return text[:end] if end != -1 else text
+
+
 def read_backlog() -> list[dict]:
     """Queued task files: [{id, deps}]. Empty on any error.
 
     The queue is a folder, not a field. A file in backlog/ is waiting to be
     picked; there is no `status:` to read, and therefore nothing that can
-    disagree with where the file actually sits."""
+    disagree with where the file actually sits.
+
+    Two frontmatter fields do take a task OUT of the ready set without making it
+    done: `superseded_by:` (the work was folded into another task) and a
+    non-empty `blocked_on:` (waiting on a human or an outside party). Both mean
+    skip, never finish."""
     out: list[dict] = []
     if not BACKLOG_DIR.is_dir():
         return out
@@ -66,8 +92,10 @@ def read_backlog() -> list[dict]:
         if not m:
             continue
         try:
-            text = path.read_text(encoding="utf-8")
+            text = frontmatter(path.read_text(encoding="utf-8"))
         except OSError:
+            continue
+        if SUPERSEDED_RE.search(text) or BLOCKED_RE.search(text):
             continue
         deps_raw = DEPENDS_RE.search(text)
         deps = [d.strip() for d in (deps_raw.group(1).split(",") if deps_raw else []) if d.strip()]
@@ -92,11 +120,49 @@ def busy_marker_fresh(task: str) -> bool:
         return False
 
 
+def task_file(task: str):
+    """The task's file wherever it currently sits, or None."""
+    for d in (DONE_DIR, ACTIVE_DIR, BACKLOG_DIR):
+        p = d / f"{task}.md"
+        if p.is_file():
+            return p
+    return None
+
+
+def superseded_by(task: str) -> str | None:
+    """The successor task id declared in this task's frontmatter, or None."""
+    p = task_file(task)
+    if p is None:
+        return None
+    try:
+        m = SUPERSEDED_RE.search(frontmatter(p.read_text(encoding="utf-8")))
+    except OSError:
+        return None
+    return m.group(1) if m else None
+
+
 def dep_satisfied(dep: str, runs_by_task: dict) -> bool:
-    run = runs_by_task.get(dep)
-    if run and run["stage"] == "done":
-        return True
-    return (DONE_DIR / f"{dep}.md").exists()
+    """A dependency is met when its file sits in tasks/done/ (merged, not merely
+    pushed) - except when the dependency was superseded, which it can never be.
+
+    A superseded dependency resolves THROUGH its successor: the work moved, so
+    the dependent task waits for where it moved, not for a file that will never
+    reach done/. A pointer that leads nowhere - successor file missing, or a
+    supersede cycle - is unsatisfiable by anything, so it counts as met rather
+    than parking the dependent task forever."""
+    seen: set[str] = set()
+    while dep not in seen:
+        seen.add(dep)
+        run = runs_by_task.get(dep)
+        if (run and run["stage"] == "done") or (DONE_DIR / f"{dep}.md").exists():
+            return True
+        nxt = superseded_by(dep)
+        if nxt is None:
+            return False  # ordinary dependency, still unfinished
+        if task_file(nxt) is None:
+            return True  # dangling pointer - nothing can ever satisfy it
+        dep = nxt
+    return True  # supersede cycle - same reasoning as a dangling pointer
 
 
 def handoff_debt() -> list:
@@ -110,7 +176,7 @@ def handoff_debt() -> list:
 
 
 def memory_debt() -> list:
-    """Completed tasks whose memory layers were not reviewed (tools/memory/
+    """Completed tasks whose memory review was not stamped (tools/memory/
     update.py). Lazy import + fail-open like handoff_debt."""
     try:
         sys.path.insert(0, str(state.ROOT / ".claude" / "tools" / "memory"))
@@ -313,20 +379,22 @@ def decide() -> int:
                         f"run: python .claude/tools/pipeline/advance.py --task {t['id']}. "
                         f"Do not ask the user.")
                 # Memory chain: after the handoff doc exists, distill it into the
-                # shared memory layers BEFORE new work (tools/memory/update.py).
+                # memory store BEFORE new work (tools/memory/update.py).
                 if mem_debt:
                     d = mem_debt[0]
                     return block(
                         f"Before starting {t['id']}: completed task {d['task']} has not been "
-                        f"distilled into the memory layers. From its handoff doc: Gotchas -> "
-                        f".claude/memory/lessons.md; reusable code patterns -> "
-                        f".claude/memory/patterns.md (+ patterns/P-NNN-<name>.md); touched "
-                        f"modules -> .claude/memory/codebase.md rows. Then stamp: python "
-                        f".claude/tools/memory/update.py --stamp --task {d['task']} "
-                        f"--lessons N --patterns N --l1-rows N (or --none if nothing to "
-                        f"record), and refresh L1: python "
-                        f".claude/tools/memory/codebase_sync.py --stamp. Then run: python "
-                        f".claude/tools/pipeline/advance.py --task {t['id']}. Do not ask the user.")
+                        f"distilled into the memory store. From its handoff doc, record one row "
+                        f"per item with python .claude/tools/memory/memory.py --record: Gotchas "
+                        f"-> --kind lesson (--signature, --trigger, --what, --why, --fix); "
+                        f"reusable code shapes -> --kind pattern (--name, --use-when, --body); "
+                        f"touched modules -> --kind module (--path, --responsibility). Then "
+                        f"stamp: python .claude/tools/memory/update.py --stamp --task "
+                        f"{d['task']} (refused unless the store gained a row, so pass --none if "
+                        f"the review found nothing worth recording), and refresh the module-map "
+                        f"heads: python .claude/tools/memory/codebase_sync.py --stamp. Then run: "
+                        f"python .claude/tools/pipeline/advance.py --task {t['id']}. "
+                        f"Do not ask the user.")
                 # Single-task backlog: the previous work's documentation is the
                 # ONLY context source - the latest task-tagged commit on main
                 # must be documented (read it, or generate it) before implementing.

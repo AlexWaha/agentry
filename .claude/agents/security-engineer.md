@@ -8,7 +8,6 @@ experimental:
 effort: max
 maxTurns: 100
 tools: Read, Grep, Glob, Bash
-memory: project
 mcpServers:
   - codegraph
 skills:

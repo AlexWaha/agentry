@@ -5,10 +5,12 @@ Does, in order, all fail-open:
   1. Remove stray Windows `nul`/`NUL` files (created by accidental unix redirects).
   2. Print the pipeline resume summary (in-flight runs from state.py).
   3. Sync the codegraph index (one status line; silent skip if CLI absent).
-  3.5 L1 codebase-memory drift check (tools/memory/codebase_sync.py --check):
-     silent when fresh, prints changed paths + the update instruction on drift.
-  4. Memory health check: warn only when an agent MEMORY.md nears the
-     native injection window (200 lines / 25KB).
+  3.5 Module-map drift check (tools/memory/codebase_sync.py --check): silent
+     when fresh, prints changed paths + the update instruction on drift.
+
+There is no memory-size health check any more: memory is a queried SQLite store
+(.claude/memory/memory.db), not a file head under a cap, so it does not overflow
+an injection window and needs no curation nudge.
 
 Anything printed to stdout is injected into the session context, so every
 branch stays quiet unless it has something actionable to say (token economy).
@@ -24,10 +26,6 @@ from pathlib import Path
 HERE = Path(__file__).resolve()
 CLAUDE_DIR = HERE.parents[2]          # .../.claude
 ROOT = HERE.parents[3]                # project root
-
-MEMORY_DIR = CLAUDE_DIR / "agent-memory"
-MEMORY_LINE_LIMIT = 180               # nudge before the 200-line injection cap
-MEMORY_BYTE_LIMIT = 22 * 1024         # nudge before the 25KB injection cap
 
 
 def cleanup_nul() -> None:
@@ -79,32 +77,12 @@ def codegraph_sync() -> None:
 
 
 def codebase_memory_check() -> None:
-    """Step 3.5: L1 codebase-memory drift detection (tools/memory/codebase_sync).
+    """Step 3.5: module-map drift detection (tools/memory/codebase_sync).
     Quiet when fresh; prints changed paths + update instruction on drift."""
     try:
         sys.path.insert(0, str(CLAUDE_DIR / "tools" / "memory"))
         import codebase_sync
         codebase_sync.check()
-    except Exception:
-        pass
-
-
-def memory_health() -> None:
-    try:
-        if not MEMORY_DIR.is_dir():
-            return
-        for mem in sorted(MEMORY_DIR.glob("*/MEMORY.md")):
-            try:
-                data = mem.read_bytes()
-            except OSError:
-                continue
-            lines = data.count(b"\n") + 1
-            if len(data) > MEMORY_BYTE_LIMIT or lines > MEMORY_LINE_LIMIT:
-                agent = mem.parent.name
-                print(f"memory: {agent}/MEMORY.md at {lines} lines / "
-                      f"{len(data) // 1024}KB - nearing the 200-line/25KB "
-                      f"injection window. Curate it (skills/self-learning, "
-                      f"mode: curate).")
     except Exception:
         pass
 
@@ -129,7 +107,6 @@ def main() -> int:
     pipeline_resume()
     codegraph_sync()
     codebase_memory_check()
-    memory_health()
     return 0
 
 

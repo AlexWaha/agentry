@@ -6,7 +6,6 @@ permissionMode: bypassPermissions
 effort: max
 maxTurns: 80
 tools: Read, Grep, Glob, Bash
-memory: project
 mcpServers:
   - codegraph
 skills:

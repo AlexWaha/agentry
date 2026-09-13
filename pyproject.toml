@@ -28,11 +28,15 @@ select = ["E", "F", "I", "W", "UP", "FURB", "RUF", "DTZ", "PIE", "ISC"]
 # setup scripts across this codebase, not an oversight.
 
 [tool.ruff.lint.per-file-ignores]
-# All three import a sibling module from .claude/tools/pipeline, which has no
-# __init__.py and is not on sys.path by default - the path must be extended
-# before the import can resolve, so the import cannot sit at the top of the file.
+# These import a sibling module from .claude/tools/{pipeline,memory}, neither of
+# which has an __init__.py or sits on sys.path by default - the path must be
+# extended before the import can resolve, so the import cannot sit at the top of
+# the file.
 ".claude/tools/tests/test_approvals.py" = ["E402"]
 ".claude/tools/tests/test_pretool_gate.py" = ["E402"]
 ".claude/tools/tests/test_pretool_gate_git.py" = ["E402"]
 ".claude/tools/tests/test_conveyor_gaps.py" = ["E402"]
+".claude/tools/tests/test_memory_store.py" = ["E402"]
 ".claude/tools/memory/update.py" = ["E402"]
+".claude/tools/memory/codebase_sync.py" = ["E402"]
+".claude/tools/memory/inject.py" = ["E402"]

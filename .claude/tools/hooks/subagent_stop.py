@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """SubagentStop hook - progressive-learning trigger (fires in the orchestrator).
 
-When a dispatched subagent finishes:
-  1. If the agent has a project memory dir, inject a one-line reminder to
-     record any lesson from its report (skills/self-learning, record mode).
-  2. If that agent's MEMORY.md nears the native injection window
-     (200 lines / 25KB), inject a curation nudge.
+When a dispatched subagent finishes, inject a one-line reminder to record any
+lesson from its report into the memory store, with the exact command. The
+reminder used to also carry a curation nudge when the agent's MEMORY.md neared
+the native 200-line injection window; the store replaced those files and does
+not overflow, so there is nothing left to curate.
 
 stdout is context injection; exit 0 always (this hook never blocks - lesson
 recording is a discipline, stopping the loop over it would cost more than it
@@ -16,13 +16,6 @@ from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
-
-HERE = Path(__file__).resolve()
-CLAUDE_DIR = HERE.parents[2]
-MEMORY_DIR = CLAUDE_DIR / "agent-memory"
-MEMORY_LINE_LIMIT = 180
-MEMORY_BYTE_LIMIT = 22 * 1024
 
 
 def agent_name(payload: dict) -> str:
@@ -43,23 +36,13 @@ def main() -> int:
         name = agent_name(payload)
         if not name:
             return 0
-        mem = MEMORY_DIR / name / "MEMORY.md"
-        if not mem.is_file():
-            return 0
-
-        print(f"Subagent {name} finished. If its report contains a mistake, "
-              f"surprise, or CEO correction, record the lesson now per "
-              f"skills/self-learning (tier: agent MEMORY.md vs "
-              f".claude/memory/lessons.md vs shared rule; reusable code -> "
-              f".claude/memory/patterns.md). Do not skip.")
-
-        data = mem.read_bytes()
-        lines = data.count(b"\n") + 1
-        if len(data) > MEMORY_BYTE_LIMIT or lines > MEMORY_LINE_LIMIT:
-            print(f"memory: {name}/MEMORY.md at {lines} lines / "
-                  f"{len(data) // 1024}KB - nearing the 200-line/25KB "
-                  f"injection window. Create a curation task "
-                  f"(skills/self-learning, mode: curate).")
+        print(f"Subagent {name} finished. If its report contains a mistake, surprise, or "
+              f"CEO correction, record it now (skills/self-learning): python "
+              f".claude/tools/memory/memory.py --record --kind lesson --signature <tag> "
+              f"--trigger <when it applies> --what <one sentence> --why <root cause> "
+              f"--fix <checkable rule> --agent {name} --task <task-id>. A reusable code "
+              f"shape goes in as --kind pattern. A universal policy goes in "
+              f".claude/rules/ instead. Do not skip.")
     except Exception:
         pass
     return 0

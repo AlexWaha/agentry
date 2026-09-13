@@ -10,7 +10,11 @@ Each test pins one defect that cost a round trip every turn of a real session:
 3. a BLOCKED run was excluded from the free-slot calculation, so a new task
    could start on top of its dirty working tree;
 4. `done` was reached on the ABSENCE of merge evidence - "no branch found in
-   any repo" was read as "nothing to merge" rather than "cannot tell".
+   any repo" was read as "nothing to merge" rather than "cannot tell";
+5. the backlog reader read only `depends_on`, so `superseded_by:` and
+   `blocked_on:` were decorative - the queue kept offering a task whose work had
+   been folded into another one, and a dependency on such a task could never be
+   satisfied because a superseded task never reaches done/.
 """
 
 from __future__ import annotations
@@ -50,7 +54,12 @@ class _FakeConn:
 
 def decide_with(runs: list[dict], backlog=("task-0002",)) -> str | None:
     """stop_gate.decide() over a synthetic run set. Returns the block reason, or
-    None when the hook allowed the stop. No DB, no git, no task files."""
+    None when the hook allowed the stop. No DB, no git, no task files.
+
+    busy_marker_fresh is mocked too: it reads the real .claude/state/, so a live
+    gate marker for the task id used here (written whenever the orchestrator
+    dispatches a subagent for it) silenced the hook and failed these tests for
+    an environmental reason. BusyMarkerTest covers that function directly."""
     queue = [{"id": t, "deps": []} for t in backlog]
     buf = io.StringIO()
     with unittest.mock.patch.object(stop_gate.mode, "conveyor_runs", return_value=True), \
@@ -64,6 +73,7 @@ def decide_with(runs: list[dict], backlog=("task-0002",)) -> str | None:
             unittest.mock.patch.object(stop_gate, "latest_undocumented", return_value=None), \
             unittest.mock.patch.object(stop_gate, "reconcile_status_drift", return_value=([], [])), \
             unittest.mock.patch.object(stop_gate.approvals, "granted", return_value=True), \
+            unittest.mock.patch.object(stop_gate, "busy_marker_fresh", return_value=False), \
             redirect_stdout(buf):
         stop_gate.decide()
     out = buf.getvalue().strip()
@@ -196,6 +206,88 @@ class MergeEvidenceTest(unittest.TestCase):
         self.assertEqual("park", out["action"])
         self.assertEqual("merge", out["awaiting_human"])
         self.assertIn("does not carry this task yet", out["message"])
+
+
+class BacklogFilterTest(unittest.TestCase):
+    """Defect 5: which frontmatter fields take a task out of the ready set.
+
+    Runs against a temporary tasks tree, never the live one - a test in this
+    suite already read live state once and failed for an environmental reason."""
+
+    def setUp(self):
+        self.tmp = Path(__file__).resolve().parent / "_tmp_tasks"
+        for name in ("backlog", "active", "done"):
+            (self.tmp / name).mkdir(parents=True, exist_ok=True)
+        for attr, name in (("BACKLOG_DIR", "backlog"), ("ACTIVE_DIR", "active"),
+                           ("DONE_DIR", "done")):
+            p = unittest.mock.patch.object(stop_gate, attr, self.tmp / name)
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(self._clean)
+
+    def _clean(self):
+        for d in ("backlog", "active", "done"):
+            for f in (self.tmp / d).glob("*.md"):
+                f.unlink()
+            (self.tmp / d).rmdir()
+        self.tmp.rmdir()
+
+    def _task(self, task, where="backlog", deps=(), blocked_on="", superseded_by=""):
+        (self.tmp / where / f"{task}.md").write_text(
+            "---\n"
+            f"id: {task.split('-')[1]}\n"
+            f"depends_on: [{', '.join(deps)}]\n"
+            f"blocked_on:{(' ' + blocked_on) if blocked_on else ''}\n"
+            f"superseded_by:{(' ' + superseded_by) if superseded_by else ''}\n"
+            "---\n\n"
+            "## Body\n\n"
+            "Prose that quotes `blocked_on:` and `superseded_by:` as field names.\n",
+            encoding="utf-8")
+
+    def _ready(self):
+        return [t["id"] for t in stop_gate.read_backlog()
+                if all(stop_gate.dep_satisfied(d, {}) for d in t["deps"])]
+
+    def test_blank_fields_still_offer_the_task(self):
+        # Control: the template ships both fields blank on every task.
+        self._task("task-0100")
+        self.assertEqual(["task-0100"], self._ready())
+
+    def test_superseded_task_is_not_offered(self):
+        self._task("task-0100", superseded_by="task-0200")
+        self.assertEqual([], self._ready())
+
+    def test_non_empty_blocked_on_is_not_offered(self):
+        self._task("task-0100", blocked_on="CEO ruling on the pricing model")
+        self.assertEqual([], self._ready())
+
+    def test_dependency_on_a_superseded_task_resolves_through_its_successor(self):
+        self._task("task-0100", superseded_by="task-0200")
+        self._task("task-0200", where="done")
+        self._task("task-0101", deps=("task-0100",))
+        self.assertEqual(["task-0101"], self._ready())
+
+    def test_dependency_on_a_superseded_task_waits_for_the_unfinished_successor(self):
+        self._task("task-0100", superseded_by="task-0200")
+        self._task("task-0200")  # successor still queued, not done
+        self._task("task-0101", deps=("task-0100",))
+        self.assertEqual(["task-0200"], self._ready())
+
+    def test_dangling_supersede_pointer_does_not_hang_the_dependent_task(self):
+        self._task("task-0100", superseded_by="task-0900")  # no such file anywhere
+        self._task("task-0101", deps=("task-0100",))
+        self.assertEqual(["task-0101"], self._ready())
+
+    def test_supersede_cycle_does_not_hang_the_dependent_task(self):
+        self._task("task-0100", superseded_by="task-0200")
+        self._task("task-0200", superseded_by="task-0100")
+        self._task("task-0101", deps=("task-0100",))
+        self.assertEqual(["task-0101"], self._ready())
+
+    def test_ordinary_unfinished_dependency_still_blocks(self):
+        self._task("task-0100")
+        self._task("task-0101", deps=("task-0102",))  # never created
+        self.assertEqual(["task-0100"], self._ready())
 
 
 if __name__ == "__main__":

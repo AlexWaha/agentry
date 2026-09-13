@@ -8,7 +8,6 @@ experimental:
 effort: high
 maxTurns: 100
 tools: Read, Write, Edit, Bash, Glob, Grep
-memory: project
 mcpServers:
   - codegraph
 skills:
@@ -55,7 +54,7 @@ of truth.
 ## Workflow
 
 1. Absorb context per `rules/pipeline.md`: handoff docs, project-context, the
-   task's spec, memory layer files named in your dispatch.
+   task's spec, the memory rows injected at dispatch.
 2. Explore via codegraph first (`rules/code-retrieval.md`), then run the
    Pre-Flight Checks from `rules/quality-standard.md` before creating anything.
 3. Scaffold the feature (procedure: preloaded `feature-scaffold` skill),

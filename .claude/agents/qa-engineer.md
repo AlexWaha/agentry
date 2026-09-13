@@ -8,7 +8,6 @@ experimental:
 effort: high
 maxTurns: 100
 tools: Read, Write, Edit, Bash, Glob, Grep
-memory: project
 mcpServers:
   - codegraph
 skills:
@@ -54,7 +53,7 @@ commands are defined in `.claude/project/stack.md`.
 ## Workflow
 
 1. Absorb context per `rules/pipeline.md`: handoff docs, project-context, the
-   task's spec, acceptance criteria, memory layer files named in your dispatch.
+   task's spec, acceptance criteria, the memory rows injected at dispatch.
 2. Explore via codegraph first (`rules/code-retrieval.md`) to find the
    implementation chain before writing tests against it.
 3. Write tests using the preloaded `write-tests` skill; run the full quality

@@ -53,13 +53,14 @@ CLI is absent: report it as a manual prerequisite (see `_onboarding.md` 0.1)
 and continue - onboarding must not fail over it; `session_start.py` degrades
 gracefully.
 
-**A7.5. Seed the memory layers.** Generate the L1 codebase map: for each
-top-level module/directory, one row in `.claude/memory/codebase.md` (path,
-responsibility, key symbols/entry points) - use codegraph queries and
-`project/architecture.md`; remove every FILL-ME marker. Leave `lessons.md` and
-`patterns.md` as their empty seeds. Then stamp freshness:
-`python .claude/tools/memory/codebase_sync.py --stamp`. The layer contract is
-in `.claude/memory/README.md`.
+**A7.5. Seed the memory store.** Generate the module map: for each top-level
+module/directory, one row in the store - `python
+.claude/tools/memory/memory.py --record --kind module --path <dir>
+--responsibility <one line> --symbols <entry points>` - using codegraph queries
+and `project/architecture.md`. Lessons and patterns start empty; they accumulate
+as tasks complete. Then stamp freshness: `python
+.claude/tools/memory/codebase_sync.py --stamp`. The store contract is in
+`.claude/memory/README.md`.
 
 **A8. Verify.** Run and report:
 ```bash

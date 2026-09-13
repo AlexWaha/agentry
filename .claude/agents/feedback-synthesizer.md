@@ -5,7 +5,6 @@ model: opus
 permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30
-memory: project
 tools: Read, Write, Glob, Grep
 hooks:
   PreToolUse:
