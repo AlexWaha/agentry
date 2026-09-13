@@ -161,11 +161,33 @@ class BranchGateUnchangedTest(unittest.TestCase):
         self.assertEqual(code, 2)
 
     def test_main_exists_proper_task_branch_is_allowed(self):
-        with TempRepo() as repo:
+        # An APPROVED run row is now part of "allowed": the commit check fails
+        # closed on a task branch whose run cannot be found (a lane mismatch
+        # reaches that path), so this test states the whole precondition.
+        with TempRepo() as repo, gate_state(runs={"task-9981": {"commit_approved": 1}}):
             repo.commit()
             repo.checkout_new("bugfix/task-9981")
             code = pretool_gate.handle_bash("git commit -m work", cwd=repo.path)
         self.assertEqual(code, 0)
+
+    def test_a_task_branch_with_no_run_row_is_denied_not_waved_through(self):
+        # Outside the pipeline (never registered, or the session is in another
+        # PIPELINE_LANE) the approval cannot be verified, so the gate refuses.
+        with TempRepo() as repo, gate_state(runs={}):
+            repo.commit()
+            repo.checkout_new("bugfix/task-9983")
+            code, err = denial_reason("git commit -m work", cwd=repo.path)
+        self.assertEqual(code, 2)
+        self.assertIn("no row in the run store", err)
+        self.assertIn("PIPELINE_LANE", err)
+
+    def test_an_unreadable_run_store_denies_the_commit(self):
+        with TempRepo() as repo, gate_state(db_is_dir=True):
+            repo.commit()
+            repo.checkout_new("bugfix/task-9984")
+            code, err = denial_reason("git commit -m work", cwd=repo.path)
+        self.assertEqual(code, 2)
+        self.assertIn("could not be read", err)
 
 
 class FR21ExemptionTest(unittest.TestCase):
@@ -180,11 +202,10 @@ class FR21ExemptionTest(unittest.TestCase):
         self.assertEqual(code, 0)
 
     def test_same_files_on_proper_task_branch_also_allowed_unchanged(self):
-        # On a real task branch, the C-2 exemption is never even consulted -
-        # task_from_branch() resolves a task id and the pre-existing
-        # "not under pipeline control" fallback applies. This proves FR-21
-        # did not change that path.
-        with TempRepo() as repo:
+        # On a real task branch the C-2 exemption is never even consulted -
+        # task_from_branch() resolves a task id and the run's own commit
+        # approval decides. This proves FR-21 did not change that path.
+        with TempRepo() as repo, gate_state(runs={"task-9982": {"commit_approved": 1}}):
             repo.commit()
             repo.checkout_new("bugfix/task-9982")
             repo.stage(".claude/plans/x.md", "docs/y.md")
@@ -470,8 +491,11 @@ class ProtectedPushTest(unittest.TestCase):
                 self.assertEqual(code, 2)
 
     def test_work_branch_push_is_still_allowed(self):
-        # Control: the form used on this very task must keep working.
-        with TempRepo() as repo:
+        # Control: the form used on this very task must keep working. The push
+        # approval is now part of that form - a task branch with no run row
+        # fails closed, so the row is seeded with push already approved.
+        task = pretool_gate.task_from_branch(self.WORK_BRANCH)
+        with TempRepo() as repo, gate_state(runs={task: {"push_approved": 1}}):
             repo.commit()
             repo.checkout_new(self.WORK_BRANCH)
             for command in (f"git push -u origin {self.WORK_BRANCH}",

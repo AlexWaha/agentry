@@ -4,6 +4,9 @@
 Wired to Claude Code's `PreToolUse` event (matchers: Bash, Edit|Write). It denies
 (exit code 2, reason on stderr) when:
   - `git commit` runs while the current task's commit is not yet approved;
+  - `git commit` / `git push` runs on a task branch whose run row cannot be
+    read, or is absent from the lane's run store - the approval cannot be
+    verified, so these two checks fail CLOSED (see handle_bash);
   - `git push` runs while push is not approved, or targets ANY protected branch
     (main and master always, plus the configured trunk and pipeline.json
     "protected_branches" - default staging / production);
@@ -87,18 +90,103 @@ def gates_cfg() -> dict:
 # `(?<![-\w<>])` skips arrows like `->` / `-->` and glued word chars.
 REDIR_RE = re.compile(r"(?<![-\w<>])\d*>>?\s*(?P<t>&\d+|[^\s;|&<>]+)")
 DISCARD_TARGETS = ("nul", "/dev/null")
+QUOTED_RE = re.compile(r"'[^']*'|\"[^\"]*\"", re.DOTALL)
+
+# A nested sh-family shell: the `-c` argument is a whole command in its own
+# right, and quoting it is what hides it from every whole-string scan here.
+SHELL_TOKEN_RE = re.compile(r"^(?:.*[\\/])?(?:ba|z|k|da)?sh(?:\.exe)?$", re.IGNORECASE)
+MAX_SHELL_DEPTH = 3
+
+# READ THIS BEFORE TOUCHING THE REDIRECT SCAN.
+#
+# Four consecutive "precision fixes" to this gate each opened a new hole while
+# closing the old one: shlex tokenisation went blind to glued separators
+# (`git status&&git add -A`), the narrow regex that replaced it refused ordinary
+# reads, and quote masking then hid the body of a nested shell
+# (`bash -c "echo x > src/app.py"` scanned as the empty string).
+#
+# So: every change here must be diffed against adversarial input on BOTH sides -
+# what it starts refusing, AND what it stops refusing. A passing suite proves
+# neither, because the suite only holds the cases somebody already thought of.
+# Run the new and the old version over the same list and compare the answers.
 
 
-def redirect_write_target(command: str) -> str:
+def mask_quoted(command: str) -> str:
+    """Blank quoted spans so a `>` inside a quoted SQL comparison or message is
+    not read as a redirect.
+
+    Observed, not theoretical: a tool call carrying `>` inside a Python format
+    string was denied as shell file-authoring. Length is preserved, so match
+    offsets still index the ORIGINAL command - which is what lets a quoted
+    TARGET (`> "out.txt"`) stay detectable while a quoted OPERATOR (`n >= 2`)
+    stops matching.
+
+    Masking alone is NOT enough: a quoted span can be a whole nested command
+    (`bash -c "echo x > f"`), and blanking it makes the redirect invisible. That
+    is what shell_c_bodies() + the recursion in redirect_write_target() cover."""
+    return QUOTED_RE.sub(lambda m: "Q" * len(m.group(0)), command)
+
+
+def shell_c_bodies(command: str) -> list:
+    """The `-c` argument of every nested sh-family shell in `command`.
+
+    shlex removes the quoting, so the body comes back as a plain command string
+    the caller can scan exactly like a top-level one. Same two-layer shape the
+    file already uses for git (git_invocations plus a substring net): argv
+    walking is the real check, and this is what stops a quoted subshell from
+    being scanned as an empty string."""
+    try:
+        tokens = shlex.split(pad_separators(command), posix=True)
+    except ValueError:
+        return []
+    bodies = []
+    for i, tok in enumerate(tokens):
+        if not SHELL_TOKEN_RE.match(tok):
+            continue
+        for j in range(i + 1, len(tokens)):
+            arg = tokens[j]  # not `tok`: that is the outer loop's shell token
+            if not arg.startswith("-"):
+                break  # a positional argument: this shell runs a script, not -c
+            # `-c`, and the clusters that end in it (`-lc`, `-ec`, `-xc`) - a
+            # shell takes the command as the argument of whichever cluster ends
+            # with c, so matching only the bare `-c` missed `bash -lc "..."`.
+            if arg == "-c" or (not arg.startswith("--") and arg.endswith("c")):
+                if j + 1 < len(tokens):
+                    bodies.append(tokens[j + 1])
+                break
+    return bodies
+
+
+def redirect_write_target(command: str, _depth: int = 0) -> str:
     """Return the file-writing redirect fragment, or '' if the command only dups
-    descriptors (2>&1) or discards output (NUL / /dev/null)."""
-    for m in REDIR_RE.finditer(command):
-        target = m.group("t")
+    descriptors (2>&1) or discards output (NUL / /dev/null).
+
+    Nested `sh -c "..."` bodies are unwrapped and scanned recursively, because
+    mask_quoted() blanks the quoted body and would otherwise report ''.
+
+    KNOWN LIMITATION - this is textual, so it sees only a body written out in
+    the command itself. A body built at runtime (`bash -c "$CMD"`), decoded
+    (`base64 -d | sh`), fed through stdin (`echo ... | sh`), or held in a script
+    file invoked by path stays invisible here. Nesting deeper than
+    MAX_SHELL_DEPTH shells is equally invisible: the unwrapping stops there, so a
+    redirect at depth 4 or below is not seen. The ceiling stays on purpose -
+    building that command is harder than the runtime-body bypass above, which
+    this can never catch anyway - but do not read a pass as proof of no
+    redirect. Those need the profile's other layers, not a bigger regex."""
+    for m in REDIR_RE.finditer(mask_quoted(command)):
+        # Offsets index the original, so the reported fragment and the target
+        # test both read the real text rather than the mask's filler.
+        target = command[m.start("t"):m.end("t")].strip("'\"")
         if target.startswith("&"):
             continue  # descriptor dup, e.g. 2>&1 - not a file write
         if target.lower() in DISCARD_TARGETS:
             continue  # discard sink - not a tree mutation
-        return m.group(0).strip()
+        return command[m.start():m.end()].strip()
+    if _depth < MAX_SHELL_DEPTH:
+        for body in shell_c_bodies(command):
+            frag = redirect_write_target(body, _depth + 1)
+            if frag:
+                return frag
     return ""
 
 
@@ -1016,11 +1104,37 @@ def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
                         "per .claude/rules/git-workflow.md.")
         return allow()
 
-    conn = state.connect()
-    run = state.get_run(conn, task)
-    conn.close()
+    # The commit and push checks fail CLOSED, following check_merge_source()
+    # rather than inventing a second style for the same question. Both failure
+    # modes below were silent exit 0 before, and a lane mismatch (the session
+    # that registered the task is not the session committing it) reaches the
+    # second one as an ordinary, expected event - not an exotic one.
+    try:
+        conn = state.connect()
+        try:
+            run = state.get_run(conn, task)
+        finally:
+            conn.close()
+    except Exception:
+        if is_commit or is_push:
+            return deny(
+                f"The pipeline run state ({state.DB_PATH}) could not be read, so the "
+                f"checkpoint approval for {task} cannot be verified. This path fails "
+                f"closed on purpose. Check PIPELINE_LANE"
+                f"{f'={state.LANE!r}' if state.LANE else ' (unset)'} and that the state "
+                f"directory is writable.")
+        run = None
     if run is None:
-        return allow()  # task not under pipeline control - don't interfere
+        if is_commit or is_push:
+            return deny(
+                f"{task} has no row in the run store ({state.DB_PATH}), so the "
+                f"checkpoint approval cannot be verified and the gate refuses rather "
+                f"than assuming approval. Either register the task - python "
+                f".claude/tools/pipeline/advance.py --task {task} --type <type> - or, if "
+                f"it IS registered, this session is in the wrong lane: PIPELINE_LANE"
+                f"{f'={state.LANE!r}' if state.LANE else ' is unset'} selects the store "
+                f"above, and a lane holds its own runs.")
+        return allow()  # merge-only: check_trunk_merge above is the whole check
 
     if is_commit and not run["commit_approved"]:
         return deny(f"Commit for {task} is not approved yet. Surface the diff and wait for CEO "

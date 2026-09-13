@@ -41,8 +41,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import state
+
 ROOT = Path(__file__).resolve().parents[3]
-APPROVALS_PATH = ROOT / ".claude" / "state" / "approvals"
+# Suffixed per lane from the single accessor in state.py - see state.LANE. One
+# conveyor per lane means one approval level per lane: a planning session set to
+# `auto` must not hand the building session its commit approvals.
+APPROVALS_PATH = ROOT / ".claude" / "state" / f"approvals{state.LANE_SUFFIX}"
 
 MANUAL = "manual"
 ASSISTED = "assisted"

@@ -16,10 +16,15 @@ Kinds:
   spec    .claude/specs/*<task>*.md         the spec
   tasks   .claude/tasks/backlog/*.md        task files the breakdown produced
 
+`--glob` replaces the four kinds with any path pattern, for a project whose
+planning artifact is neither a plan nor a spec. The task-naming and content
+checks are identical either way.
+
 Exit 0 when satisfied, 1 with a reason on stdout otherwise.
 
 CLI:
     python artifact_gate.py --task task-0007 --kind plan
+    python artifact_gate.py --task task-0007 --glob "docs/design/*.md" --label design
 """
 
 from __future__ import annotations
@@ -94,14 +99,37 @@ def check(task: str, kind: str) -> tuple[bool, str]:
     return False, f"unknown artifact kind '{kind}'"
 
 
+def check_glob(task: str, pattern: str, label: str) -> tuple[bool, str]:
+    """Generic form for a project whose artifacts are not plans and specs: any
+    glob, still required to name the task and carry real content.
+
+    The four kinds above hardcode this template's own document layout. A project
+    that gates a planning stage on a design file, an ADR or a data contract needs
+    the same two checks against a different path, and that is the whole
+    difference - so it is a pattern argument, not a fifth kind."""
+    found = _substantial([p for p in state.ROOT.glob(pattern) if task in p.stem])
+    if found:
+        return True, f"{label}: {found[0].name}"
+    return False, (f"no {label} for {task}: expected a file matching {pattern} "
+                   f"naming the task, with at least {MIN_CHARS} characters.")
+
+
 def _main() -> int:
     parser = argparse.ArgumentParser(description="Document-artifact exit gate")
     parser.add_argument("--task", required=True)
-    parser.add_argument("--kind", required=True,
-                        choices=["brief", "plan", "spec", "tasks"])
+    parser.add_argument("--kind", choices=["brief", "plan", "spec", "tasks"])
+    parser.add_argument("--glob", help="artifact path pattern, relative to the project root")
+    parser.add_argument("--label", default="artifact")
     args = parser.parse_args()
 
-    ok, message = check(args.task, args.kind)
+    if args.glob:
+        ok, message = check_glob(args.task, args.glob, args.label)
+    elif args.kind:
+        ok, message = check(args.task, args.kind)
+    else:
+        print("pass --kind or --glob")
+        return 1
+
     print(message)
     return 0 if ok else 1
 

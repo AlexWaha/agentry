@@ -153,6 +153,42 @@ class HasForbiddenDashTest(unittest.TestCase):
         self.assertFalse(pretool_gate.has_forbidden_dash("bugfix/task-0001"))
 
 
+class MaskQuotedRedirectTest(unittest.TestCase):
+    """task-0004 (FR-4 inventory, pretool_gate row): a `>` inside a quoted span
+    is not a redirect.
+
+    Observed, not hypothetical: a tool call carrying `>` inside a Python format
+    string was denied as shell file-authoring while the FR-4 inventory was being
+    reviewed. The mask preserves length, so a quoted TARGET stays detectable
+    while a quoted OPERATOR stops matching."""
+
+    def test_quoted_comparison_is_not_a_redirect(self):
+        self.assertEqual("", pretool_gate.redirect_write_target(
+            'python -c "print(f\'{n >= 2}\')"'))
+
+    def test_quoted_sql_comparison_is_not_a_redirect(self):
+        self.assertEqual("", pretool_gate.redirect_write_target(
+            "psql -c 'select 1 where total > 5'"))
+
+    def test_a_real_redirect_outside_quotes_is_still_caught(self):
+        self.assertEqual(
+            "> out.txt", pretool_gate.redirect_write_target("echo 'a > b' > out.txt"))
+
+    def test_a_quoted_target_is_still_caught(self):
+        # The mask keeps offsets, so the fragment is read from the real command.
+        self.assertEqual(
+            '> "out file.txt"',
+            pretool_gate.redirect_write_target('echo hi > "out file.txt"'))
+
+    def test_mask_preserves_length(self):
+        command = "echo 'a > b' > out.txt"
+        self.assertEqual(len(command), len(pretool_gate.mask_quoted(command)))
+
+    def test_descriptor_dup_and_discard_still_pass(self):
+        self.assertEqual("", pretool_gate.redirect_write_target("make 2>&1"))
+        self.assertEqual("", pretool_gate.redirect_write_target("make 2>NUL"))
+
+
 class RepoBootstrapOrderingTest(unittest.TestCase):
     """task-0001: repo_bootstrap() must be evaluated before current_branch().
 
