@@ -1,6 +1,7 @@
 ---
 name: pipeline
-description: Switch the session between build, plan and talk mode, and between manual, assisted and auto approval levels. Use when the CEO wants to discuss a project, test a hypothesis or design something without the task conveyor pushing code work forward, to switch back to implementation afterwards, or to change how many checkpoints the CEO has to answer. Triggers on "/pipeline", "/pipeline talk", "/pipeline plan", "/pipeline build", "/pipeline approvals", "давай обсудим", "просто поговорим", "без задач", "переключи режим", "смени уровень одобрения".
+description: Switch the session between build, plan and talk mode, and between manual, assisted and auto approval levels. Use when the CEO wants to discuss a project, test a hypothesis or design something without the task conveyor pushing code work forward, to switch back to implementation afterwards, or to change how many checkpoints the CEO has to answer. Triggers on "/pipeline", "/pipeline talk", "/pipeline plan", "/pipeline build", "/pipeline build auto", "/pipeline approvals", "давай обсудим", "просто поговорим", "без задач", "переключи режим", "смени уровень одобрения".
+argument-hint: "[plan|talk|build] [manual|assisted|auto]"
 ---
 
 # Pipeline mode and approvals
@@ -38,9 +39,12 @@ are gated stage machines registered and advanced through the same
 | `assisted` | take a task, commit | the push |
 | `auto` | all of the above, then it takes the next ready task | the push, merging into `main`, moving a task to `done`, answering planning questions - no level ever grants these |
 
-The push is absent from every row on purpose: `approvals.NEVER_GRANTED` refuses
-it at every level, and a per-stage `auto_approve` listing it does nothing (see
-`rules/git-workflow.md`, "Push is never automatic, at any approval level").
+The push is absent from every "grants" cell on purpose: `approvals.NEVER_GRANTED`
+refuses it at every level, and a per-stage `auto_approve` listing it does nothing
+(see `rules/git-workflow.md`, "Push is never automatic, at any approval level").
+Where the rows name the push they state the approval requirement, which holds in
+both workflow modes, not that the checkpoint exists: `solo` mode has no push
+checkpoint at all, so a run there parks at the commit.
 
 A per-stage `auto_approve` list in `pipeline.json` layers on top of the level
 and wins for every other checkpoint, so a single one can be automated without
@@ -51,9 +55,15 @@ its predecessor merged into `main` first.
 
 ## How to run it
 
-Read the argument the CEO passed after `/pipeline`.
+Read the arguments the CEO passed after `/pipeline`. The first is the mode, the
+optional second is the approval level, so `/pipeline build auto` sets both dials
+in one go.
 
-**No argument** - report both the current mode and the current approval level, and stop:
+**No argument** - report the current mode and approval level, then offer the
+choice through `AskUserQuestion`: two questions, mode first, then level. The
+autocomplete only shows a static hint, so the picker is the actual UI - do not
+print a prose menu and make the CEO remember the words. If he dismisses the
+card, leave both dials untouched and say so.
 
 ```bash
 python .claude/tools/pipeline/mode.py --show
@@ -66,8 +76,23 @@ python .claude/tools/pipeline/approvals.py --show
 python .claude/tools/pipeline/mode.py talk
 ```
 
+**`<mode> <level>`** - both dials at once, which is the usual way to start a run:
+
+```bash
+python .claude/tools/pipeline/mode.py build
+python .claude/tools/pipeline/approvals.py auto
+```
+
+`/pipeline build auto` and `/pipeline build manual` are the two that matter in
+practice: the first runs the conveyor unattended and parks at whichever
+checkpoint `workflow.mode` leaves last (the push in `pr` mode, the commit in
+`solo`, where the local merge follows), the second asks at every checkpoint that
+mode leaves in place. Neither pushes on its own - no
+level does. `talk` ignores the level: there is no conveyor to approve anything
+on, so say so instead of setting it.
+
 **`approvals <level>`** (or a request phrased as changing how much is
-auto-approved) - switch the approval level and confirm:
+auto-approved) - switch the approval level alone, leaving the mode as it is:
 
 ```bash
 python .claude/tools/pipeline/approvals.py assisted
@@ -75,6 +100,11 @@ python .claude/tools/pipeline/approvals.py assisted
 
 Then tell the CEO in one line which mode/level is active and what it means for
 the work. Do not restate the whole table.
+
+Five one-word skills cover the common settings without arguments:
+`/pipeline-build-manual`, `/pipeline-build-assisted`, `/pipeline-build-auto`,
+`/pipeline-plan`, `/pipeline-talk`. The three `build-*` ones set both dials; the
+other two set the mode and leave the level as it is.
 
 ## What each mode changes for you
 

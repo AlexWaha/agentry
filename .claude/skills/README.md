@@ -2,6 +2,9 @@
 
 24 skills, each a directory with `SKILL.md` (procedure, <200 lines) plus
 optional `references/` files (templates and code examples, loaded on demand).
+The table below catalogues those 24; the six `pipeline*` directories are session
+controls rather than work procedures and are documented in
+`skills/pipeline/SKILL.md`, which is why a listing shows 30 directories.
 Agents preload their core procedures via the `skills:` frontmatter field
 (P below); everything else is invoked at runtime through the Skill tool (O).
 Descriptions carry "Use when" triggers so model invocation fires reliably.
