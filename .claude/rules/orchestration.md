@@ -67,6 +67,15 @@ context-absorption chain from `pipeline.md`.
 - `.claude/state/approvals` - one word (`manual`/`assisted`/`auto`) picking how
   many checkpoints pass without the CEO. Read via `approvals.py`. Never grants
   merging into `main`, moving a task to `done`, or answering planning questions.
+- `PIPELINE_LANE` (environment variable, optional) - the name of an independent
+  conveyor. It suffixes all three files above (`run.<lane>.db`, `mode.<lane>`,
+  `approvals.<lane>`), so two parallel sessions do not share pipeline state.
+  Read in `state.py` and nowhere else, and validated there against
+  `^[A-Za-z0-9_-]{1,32}$` - an unusable name refuses the run rather than
+  quietly opening an empty store. Unset is the default lane and behaves exactly
+  as before lanes existed. A lane holds its OWN runs: commit and push in the
+  same lane the task registered in, or the gate refuses (it fails closed on a
+  missing run row) with the lane named in the message.
 - A task's state is the **folder** it sits in - `.claude/tasks/backlog/`,
   `active/`, or `done/` - not a `status:` frontmatter field. There is nothing to
   drift out of sync with the file's actual location.

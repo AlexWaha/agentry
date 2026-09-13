@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 
 import state
 
@@ -54,6 +55,19 @@ BANNED_ROLES = {"superadmin", "super admin", "super-admin", "admin", "is_admin"}
 
 def path_for(task: str):
     return EVIDENCE_DIR / f"{task}.json"
+
+
+def safe(message: str) -> str:
+    """Re-encode through stdout's own codec, replacing what it cannot carry.
+
+    The gate message quotes the evidence file, so it carries whatever labels the
+    UI uses. On a console whose stdout is cp1252 a non-ASCII label raised
+    UnicodeEncodeError from print() and failed the stage - a red gate for a
+    reason that has nothing to do with the evidence. Same class of defect as the
+    cp1252 stdin decode the gates carried, and fixed the same way: name the
+    codec explicitly instead of inheriting the host locale's."""
+    enc = sys.stdout.encoding or "utf-8"
+    return message.encode(enc, errors="replace").decode(enc, errors="replace")
 
 
 def check(task: str) -> tuple[bool, str]:
@@ -116,7 +130,7 @@ def _main() -> int:
     parser.add_argument("--task", required=True)
     args = parser.parse_args()
     ok, message = check(args.task)
-    print(message)
+    print(safe(message))
     return 0 if ok else 1
 
 

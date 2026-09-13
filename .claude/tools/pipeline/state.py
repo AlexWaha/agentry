@@ -18,14 +18,61 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 STATE_DIR = ROOT / ".claude" / "state"
-DB_PATH = STATE_DIR / "run.db"
+
+# A lane is one independent conveyor. PIPELINE_LANE=<name> in the environment of
+# a session gives it its own run.db, mode and approvals file, so a session
+# planning work does not share pipeline state with the session building a task.
+# Unset is the default lane and is byte-identical to the behaviour before lanes
+# existed - the suffix is empty, so every path resolves exactly as before.
+#
+# This is the ONE place the lane is read. mode.py and approvals.py suffix their
+# own files from state.LANE_SUFFIX rather than re-reading the environment, for
+# the same reason advance.py reads the workflow mode through a single accessor:
+# three copies of one lookup are three chances to disagree about which lane the
+# session is in.
+# The lane name becomes part of a FILENAME, so it is validated rather than
+# trusted. An unvalidated value was worse than sloppy: `a/b` raised a sqlite
+# error that the hooks' top-level fail-open swallowed into exit 0, and
+# `../../evil` opened (and created) a database outside the state directory
+# entirely. Both spellings therefore turned the commit and push checkpoints off
+# without a word.
+LANE_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+LANE_ERROR = (
+    "PIPELINE_LANE={value!r} is not a usable lane name. A lane becomes part of the "
+    "run-store filename, so it must match {pattern} (letters, digits, underscore, "
+    "hyphen; 32 characters at most). Falling back to the default lane - unset "
+    "PIPELINE_LANE to silence this.")
+
+# An unusable lane WARNS and falls back to the default lane; it must never raise
+# here. This module is imported at the top of every hook, `SystemExit` is not
+# caught by their `except Exception`, and exit 2 means opposite things per event:
+# PreToolUse reads it as "deny this call" (so even Read and ls were denied) and
+# Stop reads it as "you may not stop". One typo in a lane name therefore left the
+# session with no tools and no way out, since the model cannot unset the parent
+# process environment. That is exactly the bricking NFR-4 forbids.
+#
+# The checkpoint protection this used to raise for lives one layer down and is
+# unaffected: a task registered in lane X has no row in the DEFAULT store, and
+# the fail-closed "no row in the run store" path in pretool_gate.handle_bash()
+# refuses commit and push, naming the lane in the message.
+_RAW_LANE = os.environ.get("PIPELINE_LANE", "").strip()
+if _RAW_LANE and not LANE_RE.match(_RAW_LANE):
+    sys.stderr.write(LANE_ERROR.format(value=_RAW_LANE, pattern=LANE_RE.pattern) + "\n")
+    _RAW_LANE = ""
+
+LANE = _RAW_LANE
+LANE_SUFFIX = f".{LANE}" if LANE else ""
+
+DB_PATH = STATE_DIR / f"run{LANE_SUFFIX}.db"
 PIPELINE_PATH = ROOT / ".claude" / "pipeline.json"
 BACKLOG_DIR = ROOT / ".claude" / "tasks" / "backlog"
 ACTIVE_DIR = ROOT / ".claude" / "tasks" / "active"
@@ -200,6 +247,26 @@ def task_dir(task: str) -> str | None:
     for name, folder in TASK_DIRS.items():
         if (folder / f"{task}.md").is_file():
             return name
+    return None
+
+
+def task_repo(task: str) -> str | None:
+    """The `repo:` frontmatter value of a task file, wherever the file sits.
+
+    The single reader for that field: `stack_gate.py` dispatches a stage's gate
+    by it and `git_state.repos_for_task()` scopes merge detection by it, and the
+    two must not be able to resolve the same task to different repos. Only the
+    head of the file is read, so the word `repo:` inside the task's prose cannot
+    be mistaken for the field."""
+    for folder in TASK_DIRS.values():
+        path = folder / f"{task}.md"
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[:40]
+        except OSError:
+            continue
+        for line in lines:
+            if line.startswith("repo:"):
+                return line.split(":", 1)[1].strip().strip("'\"") or None
     return None
 
 

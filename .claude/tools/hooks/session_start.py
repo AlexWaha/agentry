@@ -94,9 +94,12 @@ def pipeline_mode() -> None:
         import mode
 
         current = mode.read()
-        if current != mode.BUILD:
-            print(f"pipeline mode: {current} - {mode.DESCRIPTIONS[current]}. "
-                  f"Switch back with: /pipeline build")
+        # Compared against the project's own default flow, not a hardcoded
+        # `build`: a workspace whose first declared pipeline is something else
+        # would otherwise be told it is in a non-default mode on every start.
+        if current != mode.default():
+            print(f"pipeline mode: {current} - {mode.describe(current)}. "
+                  f"Switch back with: /pipeline {mode.default()}")
     except Exception:
         pass
 

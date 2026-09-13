@@ -342,6 +342,47 @@ class LocalMergeDetectionTest(unittest.TestCase):
         self.assertEqual("main", git_state.trunk(self.repo))
         self.assertTrue(self.report("task-9006")[0]["in_main"])
 
+    # task-0004, FR-4 inventory (git_state row): three commit spellings count,
+    # not one. The bracket-only grep made every other spelling read as unmerged.
+
+    def test_a_conventional_commit_subject_counts_as_a_tag(self):
+        self.commit("task-9007: the work, with no brackets anywhere")
+        self.assertTrue(git_state.task_in_main(self.repo, "task-9007"))
+
+    def test_gits_own_default_merge_message_counts_as_a_tag(self):
+        # The solo-mode case: nothing tagged, and the id survives only in the
+        # merge commit git writes itself.
+        self.work_branch("bugfix/task-9008", "untagged work")
+        self.git("merge", "--no-ff", "bugfix/task-9008")
+        self.assertIn("Merge branch 'bugfix/task-9008'",
+                      self.git("log", "-1", "--format=%s"))
+        self.assertTrue(git_state.task_in_main(self.repo, "task-9008"))
+
+    def test_a_mention_inside_a_sentence_is_not_a_tag(self):
+        self.commit("refactor the queue; this unblocks task-9009 later")
+        self.assertFalse(git_state.task_in_main(self.repo, "task-9009"))
+
+    def test_a_longer_id_sharing_the_prefix_is_not_this_task(self):
+        # The merge arm had no terminator, so 'task-9011' matched 'task-90111'.
+        self.work_branch("feature/task-90111", "a different task entirely")
+        self.git("merge", "--no-ff", "feature/task-90111")
+        self.assertTrue(git_state.task_in_main(self.repo, "task-90111"))
+        self.assertFalse(git_state.task_in_main(self.repo, "task-9011"))
+
+    def test_a_commit_about_the_task_is_not_the_tasks_own_subject(self):
+        # Both used to match: the arm accepted any non-word char before the id,
+        # so a space and a quote qualified.
+        self.commit("hotfix for task-9012: patch the fallout")
+        self.commit('Revert "task-9013: the work"')
+        self.assertFalse(git_state.task_in_main(self.repo, "task-9012"))
+        self.assertFalse(git_state.task_in_main(self.repo, "task-9013"))
+
+    def test_a_sub_task_prefix_is_not_a_tag(self):
+        # The epic convention was deliberately not ported, so its spelling must
+        # not silently resolve either - a task-9010 is not a sub-task-9010.
+        self.commit("sub-task-9010: work under an epic branch")
+        self.assertFalse(git_state.task_in_main(self.repo, "task-9010"))
+
 
 class BacklogFilterTest(unittest.TestCase):
     """Defect 5: which frontmatter fields take a task out of the ready set.

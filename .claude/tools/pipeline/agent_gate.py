@@ -6,12 +6,14 @@ WebSearch|WebFetch on the agents that carry web tools) so the SAME deterministic
 rules that govern the orchestrator also fire INSIDE every subagent. Three
 profiles:
 
-  --profile dev       code-writing agents. Reuses pretool_gate.py (commit/push
-                      approval flags, protected-branch push deny, review-stage
-                      edit freeze) and adds: deny `git push --force`, deny any
-                      invocation of approve.py (recording CEO approval is the
-                      orchestrator's exclusive right - a dev agent running it
-                      would be self-approval).
+  --profile dev       code-writing agents, qa-engineer included. Reuses
+                      pretool_gate.py (commit/push approval flags,
+                      protected-branch push deny, review-stage edit freeze) and
+                      adds: deny `git push --force`, deny any invocation of
+                      approve.py (recording CEO approval is the orchestrator's
+                      exclusive right - a dev agent running it would be
+                      self-approval), deny an UNNARROWED run of the stack's test
+                      suite while permitting a narrowed one.
   --profile readonly  analysis agents whose tools list already blocks Edit/Write
                       but whose Bash access is a mutation hole. Denies mutating
                       Bash: git write commands, file mutation utilities, shell
@@ -29,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shlex
 import sys
 
 import pretool_gate
@@ -223,11 +226,13 @@ def handle_dev(tool: str, ti: dict, cwd: str = "") -> int:
                         "Report the handoff problem to the orchestrator instead.")
         if is_force_push(command):
             return deny("Force push is forbidden for all agents (rules/git-workflow.md).")
-        hit = forbidden_test_cmd(command)
+        hit = unnarrowed_test_cmd(command)
         if hit:
-            return deny(f"Dev agents do not run the test suite ('{hit}'). Write the code and "
-                        f"tests, then report - the orchestrator runs the suite once after you "
-                        f"finish. (see .claude testing rules).")
+            return deny(f"Dev agents do not run the FULL test suite ('{hit}'). Run only the "
+                        f"cases you touched, narrowed with one of "
+                        f"{', '.join(test_filter_flags())}, then report - the orchestrator "
+                        f"runs the whole suite once after you finish. "
+                        f"(see .claude testing rules).")
         return pretool_gate.handle_bash(command, cwd)
     if tool in ("Edit", "Write"):
         content = str(ti.get("new_string", "") or ti.get("content", ""))
@@ -243,6 +248,70 @@ def forbidden_test_cmd(command: str) -> str:
     for c in pretool_gate.gates_cfg().get("dev_forbidden_commands", []):
         if str(c).lower() in low:
             return str(c)
+    return ""
+
+
+# Flags that narrow a suite command to selected cases. Every runner spells it
+# differently, so the list is config-driven from pipeline.json
+# `gates.dev_test_filter_flags`; the default covers the common spellings. A
+# runner that narrows by argument rather than by flag (an explicit module path,
+# a file path) never matches dev_forbidden_commands in the first place.
+DEFAULT_FILTER_FLAGS = ("--filter", "-k", "--testsuite", "--group", "-run", "--grep")
+
+
+def test_filter_flags() -> tuple[str, ...]:
+    configured = pretool_gate.gates_cfg().get("dev_test_filter_flags")
+    if isinstance(configured, list) and configured:
+        return tuple(str(c).lower() for c in configured)
+    return DEFAULT_FILTER_FLAGS
+
+
+def is_narrowed(command: str) -> bool:
+    """Whether ONE command was narrowed to selected cases.
+
+    A narrowed run is permitted where the full run is not, because proving a new
+    test actually bites means running it with the production line removed. A
+    test written and never executed is a claim, not a result: two shipped red
+    under the strict split, which is the incident this allowance closes. The
+    UNFILTERED run stays denied, so the one-full-run-per-cycle budget still
+    belongs to the orchestrator.
+
+    Takes ONE command, not a chain: a filter flag anywhere in
+    `pytest -k x; pytest` used to mark the whole string narrowed, which let the
+    bare second run through. Callers split first - see unnarrowed_test_cmd().
+
+    The flag must be a TOKEN, not a substring: `pytest  # -k nothing` is a full
+    suite run with the flag sitting in a comment, and a substring test read it
+    as narrowed. Unparseable text (an unbalanced quote) is not narrowed, so the
+    full-run deny still applies."""
+    try:
+        # comments=True: a `#` at a word boundary starts a shell comment, so the
+        # flag in `pytest  # -k nothing` is not an argument of anything.
+        tokens = shlex.split(command.lower(), comments=True)
+    except ValueError:
+        return False
+    flags = test_filter_flags()
+    return any(tok in flags or any(tok.startswith(f"{flag}=") for flag in flags)
+               for tok in tokens)
+
+
+# Shell separators that start a new command. Splitting on them is crude - a
+# separator inside a quoted filter argument splits too - but the failure mode is
+# a narrowed segment being read as two narrowed segments, never a full run being
+# read as narrowed.
+SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||[;|&\n]")
+
+
+def unnarrowed_test_cmd(command: str) -> str:
+    """The forbidden test command of the first segment that runs it UNNARROWED.
+
+    Per segment, because narrowing is a property of one invocation: the flag in
+    `npm test -- -k cart; npm test` narrows the first run and says nothing about
+    the second."""
+    for segment in SEGMENT_SPLIT_RE.split(command):
+        hit = forbidden_test_cmd(segment)
+        if hit and not is_narrowed(segment):
+            return hit
     return ""
 
 

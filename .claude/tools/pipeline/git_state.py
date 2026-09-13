@@ -117,12 +117,43 @@ def merged_into_main(repo: Path, ref: str) -> bool | None:
 
 
 def task_in_main(repo: Path, task: str) -> bool | None:
-    """True when the trunk carries a commit tagged with this task id.
+    """True when the trunk carries a commit naming this task id.
 
     Reads the commit log rather than the branch tip, because a squash merge
-    leaves the branch itself outside main while its content is in."""
-    code, out = _git(repo, "log", trunk(repo), "--oneline",
-                     f"--grep=\\[{task}\\]", "-1")
+    leaves the branch itself outside main while its content is in.
+
+    Three spellings count, because three of them occur in practice:
+
+      [task-0004]                  the convention rules/git-workflow.md asks for
+      task-0004:                   a conventional-commit subject
+      Merge branch 'x/task-0004'   git's own default merge message
+
+    The third is the one that carries most merges in `solo` mode, where the
+    pipeline merges locally: a task whose commits carry no tag at all still
+    leaves its id in the merge commit. Matching only the bracketed form made
+    every other spelling read as unmerged, so a genuinely merged task parked
+    forever.
+
+    Both non-bracketed arms need a TERMINATOR, or the id is only a prefix and
+    the wrong task closes:
+
+      - the subject arm is anchored to the start of a line (`^`), not merely
+        preceded by a non-word character. `[^-a-z]` matched the space in
+        `hotfix for task-0004: ...` and the quote in `Revert "task-0004: ..."`,
+        both of which are commits ABOUT the task, not the task's own subject.
+      - the merge arm ends on a character that cannot continue the id
+        (`[^0-9a-z]`, which the closing quote satisfies), so
+        `Merge branch 'x/task-00041'` no longer closes task-0004.
+
+    Anchored with -E throughout.
+
+    Not ported: `fin.local`'s fourth arm, `sub-task-0004:`. It serves the
+    one-branch-per-epic convention, which the FR-4 inventory flagged as needing
+    a CEO decision and did NOT port - an arm matching a convention this template
+    does not have would be dead on arrival."""
+    code, out = _git(repo, "log", trunk(repo), "--oneline", "-E",
+                     f"--grep=(\\[{task}\\]|^{task}:"
+                     f"|Merge branch '[^']*{task}[^0-9a-z])", "-1")
     if code != 0:
         return None
     return bool(out)
@@ -180,6 +211,31 @@ def base_is_current(repo: Path, ref: str = "HEAD") -> bool | None:
     return _is_ancestor(repo, trunk(repo), ref)
 
 
+def repos_for_task(task: str) -> list[Path]:
+    """The repos a task may legitimately live in.
+
+    Task ids are allocated per WORKSPACE and consumed per REPO, so they collide.
+    Measured in the `fin.local` tree: a frontend branch
+    `enhancement/task-1236-calendar-redesign` existed while an unrelated backend
+    task-1236 was waiting to close, and an unscoped scan read that stranger as
+    "not merged yet" and parked the backend task forever. A task declaring
+    `repo:` is only ever asked about that repo.
+
+    The declared value is matched loosely on purpose: task files carry both
+    `backend` and `backend/src` for the same repo, and a single-repo workspace
+    names a repo that is the root itself. Fails open - an unknown or absent
+    value, or a value matching nothing, means every repo, which is the
+    behaviour before this existed."""
+    declared = state.task_repo(task)
+    if not declared:
+        return repos()
+
+    target = (state.ROOT / declared).resolve()
+    scoped = [r for r in repos()
+              if r == target or target in r.parents or r in target.parents]
+    return scoped or repos()
+
+
 def task_report(task: str, do_fetch: bool = True, branch: str = "") -> list[dict]:
     """Where a task stands in every repo that knows about it.
 
@@ -189,9 +245,12 @@ def task_report(task: str, do_fetch: bool = True, branch: str = "") -> list[dict
 
     An EMPTY list means no repo carries either signal - no branch and no tagged
     commit. That is UNKNOWN, never "nothing to merge": the caller must park, not
-    finish the task."""
+    finish the task.
+
+    The loop runs over repos_for_task(), not repos(): a colliding task id in an
+    unrelated repo is otherwise read as this task's unmerged branch."""
     out = []
-    for repo in repos():
+    for repo in repos_for_task(task):
         if do_fetch:
             fetch(repo)
         found = declared_ref(repo, branch) or branch_for(repo, task)
