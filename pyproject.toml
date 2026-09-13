@@ -1,0 +1,37 @@
+[tool.ruff]
+# Scope: the harness tooling under .claude/tools (stdlib-only Python, see README).
+line-length = 110
+
+[tool.ruff.lint]
+# Explicit `select` on purpose - verified against ruff 0.16.1, not assumed:
+#   `ruff check --isolated .claude/tools` (ignores this file, ruff's built-in
+#   default rule set only) -> 86 errors, all BLE001 / S110 / S112 / PLW1510.
+#   Zero E or F findings under that default, and `--isolated --select=F`
+#   alone also passes clean - so ruff's default already covers F fully on
+#   this tree. It does NOT enable I (isort) at all, which is why E402 (import
+#   not at top) previously passed silently under an earlier, unconfigured
+#   version of this file (found by QA).
+#   `ruff check .claude/tools` (this config) -> "All checks passed!", so the
+#   select list below is genuinely green, not narrowed to pass trivially.
+# E, F, I are the task-0043 floor; W, UP, FURB, RUF, DTZ, PIE, ISC were already
+# active under the old (implicit) default and are kept because they caught
+# real bugs during setup (F821 undefined name, F401 unused imports).
+select = ["E", "F", "I", "W", "UP", "FURB", "RUF", "DTZ", "PIE", "ISC"]
+
+# Deliberately NOT selected (not a leftover - never turned on in the first place):
+# BLE001 (blind-except), S110/S112 (try-except-pass/continue), PLW1510
+# (subprocess-run-without-check), PLC0415 (import-outside-top-level). This
+# harness's hooks are documented to fail open by design (see
+# .claude/rules/orchestration.md: "All gates fail open: a bug in a hook allows
+# the action rather than bricking the agent") - broad except/pass/continue and
+# lazy sys.path-dependent imports are the intended pattern in hooks, gates and
+# setup scripts across this codebase, not an oversight.
+
+[tool.ruff.lint.per-file-ignores]
+# All three import a sibling module from .claude/tools/pipeline, which has no
+# __init__.py and is not on sys.path by default - the path must be extended
+# before the import can resolve, so the import cannot sit at the top of the file.
+".claude/tools/tests/test_approvals.py" = ["E402"]
+".claude/tools/tests/test_pretool_gate.py" = ["E402"]
+".claude/tools/tests/test_pretool_gate_git.py" = ["E402"]
+".claude/tools/memory/update.py" = ["E402"]

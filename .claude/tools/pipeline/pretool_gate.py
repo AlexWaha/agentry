@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -37,9 +38,6 @@ TASK_PREFIX = "task-"
 # cutting branches without a task number.
 BRANCH_TYPES = ("feature", "bugfix", "hotfix", "enhancement", "techdebt",
                 "fix", "refactor", "chore")
-NEW_BRANCH_RE = re.compile(
-    r"git\s+(?:checkout\s+-[bB]|switch\s+-[cC]|branch)\s+"
-    r"(\"[^\"]+\"|'[^']+'|[^\s;&|]+)")
 PROTECTED_BRANCHES = ("main", "staging", "production", "master", "develop")
 
 # --- Generic gates (no project/stack scope - safe in the universal template) ---
@@ -127,7 +125,7 @@ def orch_allowed_path(file_path: str) -> bool:
             home_plans = (Path.home() / ".claude" / "plans").resolve()
             rp = p.resolve()
             return rp == home_plans or home_plans in rp.parents
-        if rel.lower() in ("claude.md",):
+        if rel.lower() == "claude.md":
             return True
         import fnmatch
         for pattern in orch_cfg().get("extra_allow", []):
@@ -196,6 +194,144 @@ def _unquote(s: str) -> str:
     return s
 
 
+# --- Git argv resolution: the single source of truth for "which subcommand?" ---
+# Substring matching (`"git commit" in command`) is defeated by ANY global option
+# sitting between `git` and its subcommand - `git -C dir push origin main`,
+# `git -c user.name=x commit -m y`, `git --no-pager commit`. Every gate that
+# identified a subcommand that way could be bypassed with one extra flag, so
+# subcommand resolution now happens here, once, by walking argv.
+GIT_UNKNOWN = "?"  # git text that could not be parsed - callers MUST gate it
+
+# Global options that consume the NEXT argv entry. The `--opt=value` spelling
+# needs no entry: it is a single token and falls through the generic flag skip.
+GIT_OPTS_WITH_ARG = frozenset({
+    "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
+    "--super-prefix", "--config-env", "--attr-source",
+})
+GIT_TOKEN_RE = re.compile(r"^(?:.*[\\/])?git(?:\.exe)?$", re.IGNORECASE)
+MENTIONS_GIT_RE = re.compile(r"(?<![\w.-])git(?:\.exe)?(?![\w.-])", re.IGNORECASE)
+# A token that ends the current command: shell separator or redirect.
+SEGMENT_BREAK_RE = re.compile(r"^(?:&&|\|\||;|\||&|\d*[<>])")
+
+# Separators a shell splits on even with no surrounding whitespace. shlex does
+# NOT split on them, so `git status&&git add -A` tokenises as one glued token
+# ('status&&git'), the second `git` is never seen, and every argv-based gate goes
+# blind. Longest first so `&&` / `||` win over `&` / `|`.
+SHELL_SEPARATORS = ("&&", "||", ";", "|", "&")
+
+
+def pad_separators(command: str) -> str:
+    """Insert whitespace around glued shell separators, outside quotes.
+
+    `git status&&git add -A` -> `git status && git add -A`, so shlex yields the
+    second `git` as its own token. Quoted regions are copied verbatim: padding
+    inside them would rewrite a commit message or a branch name."""
+    out = []
+    quote = ""
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            out.append(ch)
+            if ch == quote:
+                quote = ""
+            elif ch == "\\" and quote == '"' and i + 1 < len(command):
+                out.append(command[i + 1])
+                i += 1
+            i += 1
+            continue
+        if ch in "\"'":
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        sep = next((s for s in SHELL_SEPARATORS if command.startswith(s, i)), "")
+        if sep:
+            out.append(" " + sep + " ")
+            i += len(sep)
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def git_invocations(command: str) -> list:
+    """[(subcommand, args), ...] - one entry per `git` call in `command`.
+
+    Global options are skipped, and the ones taking a separate argument consume
+    it, so `git -C dir push origin main` resolves to ('push', ['origin', 'main']).
+    `args` stops at the first shell separator, redirect, or next `git` token, so
+    `&&` / `;` chains yield one entry per link.
+
+    Glued separators are normalised first (pad_separators), so
+    `git status&&git add -A` resolves to [('status', []), ('add', ['-A'])]
+    instead of hiding the second call inside one token.
+
+    The failure mode is deliberately fail-CLOSED: when the text mentions git but
+    shlex cannot tokenise it, the subcommand is GIT_UNKNOWN and callers must
+    treat it as needing the gate. For these checks, failing open reopens the
+    bypass. A git call carrying no subcommand at all (`git --version`) yields
+    no entry - that is resolved, not unknown.
+    """
+    if not MENTIONS_GIT_RE.search(command):
+        return []
+    try:
+        tokens = shlex.split(pad_separators(command), posix=True)
+    except ValueError:
+        return [(GIT_UNKNOWN, [])]
+    found = []
+    i = 0
+    while i < len(tokens):
+        if not GIT_TOKEN_RE.match(tokens[i]):
+            i += 1
+            continue
+        j, sub = i + 1, ""
+        while j < len(tokens):
+            tok = tokens[j]
+            if SEGMENT_BREAK_RE.match(tok):
+                break
+            if tok.startswith("-"):
+                j += 2 if tok in GIT_OPTS_WITH_ARG else 1
+                continue
+            sub = tok.lower()
+            j += 1
+            break
+        if sub:
+            args = []
+            while (j < len(tokens) and not SEGMENT_BREAK_RE.match(tokens[j])
+                   and not GIT_TOKEN_RE.match(tokens[j])):
+                args.append(tokens[j])
+                j += 1
+            found.append((sub, args))
+        i = max(j, i + 1)
+    return found
+
+
+UNPARSEABLE_GIT_MSG = (
+    "This command mentions git but cannot be tokenised (unbalanced quote - often an "
+    "apostrophe in a message or heredoc body). The gate cannot tell which git "
+    "subcommand would run, so it refuses rather than guessing. Rewrite the command "
+    "with balanced quotes (or write the text with Write/Edit instead of a heredoc).")
+
+
+def git_unparseable(command: str) -> bool:
+    """True when the text mentions git but shlex could not tokenise it."""
+    return any(sub == GIT_UNKNOWN for sub, _ in git_invocations(command))
+
+
+def git_invokes(command: str, *subcommands: str) -> bool:
+    """True when `command` runs one of `subcommands` ('commit', 'push', ...).
+
+    Unparseable git text counts as a match (fail-closed), and a plain substring
+    match is kept as a safety net for forms argv walking cannot see from the
+    outside, such as `bash -c "git push origin main"`."""
+    for sub, _ in git_invocations(command):
+        if sub == GIT_UNKNOWN or sub in subcommands:
+            return True
+    low = " ".join(command.lower().split())
+    return any(f"git {s}" in low for s in subcommands)
+
+
 def repo_candidates(command: str, cwd: str) -> list:
     """Directories to try for the branch check, most specific first."""
     base = Path(cwd) if cwd else state.ROOT
@@ -261,15 +397,47 @@ def valid_work_branch(name: str) -> bool:
     return bool(re.search(r"task-[a-z0-9]", name, re.IGNORECASE))
 
 
+BRANCH_CREATE_FLAGS = {"checkout": ("-b", "-B"), "switch": ("-c", "-C")}
+
+
+def new_branch_name(command: str) -> tuple:
+    """(name, trailing_args) for a branch-CREATION command, else ('', []).
+
+    Forms: `git checkout -b NAME [start-point]`, `git switch -c NAME [start-point]`,
+    `git branch NAME [start-point]`. Resolved through git_invocations(), so a
+    global option no longer hides the subcommand (`git -C dir checkout -b x`).
+
+    Unparseable git text returns (GIT_UNKNOWN, []) - this used to return ('', [])
+    and thereby ALLOW, the one caller that read the sentinel as "not a git
+    command". The caller must gate it (see check_branch_creation)."""
+    for sub, args in git_invocations(command):
+        if sub == GIT_UNKNOWN:
+            return GIT_UNKNOWN, []
+        if sub == "branch":
+            if args and not args[0].startswith("-"):
+                return args[0], args[1:]
+        elif sub in BRANCH_CREATE_FLAGS:
+            for n, tok in enumerate(args):
+                if tok == "--":
+                    break
+                if tok in BRANCH_CREATE_FLAGS[sub]:
+                    rest = args[n + 1:]
+                    if rest and not rest[0].startswith("-"):
+                        return rest[0], rest[1:]
+                    break
+    return "", []
+
+
 def check_branch_creation(command: str, cwd: str = "") -> int:
     """Deny creation of a work branch that breaks the <type>/task-XXXX naming
     rule [gate 4] or is cut from a base other than main [gate C]. Only fires on
-    branch-creation forms; fail-open otherwise."""
-    m = NEW_BRANCH_RE.search(command)
-    if not m:
-        return allow()
-    name = _unquote(m.group(1))
-    if not name or name.startswith("-"):  # flag, not a branch name (e.g. git branch -d)
+    branch-creation forms; fail-open otherwise. Unparseable git text gates
+    (GIT_UNKNOWN): the branch name cannot be read, so neither rule can be
+    checked."""
+    name, rest = new_branch_name(command)
+    if name == GIT_UNKNOWN:
+        return deny(UNPARSEABLE_GIT_MSG)
+    if not name:
         return allow()
     if name.replace("\\", "/") in PROTECTED_BRANCHES:
         return allow()
@@ -283,26 +451,16 @@ def check_branch_creation(command: str, cwd: str = "") -> int:
     main_branch = str(pipeline.get("main_branch", "main"))
     if main_branch.startswith("{{"):
         main_branch = "main"
-    return check_branch_base(command, cwd, name, main_branch)
+    return check_branch_base(command, cwd, name, rest, main_branch)
 
 
-def check_branch_base(command: str, cwd: str, name: str, main_branch: str) -> int:
+def check_branch_base(command: str, cwd: str, name: str, rest: list, main_branch: str) -> int:
     """C: a work branch must be cut from up-to-date main. Verify the base is
-    main (explicit start-point on the command, else the current branch).
+    main (explicit start-point after the branch name, else the current branch).
+    `rest` already stops at the first shell separator - anything past it is a
+    new command (e.g. `&& echo ...`), not the branch's start-point.
     Fail-open when git is unavailable."""
-    after = command.split(name, 1)[1] if name in command else ""
-    # Truncate at the first shell separator - anything past it is a new command
-    # (e.g. `&& echo ...`), not the branch's start-point.
-    for sep in ("&&", "||", ";", "|", "&", ">", "<", "\n"):
-        idx = after.find(sep)
-        if idx != -1:
-            after = after[:idx]
-    start_point = None
-    for tok in after.split():
-        tok = _unquote(tok)
-        if tok and not tok.startswith("-"):
-            start_point = tok
-            break
+    start_point = next((tok for tok in rest if tok and not tok.startswith("-")), None)
     if start_point is not None:
         ok = start_point == main_branch or start_point.split("/")[-1] == main_branch
     else:
@@ -314,6 +472,129 @@ def check_branch_base(command: str, cwd: str, name: str, main_branch: str) -> in
         f"Branch '{name}' must be cut from up-to-date '{main_branch}', not from the "
         f"current branch. Run: git checkout {main_branch} && git pull, then create the "
         f"branch. (branch-base-must-be-main - see .claude/rules/git-workflow.md).")
+
+
+def repo_bootstrap(command: str, cwd: str, main_branch: str) -> bool:
+    """FR-1: true when the repo has no commits yet (unborn HEAD), or the
+    configured main branch does not exist yet - there is no main to cut a
+    task branch from, so the branch-naming/base rule cannot apply. Fail-open
+    means "no exemption" here: any git error falls back to the existing,
+    unchanged branch-gate behavior rather than silently granting a bypass."""
+    for repo in repo_candidates(command, cwd):
+        try:
+            if not Path(repo).is_dir():
+                continue
+            # A non-zero exit from `rev-parse --verify HEAD` means EITHER
+            # "unborn HEAD" OR "not a git repository at all" - the two are
+            # indistinguishable from that command alone. Confirm this really
+            # is a repo first; if not, fall through to the next candidate
+            # (same fall-through discipline as current_branch/staged_files),
+            # instead of granting a bootstrap exemption for a path that has
+            # no repo here (e.g. the workspace root in a multi-repo layout).
+            is_repo = subprocess.run(
+                ["git", "rev-parse", "--is-inside-work-tree"],
+                cwd=str(repo), capture_output=True, text=True, timeout=10,
+            )
+            if is_repo.returncode != 0 or is_repo.stdout.strip() != "true":
+                continue
+            head = subprocess.run(
+                ["git", "rev-parse", "--verify", "-q", "HEAD"],
+                cwd=str(repo), capture_output=True, text=True, timeout=10,
+            )
+            if head.returncode != 0:
+                return True  # unborn HEAD - zero commits
+            branch = subprocess.run(
+                ["git", "rev-parse", "--verify", "-q", f"refs/heads/{main_branch}"],
+                cwd=str(repo), capture_output=True, text=True, timeout=10,
+            )
+            return branch.returncode != 0
+        except (OSError, subprocess.SubprocessError, ValueError):
+            continue
+    return False
+
+
+# --- Contract C-2: planning-and-documentation path set (FR-21, FR-22) ---
+# Both the pre-move .claude/ spelling and the post-FR-13 .agentry/ spelling
+# are included so the exemption survives the move unchanged.
+C2_PREFIXES = (
+    ".agentry/plans/", ".claude/plans/",
+    ".agentry/specs/", ".claude/specs/",
+    ".agentry/tasks/", ".claude/tasks/",
+    "docs/",
+)
+C2_ROOT_MD_RE = re.compile(r"^[^/]+\.md$", re.IGNORECASE)
+
+
+def matches_c2(path: str) -> bool:
+    p = path.replace("\\", "/").lower()
+    if C2_ROOT_MD_RE.match(p):
+        return True
+    return any(p.startswith(prefix) for prefix in C2_PREFIXES)
+
+
+def staged_files(command: str, cwd: str) -> list:
+    for repo in repo_candidates(command, cwd):
+        try:
+            if not Path(repo).is_dir():
+                continue
+            # --no-renames: without it, git prints only the post-image path
+            # for a detected rename (e.g. `git mv real/code.py .claude/plans/x.md`
+            # shows as one line, `.claude/plans/x.md`), which would let renamed
+            # code slip through the C-2 exemption undetected (FR-22).
+            proc = subprocess.run(
+                ["git", "diff", "--cached", "--name-only", "--no-renames"],
+                cwd=str(repo), capture_output=True, text=True, timeout=10,
+            )
+            if proc.returncode == 0:
+                return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+        except (OSError, subprocess.SubprocessError, ValueError):
+            continue
+    return []
+
+
+def commit_uses_dash_a(command: str) -> bool:
+    """git commit -a / -am / --all stages every dirty tracked file at commit
+    time, after the index was already inspected - an unrelated dirty code file
+    would ship silently through the C-2 exemption. Chosen fix: refuse the
+    exemption outright for -a/-am/--all rather than diff against `git diff
+    HEAD --name-only`, because that HEAD-diff already includes everything the
+    plain index check does PLUS every unstaged tracked change, i.e. it is just
+    a more expensive way to reach "not all C-2" - refusing directly is the
+    same outcome with less surface. Tokenized via git_invocations() so a
+    flag-looking substring inside a quoted commit message isn't mistaken for a
+    real flag, and a global option can't hide the subcommand.
+
+    KNOWN LIMITATION - this check is textual and NOT total. It only sees flags
+    present in the command itself. An `-a` that arrives through git config or an
+    alias (`git -c alias.ci='!git commit -a' ci`, or an `[alias]` entry in
+    .gitconfig) is invisible here, so such a commit could still be granted the
+    C-2 exemption. Resolving aliases would mean shelling out to `git config` per
+    repo on every hook call; the trade was judged not worth it. Do not assume
+    this function catches every `-a` commit."""
+    for sub, args in git_invocations(command):
+        if sub == GIT_UNKNOWN:
+            return True  # unparseable git text - refuse the exemption
+        if sub != "commit":
+            continue
+        for tok in args:
+            if tok == "--":
+                break
+            if tok == "--all":
+                return True
+            if tok.startswith("-") and not tok.startswith("--") and "a" in tok[1:]:
+                return True
+    return False
+
+
+def planning_only_commit(command: str, cwd: str) -> bool:
+    """FR-21/FR-22: the exemption applies only when every staged path matches
+    C-2 - all-or-nothing by construction, so one path outside the set
+    disqualifies the whole commit. No staged files means nothing to exempt.
+    A `-a`/`-am`/`--all` commit never qualifies (see commit_uses_dash_a)."""
+    if commit_uses_dash_a(command):
+        return False
+    files = staged_files(command, cwd)
+    return bool(files) and all(matches_c2(f) for f in files)
 
 
 def check_destructive_and_repl(command: str, low: str) -> int:
@@ -350,9 +631,9 @@ def check_destructive_and_repl(command: str, low: str) -> int:
     return allow()
 
 
-def check_commit_attribution(command: str, low: str) -> int:
+def check_commit_attribution(command: str) -> int:
     """D: no AI-authorship trailer in commit messages."""
-    if "git commit" not in low:
+    if not git_invokes(command, "commit"):
         return allow()
     if AI_ATTRIB_RE.search(command):
         return deny("Commit message carries an AI-authorship trailer (Co-Authored-By / "
@@ -395,7 +676,7 @@ def active_review_run(conn) -> dict | None:
 
 def is_bookkeeping(path: str) -> bool:
     p = path.replace("\\", "/").lower()
-    return "/.claude/" in p or p.startswith(".claude/") or "/docs/" in p or p.startswith("docs/")
+    return "/.claude/" in p or "/docs/" in p or p.startswith((".claude/", "docs/"))
 
 
 def handoff_freeze_task() -> str:
@@ -426,17 +707,23 @@ def handoff_freeze_task() -> str:
 def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
     low = " ".join(command.lower().split())
 
+    # Parse failure gates, but it must say WHY: this used to fall through to the
+    # commit/push block and deny an unparseable heredoc with "Commit for task-XXXX
+    # is not approved yet", which names the wrong cause entirely.
+    if git_unparseable(command):
+        return deny(UNPARSEABLE_GIT_MSG)
+
     for check in (
         check_branch_creation(command, cwd),      # 4 (naming) + C (base)
         check_destructive_and_repl(command, low),  # A + B + G
-        check_commit_attribution(command, low),    # D
+        check_commit_attribution(command),         # D
         orch_check_bash(command) if orch else allow(),  # orchestrator profile
     ):
         if check != 0:
             return check
 
-    is_commit = "git commit" in low
-    is_push = "git push" in low
+    is_commit = git_invokes(command, "commit")
+    is_push = git_invokes(command, "push")
     if not (is_commit or is_push):
         return allow()
 
@@ -444,6 +731,13 @@ def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
     main_branch = str(pipeline.get("main_branch", "main"))
     if main_branch.startswith("{{"):
         main_branch = "main"
+
+    # FR-1: checked before current_branch() - a repo with no commits has an
+    # unborn HEAD, which makes `git rev-parse --abbrev-ref HEAD` fail there and
+    # would otherwise fall through repo_candidates() to an unrelated repo.
+    if is_commit and repo_bootstrap(command, cwd, main_branch):
+        return allow()
+
     branch = current_branch(command, cwd)
 
     if is_push and (branch == main_branch or " origin main" in low or low.endswith(" main")):
@@ -453,6 +747,8 @@ def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
     task = task_from_branch(branch)
     if not task:
         if is_commit:
+            if planning_only_commit(command, cwd):  # FR-21, FR-22
+                return allow()
             return deny("Not on a feature branch (no task-XXXX). Create the task branch first "
                         "per .claude/rules/git-workflow.md.")
         return allow()

@@ -3,7 +3,7 @@
   "cwd": ".",
   "retry_budget": 3,
   "continuation_ceiling": 30,
-  "main_branch": "{{MAIN_BRANCH}}",
+  "main_branch": "main",
   "branch_pattern": "{type}/{task}",
   "memory": {
     "_comment": "Post-task memory review gate (tools/memory/update.py): every done task above baseline must be distilled into .claude/memory/ (lessons/patterns/codebase rows) and stamped before the next task starts. Enforced by stop_gate.py. baseline semantics match handoff.baseline; '' = every done task covered. enabled=false disables the gate.",
@@ -47,7 +47,7 @@
           "name": "implement",
           "owner": "dev",
           "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
-          "exit_gate": { "cmd": "{{BUILD_CMD}}", "expect_exit": 0 }
+          "exit_gate": { "cmd": "python -m compileall -q .claude/tools", "expect_exit": 0 }
         },
         {
           "name": "test",
@@ -55,13 +55,13 @@
           "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
           "ui_evidence": true,
           "_comment": "ui_evidence: true appends 'python .claude/tools/pipeline/ui_evidence.py --task {task}' to the exit gate at onboarding, so UI-touching tasks require real-browser evidence in .claude/state/evidence/<task>.json. Set false for API-only projects.",
-          "exit_gate": { "cmd": "{{TEST_CMD}} && python .claude/tools/pipeline/ui_evidence.py --task {task}", "expect_exit": 0 }
+          "exit_gate": { "cmd": "python -m unittest discover -s .claude/tools && python .claude/tools/pipeline/ui_evidence.py --task {task}", "expect_exit": 0 }
         },
         {
           "name": "review",
           "owner": "reviewer",
           "tools": ["Read", "Glob", "Grep", "Bash"],
-          "exit_gate": { "cmd": "{{LINT_CMD}}", "expect_exit": 0 }
+          "exit_gate": { "cmd": "ruff check .claude/tools", "expect_exit": 0 }
         },
         {
           "name": "diff-review",

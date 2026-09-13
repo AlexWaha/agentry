@@ -1,0 +1,5 @@
+# Line endings are LF everywhere, in the index and in the working tree.
+# Without this, a Windows-side tool (editor, formatter, PowerShell redirect) can
+# silently rewrite whole trees to CRLF and turn a one-file change into a 31-file
+# diff. `text=auto` still leaves detected binaries untouched.
+* text=auto eol=lf
