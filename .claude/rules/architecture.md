@@ -1,6 +1,6 @@
 # Architecture
 
-> **Project-specific architecture lives in `.claude/project/architecture.md`.**
+> **Project-specific architecture lives in `.agentry/project/architecture.md`.**
 > That file describes the current project's module/folder layout, dependency rules, and framework-specific conventions. Read it alongside this one.
 
 This file covers the universal principles that apply regardless of stack.

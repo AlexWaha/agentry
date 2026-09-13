@@ -35,6 +35,6 @@ and helpers the next task should build on instead of reinventing.
 
 ## Context loaded
 FILL-ME: confirm each item with ONE concrete takeaway (a fact, not "I read it"):
-- .claude/project/project-context.md - <takeaway>
+- .agentry/project/project-context.md - <takeaway>
 - spec for MY upcoming task (<spec-id>, or none with reason) - <takeaway>
-- .claude/tasks/done/{{TASK}}.md and its diff on main - <takeaway>
+- .agentry/tasks/done/{{TASK}}.md and its diff on main - <takeaway>

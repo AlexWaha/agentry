@@ -12,8 +12,8 @@ and every reply drags the backlog along with it.
 
 Two independent dials govern the conveyor:
 
-- **mode** (`.claude/state/mode`) - WHICH stage machine runs.
-- **approvals** (`.claude/state/approvals`) - how many of that machine's
+- **mode** (`.agentry/state/mode`) - WHICH stage machine runs.
+- **approvals** (`.agentry/state/approvals`) - how many of that machine's
   checkpoints the CEO still has to answer.
 
 Two dials rather than a matrix, because at three in the morning a matrix is
@@ -24,7 +24,7 @@ unreadable.
 | Mode | Conveyor | What it is for |
 |---|---|---|
 | `build` | on - `pipelines.build` | Default. Tasks advance implement -> test -> review -> ready -> done, commit and push gated by the CEO. |
-| `plan` | on - `pipelines.plan` | Design. Tasks advance formalize -> draft -> plan-review -> approval -> breakdown -> done. Writes a brief, a plan, a spec, and task files into `.claude/tasks/backlog/`. No product code. |
+| `plan` | on - `pipelines.plan` | Design. Tasks advance formalize -> draft -> plan-review -> approval -> breakdown -> done. Writes a brief, a plan, a spec, and task files into `.agentry/tasks/backlog/`. No product code. |
 | `talk` | off | Discussion, hypotheses, exploration. Nothing tracked, nothing written. |
 
 `build` and `plan` both drive the conveyor, just over different stages - both
@@ -114,9 +114,9 @@ CEO checkpoints.
 
 **plan.** Its own gated flow (`formalize -> draft -> plan-review -> approval ->
 breakdown -> done`, `pipelines.plan` in `pipeline.json`), registered with the
-same `advance.py`. Write the brief and the plan under `.claude/plans/`, the
-spec under `.claude/specs/`, and land task files in
-`.claude/tasks/backlog/` - they sit there, queued, until the CEO switches to
+same `advance.py`. Write the brief and the plan under `.agentry/plans/`, the
+spec under `.agentry/specs/`, and land task files in
+`.agentry/tasks/backlog/` - they sit there, queued, until the CEO switches to
 `build` and says which to start. Do not implement product code on this flow.
 
 **talk.** Answer, investigate, measure, prove or disprove. Read code freely,

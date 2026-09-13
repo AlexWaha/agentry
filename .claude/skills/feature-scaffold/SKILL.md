@@ -8,8 +8,8 @@ allowed-tools: Read, Grep, Glob, Write, Edit, Bash
 
 Produce every artifact of a complete API feature following the project's layering
 pipeline: `Request -> Validator -> Service -> Resource/DTO -> Response`.
-Concrete CLI commands live in `.claude/project/stack.md`; the module/folder
-layout in `.claude/project/architecture.md`.
+Concrete CLI commands live in `.agentry/project/stack.md`; the module/folder
+layout in `.agentry/project/architecture.md`.
 
 ## Input
 

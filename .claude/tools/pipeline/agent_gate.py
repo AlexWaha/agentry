@@ -19,8 +19,8 @@ profiles:
                       Bash: git write commands, file mutation utilities, shell
                       redirects, in-place editors, package installers, approve.py.
   --profile docs      documentation/planning agents. Edit/Write allowed only
-                      under .claude/, docs/, or README files; mutating Bash and
-                      approve.py denied.
+                      under .claude/, .agentry/, docs/, or README files;
+                      mutating Bash and approve.py denied.
 
 Deny = exit 2 with a one-line reason on stderr (same convention as
 pretool_gate.py). Fail-open: any internal error allows the tool (exit 0) - a
@@ -161,8 +161,14 @@ def handle_web(profile: str, tool: str, ti: dict) -> int:
 
 
 def is_docs_path(path: str) -> bool:
+    """.agentry/ was ADDED alongside .claude/, not substituted for it: FR-13
+    moved the work product (tasks, handoffs, specs, plans, epics) to .agentry/,
+    which is exactly what the docs profile writes - but rules/, skills/ and
+    agents/ stayed under .claude/, so a docs agent still needs both."""
     p = path.replace("\\", "/").lower()
     if "/.claude/" in p or p.startswith(".claude/"):
+        return True
+    if "/.agentry/" in p or p.startswith(".agentry/"):
         return True
     if "/docs/" in p or p.startswith("docs/"):
         return True
@@ -337,9 +343,9 @@ def handle_docs(tool: str, ti: dict, cwd: str = "") -> int:
     if tool in ("Edit", "Write"):
         path = str(ti.get("file_path", ""))
         if not is_docs_path(path):
-            return deny(f"Docs agent: writes allowed only under .claude/, docs/, or README "
-                        f"files - '{path}' is outside that scope. Code changes belong to "
-                        f"dev agents via the pipeline.")
+            return deny(f"Docs agent: writes allowed only under .claude/, .agentry/, docs/, "
+                        f"or README files - '{path}' is outside that scope. Code changes "
+                        f"belong to dev agents via the pipeline.")
         return allow()
     if tool == "Bash":
         command = str(ti.get("command", ""))
@@ -350,7 +356,7 @@ def handle_docs(tool: str, ti: dict, cwd: str = "") -> int:
         frag = bash_mutates(command)
         if frag:
             return deny(f"Docs agent: mutating Bash denied (matched: '{frag}'). "
-                        f"Use Write/Edit for documents under .claude/ or docs/.")
+                        f"Use Write/Edit for documents under .claude/, .agentry/ or docs/.")
     return allow()
 
 

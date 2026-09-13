@@ -16,7 +16,7 @@ quality gate.
    architecture (design docs, ER diagrams, API contracts), document (business
    plan, research, spec), config (Docker, CI/CD, env), or phase output (all
    deliverables of a finished phase, listed from the spec, the task files in
-   `.claude/tasks/done/`, and git log). For code: scope with
+   `.agentry/tasks/done/`, and git log). For code: scope with
    `git diff main...HEAD --stat`; when the work is uncommitted review the
    working tree (`git diff HEAD` + untracked via `git status --porcelain`).
 2. **Select 3-4 lenses** from [references/lenses.md](references/lenses.md) per

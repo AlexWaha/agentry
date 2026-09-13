@@ -13,5 +13,5 @@ Then say in one line that the plan flow is active and that no product code will 
 written on it. The approval level is left as it is - say what it currently is only
 if the CEO asks.
 
-Artifacts land in `.claude/plans/`, `.claude/specs/` and `.claude/tasks/backlog/`.
+Artifacts land in `.agentry/plans/`, `.agentry/specs/` and `.agentry/tasks/backlog/`.
 Full contract: `.claude/skills/pipeline/SKILL.md`.

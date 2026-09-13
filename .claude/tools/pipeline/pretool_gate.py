@@ -14,11 +14,11 @@ Wired to Claude Code's `PreToolUse` event (matchers: Bash, Edit|Write). It denie
     is in `solo` workflow mode AND the source is an approved task branch - see
     check_trunk_merge();
   - a code file is edited while the active task sits in the read-only `review`
-    stage (bookkeeping under .claude/ and docs/ is always allowed);
+    stage (bookkeeping under .claude/, .agentry/ and docs/ is always allowed);
   - a code file is edited while handoff debt exists and no task is mid-stage
     (config flag handoff.hard_edit_gate - see tools/pipeline/handoff.py);
   - the ORCHESTRATOR (main thread) writes outside its bookkeeping allowlist
-    (.claude/, docs/, README*, root CLAUDE.md) - config block
+    (.claude/, .agentry/, docs/, README*, root CLAUDE.md) - config block
     pipeline.json "orchestrator_gate". The orchestrator formalizes, delegates,
     verifies and synthesizes; it never authors code. Subagents are exempt
     (their own frontmatter hooks run agent_gate.py profiles instead): when the
@@ -194,6 +194,14 @@ def redirect_write_target(command: str, _depth: int = 0) -> str:
 # The main thread coordinates; it never authors code. Writes are allowed only
 # under the bookkeeping allowlist. Subagent tool calls skip this (they carry an
 # agent identity in the hook payload and are governed by agent_gate.py).
+#
+# The allowlisted directory trees, in ONE place: orch_allowed_path() iterates
+# this tuple and the deny message formats it, so a tree can never be accepted
+# without being named to the orchestrator it was denied to (the FR-13 bug, where
+# .agentry/ was accepted for two tasks while the message still said .claude/).
+# Lowercase, trailing slash, plain prefixes only - README*, the root CLAUDE.md,
+# ~/.claude/plans/ and extra_allow globs are special cases handled below.
+ORCH_ALLOW_PREFIXES = (".claude/", ".agentry/", "docs/")
 README_RE = re.compile(r"(^|[\\/])readme[^\\/]*(\.md)?$", re.IGNORECASE)
 ORCH_SED_RE = re.compile(r"\bsed\s+(-\w*\s+)*-i", re.IGNORECASE)
 ORCH_TEE_RE = re.compile(r"\btee\s+(?:-\w+\s+)*(?P<t>[^\s;|&]+)", re.IGNORECASE)
@@ -222,12 +230,9 @@ def orch_allowed_path(file_path: str) -> bool:
     try:
         raw = file_path.replace("\\", "/")
         low = raw.lower()
-        if "/.claude/" in low or low.startswith(".claude/"):
-            return True
-        if "/.agentry/" in low or low.startswith(".agentry/"):
-            return True
-        if "/docs/" in low or low.startswith("docs/"):
-            return True
+        for prefix in ORCH_ALLOW_PREFIXES:
+            if low.startswith(prefix) or "/" + prefix in low:
+                return True
         if README_RE.search(low):
             return True
         p = Path(file_path)
@@ -257,9 +262,10 @@ def orch_check_edit(file_path: str) -> int:
         return allow()
     if orch_allowed_path(file_path):
         return allow()
+    trees = ", ".join(ORCH_ALLOW_PREFIXES)
     return deny(f"Orchestrator never writes code: '{file_path}' is outside the bookkeeping "
-                f"allowlist (.claude/, docs/, README*, root CLAUDE.md). Dispatch the owning "
-                f"agent via the Agent tool instead. (orchestrator_gate - see "
+                f"allowlist ({trees}, README*, root CLAUDE.md). Dispatch "
+                f"the owning agent via the Agent tool instead. (orchestrator_gate - see "
                 f".claude/rules/orchestration.md)")
 
 
@@ -1164,7 +1170,8 @@ def handle_edit(file_path: str, content: str = "", orch: bool = False) -> int:
 
     if under_home_claude(file_path):  # H
         return deny("Project files must not be written under the runtime home ~/.claude/. "
-                    "Keep everything inside the project (its own .claude/, docs/, src, ...).")
+                    "Keep everything inside the project (its own .claude/, .agentry/, docs/, "
+                    "src, ...).")
 
     if content and has_forbidden_dash(content):  # F
         return deny("Content contains an em dash or en dash (U+2014 / U+2013). Use a plain "

@@ -12,10 +12,10 @@ with the actual state of the project. Used by the Technical Writer agent.
 
 ## Steps
 
-1. **Identify what changed.** Glob `.claude/tasks/done/*.md` for recently
-   completed tasks and `.claude/tasks/active/*.md` for in-flight ones; parse
+1. **Identify what changed.** Glob `.agentry/tasks/done/*.md` for recently
+   completed tasks and `.agentry/tasks/active/*.md` for in-flight ones; parse
    each file's YAML frontmatter (status, completed, epic, spec) to see what
-   was delivered. Cross-reference `.claude/tasks/epics/*.md` for epic-level
+   was delivered. Cross-reference `.agentry/tasks/epics/*.md` for epic-level
    completion. Run `python .claude/tools/pipeline/state.py --resume` for
    in-flight pipeline state. If a branch was merged, check
    `git log --oneline --since="[phase start date]" main` and

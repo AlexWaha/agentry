@@ -1,6 +1,6 @@
 # API Conventions
 
-> **Project-specific API conventions live in `.claude/project/api-conventions.md`.**
+> **Project-specific API conventions live in `.agentry/project/api-conventions.md`.**
 > That file describes framework-specific controller/validator/resource patterns for the current project. Read it alongside this one.
 
 This file covers the universal REST principles that apply regardless of stack.

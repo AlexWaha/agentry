@@ -9,7 +9,7 @@ allowed-tools: Read, Grep, Glob, Write, Edit, Bash
 Design complete API contracts for a feature or the entire application: endpoint
 definitions, request/response schemas, error format, pagination, and an OpenAPI
 spec. Concrete framework validation syntax and route conventions live in
-`.claude/project/stack.md`.
+`.agentry/project/stack.md`.
 
 ## Steps
 

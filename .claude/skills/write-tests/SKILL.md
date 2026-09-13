@@ -9,7 +9,7 @@ allowed-tools: Read, Grep, Glob, Write, Edit, Bash
 Generate tests for existing or new code so every endpoint is covered across
 five required categories: authentication, authorization, validation, happy
 path, and not-found. Concrete framework and runner command
-(`{{TEST_FRAMEWORK}}`, `{{TEST_CMD}}`) live in `.claude/project/stack.md`.
+(`{{TEST_FRAMEWORK}}`, `{{TEST_CMD}}`) live in `.agentry/project/stack.md`.
 
 ## Steps
 

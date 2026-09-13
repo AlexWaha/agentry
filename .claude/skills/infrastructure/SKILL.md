@@ -6,7 +6,7 @@ allowed-tools: Read, Grep, Glob, Write, Edit, Bash
 
 # Infrastructure
 
-Set up the complete development infrastructure: Docker Compose with all services, Dockerfiles, reverse proxy configuration, runtime tuning, environment files, and CI/CD pipeline. Concrete images, versions, ports, and commands live in `.claude/project/stack.md`; this skill uses placeholders (`{{BACKEND_RUNTIME}}`, `{{DEFAULT_DB}}`, `{{CACHE_BACKEND}}`, `{{FRONTEND_RUNTIME}}`, `{{PKG_MANAGER}}`, `{{MIGRATION_TOOL}}`, `{{TEST_CMD}}`, `{{FORMAT_CMD}}`, `{{LINT_CMD}}`) that resolve against the project overlay.
+Set up the complete development infrastructure: Docker Compose with all services, Dockerfiles, reverse proxy configuration, runtime tuning, environment files, and CI/CD pipeline. Concrete images, versions, ports, and commands live in `.agentry/project/stack.md`; this skill uses placeholders (`{{BACKEND_RUNTIME}}`, `{{DEFAULT_DB}}`, `{{CACHE_BACKEND}}`, `{{FRONTEND_RUNTIME}}`, `{{PKG_MANAGER}}`, `{{MIGRATION_TOOL}}`, `{{TEST_CMD}}`, `{{FORMAT_CMD}}`, `{{LINT_CMD}}`) that resolve against the project overlay.
 
 ## Steps
 

@@ -2,7 +2,7 @@
 
 Sacred rules for version control. These rules are absolute and cannot be overridden by any agent or circumstance.
 
-> **Stack-specific commands** (format, lint, test, build, migrate, etc.) live in `.claude/project/stack.md`. This file uses placeholders like `{{FORMAT_CMD}}` - resolve them against the project overlay before running.
+> **Stack-specific commands** (format, lint, test, build, migrate, etc.) live in `.agentry/project/stack.md`. This file uses placeholders like `{{FORMAT_CMD}}` - resolve them against the project overlay before running.
 
 ---
 
@@ -12,7 +12,7 @@ Not every repository has a second party. A pull request, a reviewer and a
 protected trunk are a collaboration protocol; in a solo pet project there is
 nobody on the other side of them, and git is version tracking rather than
 coordination. The shape of the project is therefore config, not prose:
-`workflow.mode` in `.claude/pipeline.json`, enforced by
+`workflow.mode` in `.agentry/pipeline.json`, enforced by
 `tools/pipeline/pretool_gate.py`.
 
 | | `pr` (default) | `solo` |
@@ -226,7 +226,7 @@ git push
 
 **Git hooks are disabled.** All pre-commit checks must be run manually. Five mandatory steps, in order.
 
-> Exact commands depend on the stack; see `.claude/project/stack.md`.
+> Exact commands depend on the stack; see `.agentry/project/stack.md`.
 
 **The gates must run for EVERY stack the branch touches - not just the one you worked in.** If a branch carries both backend and frontend changes (or inherited code in another stack), run every affected stack's gate. "Green" means the real command output you read THIS session - never an assumption, never a subset of the gates, never "it built so it's fine". Inherited or "NOT VERIFIED" code on your branch is yours to gate before any green claim; you own it the moment it is on your branch.
 
@@ -402,7 +402,7 @@ git push origin --delete feature/task-XXXX
 
 Every task report (before push / before merge) **must** include a **Deploy Actions** section stating exactly what commands ops/CEO must run on production after merge. No task is "done" without this section.
 
-> Exact command syntax depends on the stack; see `.claude/project/stack.md` for concrete commands. The categories below are framework-agnostic.
+> Exact command syntax depends on the stack; see `.agentry/project/stack.md` for concrete commands. The categories below are framework-agnostic.
 
 ### Format
 
@@ -501,8 +501,8 @@ git add .
 
 When a multi-step initiative is planned:
 
-1. **Save plan** to `.claude/plans/YYYY-MM-DD-description.md` (date in filename is mandatory)
-2. **Immediately create task files** for every actionable item in the plan - `.claude/tasks/backlog/task-XXXX.md`
+1. **Save plan** to `.agentry/plans/YYYY-MM-DD-description.md` (date in filename is mandatory)
+2. **Immediately create task files** for every actionable item in the plan - `.agentry/tasks/backlog/task-XXXX.md`
 3. **Never start executing** without task files created first
 4. **Track progress** - update task checkboxes as work is done
 5. A task's state IS the folder it sits in - `backlog/` queued, `active/` in
@@ -512,7 +512,7 @@ When a multi-step initiative is planned:
 
 Each branch corresponds to a task in the task management system:
 
-1. Task is created with a unique number (e.g., `task-XXXX`) and files into `.claude/tasks/backlog/`
+1. Task is created with a unique number (e.g., `task-XXXX`) and files into `.agentry/tasks/backlog/`
 2. `advance.py` moves the file `backlog/ -> active/` when the CEO says which task to start; a branch is created from `main` using the task number: `feature/task-XXXX`
 3. Work proceeds on the branch
 4. Commit when task is done (CEO approval required)
@@ -523,14 +523,14 @@ Each branch corresponds to a task in the task management system:
 
 ### File Locations
 
-All project management files live in the **workspace root** `.claude/`:
+**The harness lives in `.claude/`; the project's own work product lives in `.agentry/` at the workspace root.**
 
 | What | Where |
 |------|-------|
-| Plans | `.claude/plans/` |
-| Backlog tasks | `.claude/tasks/backlog/` |
-| Active tasks | `.claude/tasks/active/` |
-| Done tasks | `.claude/tasks/done/` |
+| Plans | `.agentry/plans/` |
+| Backlog tasks | `.agentry/tasks/backlog/` |
+| Active tasks | `.agentry/tasks/active/` |
+| Done tasks | `.agentry/tasks/done/` |
 | Agents | `.claude/agents/` |
 | Rules | `.claude/rules/` |
 

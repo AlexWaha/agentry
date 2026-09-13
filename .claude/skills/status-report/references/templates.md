@@ -26,7 +26,7 @@ Incomplete.
 | 14 | `docs/growth/growth-strategy.md`, `docs/growth/scaling-plan.md`, `docs/growth/roadmap.md` |
 
 A phase is "complete" when every task assigned to it is in
-`.claude/tasks/done/`, every expected deliverable above exists in `docs/`,
+`.agentry/tasks/done/`, every expected deliverable above exists in `docs/`,
 and CEO approval is noted in the epic or task completion notes.
 
 ## Output skeleton

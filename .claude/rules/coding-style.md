@@ -2,7 +2,7 @@
 
 Universal coding conventions for all languages in the project. Every developer (human or AI) follows these rules without exception.
 
-Framework-specific code patterns (full controller / validator / resource / model examples for the current stack) live in `.claude/project/api-conventions.md` and `.claude/project/architecture.md`. This file covers the stack-agnostic principles.
+Framework-specific code patterns (full controller / validator / resource / model examples for the current stack) live in `.agentry/project/api-conventions.md` and `.agentry/project/architecture.md`. This file covers the stack-agnostic principles.
 
 ---
 
@@ -121,7 +121,7 @@ Rules:
 
 ### Cross-Module Communication
 
-Module structure and module dependency rules are stack-specific. See `.claude/project/architecture.md` for the project's module layout and cross-module communication patterns (typically: shared interfaces in a core module, no direct cross-module entity imports, shared enums/DTOs in the core module).
+Module structure and module dependency rules are stack-specific. See `.agentry/project/architecture.md` for the project's module layout and cross-module communication patterns (typically: shared interfaces in a core module, no direct cross-module entity imports, shared enums/DTOs in the core module).
 
 ### Language-Specific General Conventions
 

@@ -2,7 +2,7 @@
 
 Reference examples for container orchestration, Dockerfiles, and CI/CD
 pipelines. All snippets are `[EXAMPLE - <tool>]` - adapt to the project's
-actual stack per `.claude/project/stack.md`.
+actual stack per `.agentry/project/stack.md`.
 
 ## Docker Compose Service Definition
 

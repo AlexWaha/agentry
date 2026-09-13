@@ -158,7 +158,7 @@ This catches any accidental violations from previous sessions or tooling. No-op 
 
 ### Execution Context
 
-Project-specific command invocations (build, test, format, lint, migrate) live in `.claude/project/stack.md`. Run them as documented there.
+Project-specific command invocations (build, test, format, lint, migrate) live in `.agentry/project/stack.md`. Run them as documented there.
 
 ---
 
@@ -166,7 +166,7 @@ Project-specific command invocations (build, test, format, lint, migrate) live i
 
 All packages, frameworks, tools, and dependencies must be the **latest stable version** at the time of installation. No pinning to old versions without explicit CEO approval.
 
-Concrete versions for this project's stack ({{LANG}}, {{FRAMEWORK}}, database, cache, runtime) live in `.claude/project/stack.md`. That file is the single source of truth for current versions.
+Concrete versions for this project's stack ({{LANG}}, {{FRAMEWORK}}, database, cache, runtime) live in `.agentry/project/stack.md`. That file is the single source of truth for current versions.
 
 ### Rules
 

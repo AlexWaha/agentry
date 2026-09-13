@@ -13,11 +13,11 @@ keep the CEO informed.
 ## Steps
 
 1. **Gather task data.** A task's state is the folder it sits in - there is no
-   `status:` field. Glob `.claude/tasks/backlog/*.md` (queued),
-   `.claude/tasks/active/*.md` (in flight) and `.claude/tasks/done/*.md`
+   `status:` field. Glob `.agentry/tasks/backlog/*.md` (queued),
+   `.agentry/tasks/active/*.md` (in flight) and `.agentry/tasks/done/*.md`
    (merged); parse each file's YAML frontmatter (assignee, depends_on, epic,
    spec, phase) to build the current picture. Cross-reference
-   `.claude/tasks/epics/*.md` for epic-level status. Run
+   `.agentry/tasks/epics/*.md` for epic-level status. Run
    `python .claude/tools/pipeline/state.py --resume` (or `--show`) for
    in-flight pipeline state (what stage each active task is at). Compute
    total tasks, backlog count, active count, done count, and completion

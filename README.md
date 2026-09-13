@@ -35,12 +35,12 @@ things specifically:
   only when `tools/pipeline/advance.py` runs the stage's real exit command
   (build, test, lint) and reads a real exit code. The model proposes that a
   stage is done; only the script records the transition, in
-  `.claude/state/run.db`.
+  `.agentry/state/run.db`.
 - **Folder-as-state task tracking.** A task's status is the directory its
-  file sits in - `.claude/tasks/backlog/`, `active/`, or `done/`. There is no
+  file sits in - `.agentry/tasks/backlog/`, `active/`, or `done/`. There is no
   `status:` field to drift out of sync with reality.
 - **Forced context handoff.** Before a new task can start, the previous
-  completed task must have a handoff document in `.claude/tasks/handoffs/`,
+  completed task must have a handoff document in `.agentry/tasks/handoffs/`,
   written by the next task's own assignee from the merged diff and the gate
   log. `advance.py` and the `Stop` hook both refuse to proceed without it, so
   reading the prior task's decisions is not optional.
@@ -97,8 +97,8 @@ graph TD
     GROWTH --> G1[content-writer, humanizer, ai-detector, editor, seo-specialist]
 ```
 
-The orchestrator never writes code or documents outside `.claude/`, `docs/`,
-and root `README`/`CLAUDE.md` files. That is enforced by the
+The orchestrator never writes code or documents outside `.claude/`,
+`.agentry/`, `docs/`, any `README*` file at any depth, and the root `CLAUDE.md`. That is enforced by the
 `orchestrator_gate` block in `pipeline.json`, checked on every tool call by
 `pretool_gate.py` - dispatching the owning agent is the only path to a code
 change.
@@ -134,9 +134,9 @@ the template directory into your project and running the onboarding prompt:
 2. Open Claude Code at the project root.
 3. Paste the prompt from `.claude/_init-prompt.md`. It runs two phases:
    Phase A auto-detects your stack (language, framework, test/format/build
-   commands, database, CI) and fills `.claude/project/stack.md` and the
+   commands, database, CI) and fills `.agentry/project/stack.md` and the
    `{{PLACEHOLDER}}` tokens across `.claude/`; Phase B is an interactive
-   interview that configures `.claude/pipeline.json` (stages, exit-gate
+   interview that configures `.agentry/pipeline.json` (stages, exit-gate
    commands, retry budget, checkpoint automation) with you.
 4. Follow `.claude/_onboarding.md` for anything Phase A/B did not cover:
    optional rules (`i18n`, `mobile`, `business-standards`), permissions in
@@ -158,7 +158,7 @@ manifest) is planned - see [Roadmap](#roadmap) - and is not shipped today.
 
 ### Modes and approval levels
 
-`.claude/state/mode` picks which pipeline a newly registered task follows:
+`.agentry/state/mode` picks which pipeline a newly registered task follows:
 
 | Mode | Pipeline |
 |---|---|
@@ -166,7 +166,7 @@ manifest) is planned - see [Roadmap](#roadmap) - and is not shipped today.
 | `plan` | `formalize -> draft -> plan-review -> approval -> breakdown -> done` |
 | `talk` | no pipeline registration |
 
-`.claude/state/approvals` picks how many checkpoints pass without asking you:
+`.agentry/state/approvals` picks how many checkpoints pass without asking you:
 
 | Level | Behavior |
 |---|---|
@@ -207,7 +207,7 @@ against git and `run.db` state before it allows an idle stop. A `blocked`
 task (gate failed past the retry budget) is surfaced to you; it is never
 retried on its own.
 
-New tasks are written into `.claude/tasks/backlog/` (`skills/new-task`).
+New tasks are written into `.agentry/tasks/backlog/` (`skills/new-task`).
 `advance.py` moves a task's file `backlog/ -> active/` when it registers,
 and `active/ -> done/` only once `git_state.py` confirms the branch is
 merged into the main branch.
@@ -251,20 +251,20 @@ merged into the main branch.
 `dev` agents can edit code but cannot approve their own checkpoints or run
 the full test suite standalone. `readonly` agents can read and run
 non-mutating commands but cannot Edit or Write. `docs` agents can write only
-under `.claude/`, `docs/`, and root README/CLAUDE files. Every profile is
+under `.claude/`, `.agentry/`, `docs/`, and any `README*` file at any depth. Every profile is
 enforced inside the subagent itself via `agent_gate.py`, wired in each
 agent's frontmatter `hooks.PreToolUse` - not left to the prompt.
 
 ## Configuration
 
-`.claude/pipeline.json` declares the two pipelines (`build`, `plan`): their
+`.agentry/pipeline.json` declares the two pipelines (`build`, `plan`): their
 stages, the owning agent per stage, allowed tools, the exit-gate command, the
 retry budget, the continuation ceiling, the main branch name, and which
 checkpoints (if any) are auto-approved. It also carries the `handoff` block
 (baseline, whether an edit freeze applies while handoff debt exists) and the
 `memory` block (baseline for the post-task memory-review gate).
 
-`.claude/project/` is the per-project overlay a new adopter fills in during
+`.agentry/project/` is the per-project overlay a new adopter fills in during
 onboarding:
 
 | File | Content |
@@ -279,7 +279,7 @@ markers, the template has not been onboarded to that project yet.
 
 ## Roadmap
 
-Sourced from `.claude/plans/2026-09-12-harness-overhaul-plan.md`.
+Sourced from `.agentry/plans/2026-09-12-harness-overhaul-plan.md`.
 
 - Cut preloaded context per dispatched agent from roughly 145k tokens to
   under 40k (character-budgeted memory injection, tagged lessons, split
