@@ -21,8 +21,20 @@ tools/review/diff_review.py (browser UI). approved -> advance;
 changes_requested -> comments are appended to the task file and the task
 resets to the first stage.
 
+Merge evidence: the `done` stage resolves through git_state.py, and only a
+POSITIVE signal finishes a task. No branch and no tagged commit is unknown, so
+the task parks naming the missing signals. A task whose work rides on another
+task's branch declares it as `branch: <type>/task-NNNN` in its frontmatter and
+is resolved against that.
+
+Busy marker: dispatching a subagent for a stage must silence the Stop hook the
+same way a long gate does, so mark the stage busy around the dispatch instead of
+hand-writing the marker JSON.
+
 CLI:
     python advance.py --task task-0007 --type feature
+    python advance.py --task task-0007 --busy implement   # subagent dispatched
+    python advance.py --task task-0007 --idle             # subagent returned
 """
 
 from __future__ import annotations
@@ -153,6 +165,24 @@ def _task_frontmatter(task: str) -> dict:
         return {}
 
 
+def _merge_wait(task: str, run: dict, waiting: str) -> dict:
+    """Record - or clear - 'this task is still waiting on a merge'.
+
+    A park nobody writes down is invisible: stop_gate.py sees an idle slot and
+    hands the working tree to the next backlog task while the CEO is still
+    reading the diff on this branch. Opens its own connection because callers
+    have already closed theirs. Fail-open: bookkeeping never breaks the run."""
+    try:
+        conn = state.connect()
+        try:
+            state.set_fields(conn, task, awaiting_human=waiting)
+        finally:
+            conn.close()
+    except Exception:
+        return run
+    return {**run, "awaiting_human": waiting}
+
+
 def finish_or_wait_for_merge(task: str, run: dict) -> int:
     """A task is done when the main branch carries it, not when it was pushed.
 
@@ -161,18 +191,30 @@ def finish_or_wait_for_merge(task: str, run: dict) -> int:
     for a day while the task file said done. So the file only moves to done/
     once git confirms the merge - and until then the task keeps saying it is
     waiting for one."""
-    report = git_state.task_report(task)
+    declared = _task_frontmatter(task).get("branch", "")
+    report = git_state.task_report(task, branch=declared)
 
     if not report:
-        moved = state.move_task(task, "done")
-        note = "moved to tasks/done/" if moved else "already in tasks/done/"
-        return result("done", task, run,
-                      f"No branch found for this task in any repo - nothing to merge. "
-                      f"File {note}.")
+        # Absence of evidence is not evidence of a merge. Neither signal was
+        # found, so git cannot tell - park and name both. A task moved to done/
+        # on this path once hid unmerged code on a sibling's branch for a day.
+        missing = (f"the declared branch 'origin/{declared}' (and local "
+                   f"'{declared}') does not exist in any repo" if declared else
+                   "no branch matching this task id exists in any repo, and the task "
+                   "declares no 'branch:' in its frontmatter")
+        run = _merge_wait(task, run, "merge")
+        return result("park", task, run,
+                      f"Cannot confirm a merge - both signals are missing: (1) carrier "
+                      f"branch: {missing}; (2) tagged commit: the main branch carries no "
+                      f"'[{task}]' commit. This is UNKNOWN, not merged, so the task stays "
+                      f"out of tasks/done/. If its work rides on another task's branch, "
+                      f"add 'branch: <type>/task-NNNN' to the frontmatter and re-run; "
+                      f"otherwise push the branch or surface it to the CEO.")
 
     unmerged = [r for r in report if r["in_main"] is not True]
     if unmerged:
         where = ", ".join(f"{r['repo']} ({r['branch'] or 'no branch'})" for r in unmerged)
+        run = _merge_wait(task, run, "merge")
         return result("park", task, run,
                       f"Pushed, but the main branch does not carry this task yet: {where}. "
                       f"The CEO merges the MR; re-run advance.py afterwards and the file "
@@ -181,6 +223,7 @@ def finish_or_wait_for_merge(task: str, run: dict) -> int:
     moved = state.move_task(task, "done")
     note = "moved to tasks/done/" if moved else "already in tasks/done/"
     repos = ", ".join(r["repo"] for r in report)
+    run = _merge_wait(task, run, "")
     return result("done", task, run,
                   f"Merged into main ({repos}). Task done - file {note}.")
 
@@ -339,7 +382,34 @@ def main() -> int:
     parser.add_argument("--type", default="feature")
     parser.add_argument("--pipeline", choices=[state.BUILD, state.PLAN],
                         help="which flow to start this task on; defaults to the session mode")
+    parser.add_argument("--busy", metavar="STAGE",
+                        help="mark this stage busy (a subagent was dispatched for it) so the "
+                             "Stop hook stops nagging while it works")
+    parser.add_argument("--idle", action="store_true",
+                        help="clear the busy marker (the subagent returned)")
     args = parser.parse_args()
+
+    # Busy marker bookkeeping - no FSM transition, so handle it and leave.
+    # advance.py already brackets its own long gates with these two calls; a
+    # dispatched subagent is the same situation seen from the orchestrator's
+    # side, and it had no call to make until now.
+    if args.busy:
+        write_gate_marker(args.task, args.busy)
+        print(json.dumps({
+            "action": "busy", "task": args.task, "stage": args.busy,
+            "message": f"Busy marker written for stage '{args.busy}' (expires in "
+                       f"{GATE_TIMEOUT}s). The Stop hook stays quiet on {args.task} until "
+                       f"then. Clear it when the subagent returns: python "
+                       f".claude/tools/pipeline/advance.py --task {args.task} --idle.",
+        }, indent=2))
+        return 0
+    if args.idle:
+        clear_gate_marker(args.task)
+        print(json.dumps({
+            "action": "idle", "task": args.task,
+            "message": "Busy marker cleared - the Stop hook drives this task again.",
+        }, indent=2))
+        return 0
 
     pipeline = state.load_pipeline()
 

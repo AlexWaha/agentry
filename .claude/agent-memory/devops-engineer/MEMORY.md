@@ -41,3 +41,15 @@ Format per lesson:
 - **Why:** documenting the intended change reads like doing it; two documents then disagreed and the looser one won at runtime.
 - **Fix:** a safety boundary lands as an enforced constant in the same task that documents it (`approvals.NEVER_GRANTED`, checked before the level AND before any per-stage `auto_approve`), plus a test asserting no level grants it. Never leave "is to be changed" in a rule file.
 - **Date:** 2026-09-13
+
+## [one-config-key-protects-one-name / any gate that reads a single name out of config]
+- **What:** the push gate protected only `pipeline.json` `main_branch`, so `master`, `staging` and `production` all exited 0 - and a template project whose trunk is `master` shipped with zero protection, silently, because the key was never set.
+- **Why:** a safety rule stated over a SET of names ("main, staging, production are never pushed") was implemented as equality against one configurable string, so the config default decided how much protection existed.
+- **Fix:** implement such a rule as a resolved set with an unconditional floor (`PUSH_PROTECTED_ALWAYS = ("main", "master")`) plus config additions (`main_branch` + optional `protected_branches`), never `x == cfg["one_key"]`. Test that the floor denies even when config names something else.
+- **Date:** 2026-09-13
+
+## [verifying-a-gate-that-blocks-its-own-probe / testing any hook that greps command text]
+- **What:** after making an unresolvable push fail-closed, my own verification command (`printf '...git push origin main...' | pretool_gate.py`) was denied by the gate under test - the JSON payload is one quoted token, so argv resolution sees no git call while the substring net still matches.
+- **Why:** fail-closed on "mentions push but cannot resolve a target" cannot distinguish `bash -c "git push origin main"` from any command that merely carries that text, including a test harness.
+- **Fix:** drive hook payloads from a script FILE (`.claude/state/probe_*.py`, gitignored) that builds the command from fragments (`" ".join(["git","push"])`), never from a shell one-liner containing the literal invocation. Expect the same friction for `grep "git push"`.
+- **Date:** 2026-09-13

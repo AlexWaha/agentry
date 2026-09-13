@@ -41,6 +41,19 @@ every level, and `granted()` checks it before both the level and the per-stage
 `auto_approve` list, so neither can re-grant it. `advance.py` reads the push
 checkpoint through `granted()` for the same reason.
 
+The approval is its own question. Do not fold it into a card about something
+else, however obvious the answer looks from the surrounding choice: a card that
+asks "how do we unblock the epic" and takes the push as a side effect of the
+answer has not asked about the push. One card, one decision, and the push gets
+its own.
+
+SIGNATURE: task-retired-without-a-merge
+TRIGGER:   running advance.py at the `done` stage, for any task whose work shares a branch
+WHAT:      task-0043 was moved to tasks/done/ with "No branch found for this task in any repo - nothing to merge", while its code sat unmerged on another task's branch.
+WHY:       merge detection looks for a branch named after the task (`<type>/task-NNNN`) or a `[task-NNNN]` commit on main. A task whose work deliberately rides on a sibling's branch matches neither, and the absence of a branch is read as "nothing to merge" rather than as "cannot tell".
+FIX:       no branch and no tagged commit means UNKNOWN, not DONE - park and say so. When two tasks share a branch, name the carrying branch in both task files so detection has something to resolve. Never let a task reach `done` on the absence of evidence.
+DATE:      2026-09-13
+
 SIGNATURE: push-always-needs-approval
 TRIGGER:   reaching the push checkpoint, or reading any approvals-level description
 WHAT:      ran with approvals at `auto`, which grants the push, and told the CEO that commit and push would both happen silently. He had to interrupt to say push is always his.

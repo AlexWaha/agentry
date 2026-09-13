@@ -365,6 +365,120 @@ class GitGlobalOptionsTest(unittest.TestCase):
                     self.assertEqual(pretool_gate.handle_bash(command, cwd=repo.path), 0)
 
 
+class ProtectedPushTest(unittest.TestCase):
+    """The gate used to protect exactly ONE branch - whatever `main_branch`
+    named. Measured on the real hook: `git push origin main` denied, while
+    `master`, `staging` and `production` all exited 0. A project whose trunk is
+    `master` therefore shipped with no protection at all, silently."""
+
+    PROTECTED = ("main", "master", "staging", "production")
+    WORK_BRANCH = "bugfix/task-9985"
+
+    def spellings(self, name: str) -> tuple:
+        return (
+            f"git push origin {name}",
+            f"git push origin HEAD:{name}",
+            f"git push origin +{name}",
+            f"git push --force origin {name}",
+            f"git push origin {self.WORK_BRANCH}:{name}",
+            f"git push origin refs/heads/{name}",
+            f"git push -o ci.skip origin {name}",
+            f'git -C "{{repo}}" push origin {name}',
+        )
+
+    def test_every_protected_name_denies_in_every_spelling(self):
+        with TempRepo() as repo:
+            repo.commit()
+            repo.checkout_new(self.WORK_BRANCH)
+            for name in self.PROTECTED:
+                for command in self.spellings(name):
+                    command = command.format(repo=repo.path)
+                    with self.subTest(branch=name, command=command):
+                        self.assertEqual(
+                            pretool_gate.handle_bash(command, cwd=repo.path), 2)
+
+    def test_master_is_denied_although_the_config_trunk_is_main(self):
+        # The exact gap: protection must not depend on main_branch naming it.
+        import state
+        self.assertEqual(str(state.load_pipeline().get("main_branch")), "main")
+        with TempRepo() as repo:
+            repo.commit()
+            repo.checkout_new(self.WORK_BRANCH)
+            code = pretool_gate.handle_bash("git push origin master", cwd=repo.path)
+        self.assertEqual(code, 2)
+
+    def test_refspec_less_push_from_a_protected_branch_is_denied(self):
+        for name in self.PROTECTED:
+            with self.subTest(branch=name):
+                with TempRepo() as repo:
+                    repo.commit()
+                    if name != "main":
+                        run_git(["checkout", "-q", "-b", name], repo.path)
+                    code = pretool_gate.handle_bash("git push", cwd=repo.path)
+                self.assertEqual(code, 2)
+
+    def test_work_branch_push_is_still_allowed(self):
+        # Control: the form used on this very task must keep working.
+        with TempRepo() as repo:
+            repo.commit()
+            repo.checkout_new(self.WORK_BRANCH)
+            for command in (f"git push -u origin {self.WORK_BRANCH}",
+                            f"git push origin {self.WORK_BRANCH}",
+                            f"git push origin HEAD:{self.WORK_BRANCH}",
+                            "git push"):
+                with self.subTest(command=command):
+                    self.assertEqual(
+                        pretool_gate.handle_bash(command, cwd=repo.path), 0)
+
+    def test_unresolvable_push_gates(self):
+        # Visible only to the substring net, so no target can be resolved.
+        with TempRepo() as repo:
+            repo.commit()
+            repo.checkout_new(self.WORK_BRANCH)
+            code = pretool_gate.handle_bash(
+                'bash -c "git push origin main"', cwd=repo.path)
+        self.assertEqual(code, 2)
+
+    def test_default_set_needs_no_configuration(self):
+        # An unconfigured template still protects all four names.
+        import state
+        original = state.load_pipeline
+        state.load_pipeline = dict
+        try:
+            self.assertEqual(pretool_gate.push_protected_branches(),
+                             set(self.PROTECTED))
+        finally:
+            state.load_pipeline = original
+
+    def test_configured_trunk_joins_the_set(self):
+        import state
+        original = state.load_pipeline
+        state.load_pipeline = lambda: {"main_branch": "trunk",
+                                       "protected_branches": ["release"]}
+        try:
+            self.assertEqual(pretool_gate.push_protected_branches(),
+                             {"main", "master", "trunk", "release"})
+        finally:
+            state.load_pipeline = original
+
+    def test_refspec_destinations_are_resolved(self):
+        cases = {
+            "origin main": ["main"],
+            "origin HEAD:main": ["main"],
+            "origin +main": ["main"],
+            "origin :main": ["main"],
+            "origin refs/heads/master": ["master"],
+            "--force origin feature/x:staging": ["staging"],
+            "-o ci.skip origin production": ["production"],
+            "origin": [],
+            "": [],
+        }
+        for args, expected in cases.items():
+            with self.subTest(args=args):
+                self.assertEqual(
+                    pretool_gate.push_refspec_targets(args.split()), expected)
+
+
 class GitArgvResolutionTest(unittest.TestCase):
     """Unit-level coverage of the shared helper every gate now routes through."""
 

@@ -8,8 +8,10 @@ state and either:
   - allows the stop when every task is parked at a human checkpoint, blocked, or
     done and no ready backlog remains.
 
-Autonomy is pipelined but edit-serialized: at most one task occupies an editing
-stage at a time; parked tasks wait for the human while the next task runs.
+Work is serialized on the working tree. A new backlog task is offered only when
+nothing holds it: no run in an editing stage (blocked included - a blocked task
+still owns its dirty tree) and no run awaiting a human, because the CEO may be
+reading the diff on that very branch.
 
 Fail-open: any error allows the stop (never trap the user in a loop).
 
@@ -191,10 +193,11 @@ def reconcile_status_drift(conn) -> tuple[list, list]:
             merged = f"[{task}]" in subjects
             if merged and state.move_task_to_done(task):
                 moved.append(task)
-                r = runs.get(task)
-                if r and r["stage"] != "done":
-                    state.set_fields(conn, task, stage="done", awaiting_human="",
-                                     stage_status=state.ST_GATE_PASSED)
+                # Unconditionally, including a run already at 'done': the merge
+                # is what it was waiting for, and leaving awaiting_human set
+                # would freeze the queue on a task that is finished.
+                state.set_fields(conn, task, stage="done", awaiting_human="",
+                                 stage_status=state.ST_GATE_PASSED)
         for task, r in runs.items():
             # A run whose file left active/ for done/ - or vanished - is stale;
             # close it. A file put BACK into backlog/ is a deliberate unqueue,
@@ -272,11 +275,19 @@ def decide() -> int:
                     f"subagent if needed), then run: python .claude/tools/pipeline/advance.py "
                     f"--task {r['task']}. Do not ask the user whether to continue.")
 
-        # 2. No in-flight editing task -> start the next ready backlog task.
-        editing_in_flight = any(
-            r["stage"] in editing and r["stage_status"] != state.ST_BLOCKED for r in runs
+        # 2. Nothing holding the working tree -> start the next ready backlog task.
+        # Three states hold it, and a new task on top of any of them switches the
+        # branch out from under someone:
+        #   - an editing stage in flight;
+        #   - an editing stage parked BLOCKED (a blocked task still owns its dirty
+        #     tree; it is surfaced to the CEO in step 1, not retired);
+        #   - ANY run awaiting a human - the CEO may be reading the diff on that
+        #     very branch. A task parked on a human is unfinished work, not a
+        #     free slot, so go quiet and wait instead.
+        occupied = any(
+            (r["stage"] in editing) or r["awaiting_human"] for r in runs
         )
-        if not editing_in_flight:
+        if not occupied:
             debt = handoff_debt()
             mem_debt = memory_debt()
             # Taking work on is itself a checkpoint. Below `auto` the CEO says
