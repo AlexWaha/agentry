@@ -777,10 +777,10 @@ def under_home_claude(file_path: str) -> bool:
 
 
 def active_review_run(conn) -> dict | None:
-    """Read-only stages freeze code edits: 'review' (reviewer analyzes the tree)
-    and 'diff-review' (the CEO reviews the diff - edits would invalidate it)."""
+    """The 'review' stage is read-only: the reviewer analyzes the tree, so a code
+    edit underneath it would invalidate the findings it is producing."""
     for r in state.all_runs(conn):
-        if r["stage"] in ("review", "diff-review") and r["stage_status"] != state.ST_BLOCKED:
+        if r["stage"] == "review" and r["stage_status"] != state.ST_BLOCKED:
             return r
     return None
 
@@ -905,8 +905,7 @@ def handle_edit(file_path: str, content: str = "", orch: bool = False) -> int:
     if review:
         return deny(f"{review['task']} is in the read-only '{review['stage']}' stage - code edits "
                     f"are blocked. To change code, send it back: python "
-                    f".claude/tools/pipeline/approve.py --task {review['task']} --reject "
-                    f"(diff-review: the CEO's 'Request changes' verdict does this automatically).")
+                    f".claude/tools/pipeline/approve.py --task {review['task']} --reject")
     frozen = handoff_freeze_task()
     if frozen:
         return deny(f"Handoff debt: completed task {frozen} has no valid handoff doc - code edits "

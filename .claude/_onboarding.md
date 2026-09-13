@@ -24,11 +24,10 @@ This file is the entry point for using this `.claude/` agent system on a brand-n
 │   ├── pipeline/            # deterministic FSM: state/gate/advance/approve + agent_gate
 │   ├── hooks/               # session_start.py, subagent_stop.py, dangerous_patterns.py
 │   ├── memory/              # memory.py (store + CLI), inject.py (retrieval), update.py, codebase_sync.py
-│   ├── review/              # diff_review.py (CEO visual diff-review UI)
 │   └── setup/               # apply_optimization.py (fleet rollout tool)
 ├── pipeline.json            # declarative execution stage machine (finalized in onboarding Phase B)
 ├── specs/                   # specs written by spec-developer (_template.md inside)
-├── state/                   # run.db pipeline state + review verdicts + memory stamps (gitignored)
+├── state/                   # run.db pipeline state + memory stamps (gitignored)
 ├── tasks/
 │   ├── active/              # empty - tasks you create
 │   ├── done/                # empty - completed tasks
@@ -238,13 +237,6 @@ contract is in `rules/orchestration.md`; the stage machine in `rules/pipeline.md
   blocks the next task until the finished one is distilled and stamped
   (`tools/memory/update.py`). Seed the L1 map at Phase A7.5; set
   `memory.baseline` like the handoff baseline when adopting mid-project.
-- **CEO diff-review stage** (`pipeline.json` stage `diff-review`): between
-  review and ready, `advance.py` launches `tools/review/diff_review.py` - a
-  local, stdlib-only browser UI with side-by-side syntax-highlighted diff,
-  inline comments, and Approve / Request changes. Request changes appends the
-  comments to the task file and resets the task to implement; the verdict lands
-  in `.claude/state/review/<task>.json`. Remove the stage at Phase B for
-  headless environments.
 - **Documentation-first pickup** (`handoff.document_latest_on_start`): when the
   ready backlog holds a single task, the latest task-tagged commit on main must
   have its handoff doc (read it, or generate it) before implementation starts.

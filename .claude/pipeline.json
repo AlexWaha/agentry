@@ -65,12 +65,6 @@
           "exit_gate": { "cmd": "ruff check .claude/tools", "expect_exit": 0 }
         },
         {
-          "name": "diff-review",
-          "owner": "orchestrator",
-          "interactive": "diff_review",
-          "_comment": "CEO visual diff review: advance.py launches tools/review/diff_review.py (local browser UI, side-by-side diff, inline comments, Approve / Request changes) and routes by the verdict file in .claude/state/review/. Request changes appends the comments to the task file and resets the task to implement. Remove this stage at onboarding for headless environments."
-        },
-        {
           "name": "ready",
           "owner": "orchestrator",
           "checkpoints": ["commit", "push"],

@@ -3,12 +3,12 @@
 
 apply_optimization.py copies pipeline.json only if absent (copy_if_absent), so a
 project that carried an older minimal pipeline.json kept it - missing the
-diff-review stage, the gates/memory/handoff/orchestrator_gate blocks, and still
-holding {{PLACEHOLDER}} command tokens (which gate.py treats as a HARD BLOCK).
-This rebuilds those from the source schema, deterministically, no LLM:
+two-flow "pipelines" block, the gates/memory/handoff/orchestrator_gate blocks,
+and still holding {{PLACEHOLDER}} command tokens (which gate.py treats as a HARD
+BLOCK). This rebuilds those from the source schema, deterministically, no LLM:
 
   - skip any target whose pipeline.json already has a "gates" block AND a
-    "diff-review" stage AND no {{ }} tokens (already onboarded - leave it)
+    "pipelines" block AND no {{ }} tokens (already onboarded - leave it)
   - else: start from the SOURCE pipeline.json, substitute the command tokens
     ({{BUILD_CMD}}/{{TEST_CMD}}/{{LINT_CMD}}) and {{MAIN_BRANCH}} from the
     project's stack.md; a command whose value is empty/none/n-a becomes "" (an
@@ -124,9 +124,10 @@ def already_full(pj: Path) -> bool:
     except ValueError:
         return False
     has_gates = isinstance(data.get("gates"), dict)
-    has_diff = any(s.get("name") == "diff-review"
-                   for s in data.get("stages", []) if isinstance(s, dict))
-    return has_gates and has_diff
+    # The v2 schema marker is the two-flow `pipelines` block. It used to be the
+    # browser-diff stage between review and ready, which no longer exists.
+    has_pipelines = isinstance(data.get("pipelines"), dict)
+    return has_gates and has_pipelines
 
 
 def _stack_md(claude: Path) -> Path:

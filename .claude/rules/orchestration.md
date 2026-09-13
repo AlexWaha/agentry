@@ -57,8 +57,8 @@ context-absorption chain from `pipeline.md`.
   single source of truth for where a task is. Inspect with
   `python .claude/tools/pipeline/state.py --show`.
 - `.claude/pipeline.json` - the declarative stage machine, split into
-  `pipelines.build` (implement -> test -> review -> diff-review -> ready ->
-  done) and `pipelines.plan` (formalize -> draft -> plan-review -> approval ->
+  `pipelines.build` (implement -> test -> review -> ready -> done) and
+  `pipelines.plan` (formalize -> draft -> plan-review -> approval ->
   breakdown -> done): stages, owner agent, allowed tools, and the exit-gate
   command per stage. Finalized by onboarding.
 - `.claude/state/mode` - one word (`build`/`plan`/`talk`) picking WHICH flow a

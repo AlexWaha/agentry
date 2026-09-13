@@ -36,7 +36,7 @@ TALK = "talk"
 MODES = (BUILD, PLAN, TALK)
 
 DESCRIPTIONS = {
-    BUILD: "implementation flow: implement, test, review, diff-review, ready, done",
+    BUILD: "implementation flow: implement, test, review, ready, done",
     PLAN: "design flow: formalize, draft, plan-review, approval, breakdown, done",
     TALK: "no flow at all - discussion and hypotheses, nothing tracked, no code written",
 }

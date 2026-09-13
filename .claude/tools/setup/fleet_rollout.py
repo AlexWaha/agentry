@@ -4,8 +4,8 @@
 Wraps apply_optimization.py across many projects and adds the two things it does
 not do: per-project safety (git branch or .claude.bak backup) and scaffolding of
 the universal pieces that apply_optimization leaves alone (root CLAUDE.md,
-.claude/CLAUDE.md, project/ overlay, memory/ layer seeds, agent-memory skeleton,
-onboarding docs, hooks, missing rules/skills). Content is copied only if absent
+.claude/CLAUDE.md, project/ overlay, memory/ store contract, onboarding docs,
+hooks, missing rules/skills). Content is copied only if absent
 so onboarded/customised files are never clobbered. Tooling refresh + settings
 merge + frontmatter patching stay the responsibility of apply_optimization.
 
@@ -65,8 +65,8 @@ def excluded(root: Path) -> bool:
 # versioned runtime tooling that apply_optimization.py does NOT copy (it handles
 # only tools/pipeline + tools/hooks). These carry no placeholders, so always
 # refresh to the source version. tools/memory is referenced by session_start.py
-# and the memory update gate; tools/review by the diff-review pipeline stage.
-TOOLS_ALWAYS = ["tools/memory", "tools/review"]
+# and the memory update gate.
+TOOLS_ALWAYS = ["tools/memory"]
 
 # scaffold relative to the target .claude dir (copy_if_absent, files or trees)
 SCAFFOLD_CLAUDE = [
@@ -77,7 +77,6 @@ SCAFFOLD_CLAUDE = [
     "hooks",
     "project",
     "memory",
-    "agent-memory",
     "rules",
     "skills",
     "specs",

@@ -72,8 +72,10 @@ PIPELINE_FILES = ["state.py", "gate.py", "advance.py", "approve.py",
 HOOK_FILES = ["session_start.py", "subagent_stop.py", "dangerous_patterns.py"]
 
 GITIGNORE_LINES = [
-    "# Native agent memory: local tier is per-machine, never committed.",
-    "agent-memory-local/",
+    "# Memory store: one SQLite file per machine, never committed.",
+    "# Only the contract (README.md) travels with the repository.",
+    "memory/*",
+    "!memory/README.md",
     "# Personal local settings",
     "settings.local.json",
 ]

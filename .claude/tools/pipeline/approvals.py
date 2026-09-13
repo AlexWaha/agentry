@@ -7,12 +7,9 @@ matrix, because at three in the morning a matrix is unreadable.
 
 Levels, each a superset of the one before:
 
-  manual    ask at every checkpoint. Which task to take, the diff, the commit,
-            the push. The default, and the right setting while someone is at the
-            keyboard.
-  assisted  take the task and commit without asking, and skip the diff review
-            when the code review came back with nothing serious. Still asks
-            before pushing.
+  manual    ask at every checkpoint. Which task to take, the commit, the push.
+            The default, and the right setting while someone is at the keyboard.
+  assisted  take the task and commit without asking. Still asks before pushing.
   auto      everything up to the commit, then pick up the next ready task. For
             a night run. Still stops at the push.
 
@@ -54,15 +51,14 @@ LEVELS = (MANUAL, ASSISTED, AUTO)
 
 # Checkpoint names, matching the awaiting_human values and stage semantics.
 TAKE = "take"              # move a task out of the queue into work
-DIFF_REVIEW = "diff-review"  # the CEO reads the diff in the browser
 COMMIT = "commit"
 PUSH = "push"
 PLAN_APPROVAL = "approval"  # the CEO signs off a plan
 
 GRANTS = {
     MANUAL: frozenset(),
-    ASSISTED: frozenset({TAKE, COMMIT, DIFF_REVIEW}),
-    AUTO: frozenset({TAKE, COMMIT, DIFF_REVIEW}),
+    ASSISTED: frozenset({TAKE, COMMIT}),
+    AUTO: frozenset({TAKE, COMMIT}),
 }
 
 # Checkpoints no level and no per-stage auto_approve may ever grant. The push
@@ -71,9 +67,8 @@ GRANTS = {
 NEVER_GRANTED = frozenset({PUSH})
 
 DESCRIPTIONS = {
-    MANUAL: "ask at every checkpoint: which task, the diff, the commit, the push",
-    ASSISTED: "take tasks and commit unasked, skip the diff review when the code "
-              "review is clean, still ask before pushing",
+    MANUAL: "ask at every checkpoint: which task, the commit, the push",
+    ASSISTED: "take tasks and commit unasked, still ask before pushing",
     AUTO: "everything through the commit, then take the next ready task. The push, "
           "the merge and done stay with the CEO",
 }
@@ -103,15 +98,6 @@ def granted(checkpoint: str, stage_auto: list | None = None) -> bool:
     if stage_auto and checkpoint in {str(c).lower() for c in stage_auto}:
         return True
     return checkpoint in GRANTS[read()]
-
-
-def diff_review_auto(has_critical_or_high: bool) -> bool:
-    """The diff review is skipped only when the code review found nothing
-    serious. A clean review plus green gates is evidence; a review carrying a
-    Critical or High finding is exactly what the CEO must see."""
-    if has_critical_or_high:
-        return False
-    return granted(DIFF_REVIEW)
 
 
 def _main() -> int:

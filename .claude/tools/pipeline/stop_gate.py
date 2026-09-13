@@ -165,6 +165,19 @@ def dep_satisfied(dep: str, runs_by_task: dict) -> bool:
     return True  # supersede cycle - same reasoning as a dangling pointer
 
 
+def stranded(r: dict, pipeline: dict) -> bool:
+    """True when a live run sits on a stage its own flow does not define.
+
+    advance.py blocks such a run and names the recovery, but its working tree is
+    still dirty and its branch still checked out, so the slot is NOT free: an
+    unknown stage is in neither the editing set nor awaiting_human, which let a
+    new backlog task branch on top of it - defects 1 and 3 through another door.
+    An empty stage list (unreadable pipeline.json) disables the check rather
+    than declaring every run stranded."""
+    names = state.stage_names(pipeline, state.run_pipeline(r))
+    return bool(names) and r["stage"] != "done" and r["stage"] not in names
+
+
 def handoff_debt() -> list:
     """Completed tasks still lacking a valid handoff doc. Lazy import + fail-open
     so a partially synced clone missing handoff.py cannot break the Stop hook."""
@@ -287,7 +300,8 @@ def decide() -> int:
         runs = state.all_runs(conn)
         runs_by_task = {r["task"]: r for r in runs}
         editing = state.EDITING_STAGES
-        ceiling = int(state.load_pipeline().get("continuation_ceiling", 30))
+        pipeline = state.load_pipeline()
+        ceiling = int(pipeline.get("continuation_ceiling", 30))
 
         # 1. Continue an in-flight, actionable run.
         for r in runs:
@@ -304,21 +318,6 @@ def decide() -> int:
             # Parked, unapproved checkpoint -> not autonomously advanceable.
             if stage == "ready" and aw in ("commit", "push"):
                 continue
-            # Interactive CEO diff-review stage.
-            if stage == "diff-review":
-                verdict = state.STATE_DIR / "review" / f"{r['task']}.json"
-                if verdict.is_file():
-                    return block(
-                        f"{r['task']}: CEO diff-review verdict recorded. Consume it: python "
-                        f".claude/tools/pipeline/advance.py --task {r['task']}. Do not ask the user.")
-                if aw == "diff-review":
-                    continue  # parked awaiting the CEO - do not nag
-                if busy_marker_fresh(r["task"]):
-                    continue  # review UI currently serving
-                return block(
-                    f"{r['task']} is at stage 'diff-review'. Run: python "
-                    f".claude/tools/pipeline/advance.py --task {r['task']} - it opens the "
-                    f"CEO review UI in the browser and waits for the verdict. Do not ask the user.")
             # Editing stage in flight (in_progress or gate_failed retry).
             if stage in editing:
                 # A fresh busy-marker means a long gate or a dispatched subagent
@@ -349,9 +348,11 @@ def decide() -> int:
         #     tree; it is surfaced to the CEO in step 1, not retired);
         #   - ANY run awaiting a human - the CEO may be reading the diff on that
         #     very branch. A task parked on a human is unfinished work, not a
-        #     free slot, so go quiet and wait instead.
+        #     free slot, so go quiet and wait instead;
+        #   - a run stranded on a stage its flow does not define (see stranded()).
         occupied = any(
-            (r["stage"] in editing) or r["awaiting_human"] for r in runs
+            (r["stage"] in editing) or r["awaiting_human"] or stranded(r, pipeline)
+            for r in runs
         )
         if not occupied:
             debt = handoff_debt()
