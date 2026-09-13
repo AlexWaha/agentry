@@ -24,6 +24,8 @@ import importlib
 import io
 import json
 import os
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -41,6 +43,13 @@ import pretool_gate
 import stack_gate
 import state
 import ui_evidence
+
+
+def _force_writable(func, target, _exc):
+    """rmtree onerror: git marks its object files read-only, which makes the
+    delete fail on Windows and leaves the next run a stale directory."""
+    os.chmod(target, stat.S_IWRITE)
+    func(target)
 
 
 class StackGateTest(unittest.TestCase):
@@ -286,14 +295,58 @@ class LaneValidationTest(unittest.TestCase):
     # Assembled, so this file's own text carries no literal git write command
     # for the gate to match when the suite is edited.
     COMMIT = "git " + "com" + "mit -m x"
+    # 9xxx, like every other throwaway id in this suite: never registered in a
+    # real run store, so the run-row refusal below is reachable by construction.
+    TASK = "task-9049"
+    BRANCH = f"bugfix/{TASK}"
 
-    def _run_gate(self, lane, command):
+    @contextlib.contextmanager
+    def _task_branch_repo(self):
+        """A throwaway repo with a commit on main and HEAD on a task branch.
+
+        task-0049: the commit refusals below are only reachable once the gate
+        resolves a task FROM THE BRANCH NAME, so a test that read the ambient
+        HEAD passed on a task branch and failed on the trunk - where the
+        branch-name check answers first with a different reason and the same
+        exit 2. A test states its own preconditions. Same shape as TempRepo in
+        test_pretool_gate_git.py and LocalMergeDetectionTest in
+        test_conveyor_gaps.py, including the read-only cleanup: git leaves its
+        object files read-only, which makes a plain rmtree fail on Windows.
+        """
+        tmp = Path(tempfile.mkdtemp(prefix="lane_branch_"))
+        repo = tmp / "work"
+        repo.mkdir()
+
+        def git(*args):
+            p = subprocess.run(["git", "-C", str(repo), *args],
+                               capture_output=True, text=True, timeout=60)
+            self.assertEqual(0, p.returncode, f"git {' '.join(args)}: {p.stderr}")
+
+        try:
+            git("init", "-q", "-b", "main")
+            git("config", "user.email", "qa@example.com")
+            git("config", "user.name", "QA")
+            (repo / "seed.txt").write_text("x", encoding="utf-8")
+            git("add", "seed.txt")
+            git("commit", "-q", "-m", "seed")
+            git("checkout", "-q", "-b", self.BRANCH)
+            self.assertEqual(
+                self.BRANCH, pretool_gate.current_branch(cwd=str(repo)),
+                "the gate must read OUR branch, not the ambient one")
+            yield repo
+        finally:
+            shutil.rmtree(tmp, onerror=_force_writable)
+
+    def _run_gate(self, lane, command, cwd):
+        # task-0049: `cwd` is required, not defaulted to state.ROOT. A default
+        # reintroduces the ambient-repo dependency this task removed the moment
+        # a caller's command reaches the branch logic.
         env = dict(os.environ)
         env.pop("PIPELINE_LANE", None)
         if lane is not None:
             env["PIPELINE_LANE"] = lane
         payload = {"tool_name": "Bash", "tool_input": {"command": command},
-                   "cwd": str(state.ROOT), "agent_type": "test"}
+                   "cwd": str(cwd), "agent_type": "test"}
         proc = subprocess.run(
             [sys.executable, str(self.GATE)],
             input=json.dumps(payload).encode("utf-8"),
@@ -318,7 +371,9 @@ class LaneValidationTest(unittest.TestCase):
         # its own anywhere (NFR-4, and stop_gate's "never trap the user").
         for name in ("a/b", "../../evil"):
             with self.subTest(name=name):
-                _, err = self._run_gate(name, "ls -la")
+                # The real workspace on purpose: the assertions below are about
+                # the real state directory holding no stray store.
+                _, err = self._run_gate(name, "ls -la", cwd=str(state.ROOT))
                 self.assertIn("PIPELINE_LANE", err)
                 self.assertFalse(
                     list(state.STATE_DIR.glob("*evil*")),
@@ -360,20 +415,35 @@ class LaneValidationTest(unittest.TestCase):
     def test_a_lane_typo_refuses_the_commit_instead_of_allowing_it(self):
         # A valid-but-wrong lane: its store has no row for this task, so the
         # approval cannot be verified. Fails closed, like check_merge_source.
-        code, err = self._run_gate("nosuchlane", self.COMMIT)
-        self.assertEqual(2, code)
-        self.assertIn("no row in the run store", err)
-        self.assertIn("PIPELINE_LANE", err)
+        with self._task_branch_repo() as repo:
+            code, err = self._run_gate("nosuchlane", self.COMMIT, cwd=repo)
+        # Registered BEFORE the assertions: the gate really does create the
+        # lane's store, and a trailing unlink leaves it behind on any failure,
+        # polluting every later run.
         stray = state.STATE_DIR / "run.nosuchlane.db"
-        if stray.exists():
-            stray.unlink()
+        self.addCleanup(lambda: stray.unlink(missing_ok=True))
+        self.assertEqual(2, code)
+        # Reached through the RUN-ROW check, not the branch-name check: the
+        # message names the task the gate resolved from our branch, and it
+        # names the LANE's store rather than the default one.
+        self.assertIn("no row in the run store", err)
+        self.assertIn(self.TASK, err)
+        self.assertIn("run.nosuchlane.db", err)
+        self.assertIn("PIPELINE_LANE", err)
 
     def test_the_default_lane_is_unchanged(self):
-        # Whatever the default store says about this branch's task, the gate
-        # must not answer with the "no row" refusal above.
-        code, err = self._run_gate(None, self.COMMIT)
-        self.assertNotIn("no row in the run store", err)
-        self.assertIn(code, (0, 2))
+        # Same repo, same commit, no lane: the gate reaches the same run-row
+        # refusal and names the UNSUFFIXED store. The previous version asserted
+        # only that one substring was absent, which held on every branch by
+        # construction - a check with no failing state proves nothing (recorded
+        # lesson: proof-that-cannot-fail).
+        with self._task_branch_repo() as repo:
+            code, err = self._run_gate(None, self.COMMIT, cwd=repo)
+        self.assertEqual(2, code)
+        self.assertIn("no row in the run store", err)
+        self.assertIn("run.db)", err)
+        self.assertNotIn("run.nosuchlane.db", err)
+        self.assertIn("PIPELINE_LANE is unset", err)
 
 
 class LaneTest(unittest.TestCase):
