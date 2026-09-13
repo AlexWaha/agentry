@@ -75,22 +75,53 @@ def fetch(repo: Path) -> bool:
     return code == 0
 
 
-def merged_into_main(repo: Path, ref: str) -> bool | None:
-    """True when origin/main already contains ref. None when it cannot be told
-    apart from a missing ref or a broken repo."""
+def _ref_exists(repo: Path, ref: str) -> bool:
     code, _ = _git(repo, "rev-parse", "--verify", "--quiet", ref)
-    if code != 0:
-        return None
-    code, _ = _git(repo, "merge-base", "--is-ancestor", ref, f"origin/{main_branch()}")
     return code == 0
 
 
+def _is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
+    code, _ = _git(repo, "merge-base", "--is-ancestor", ancestor, descendant)
+    return code == 0
+
+
+def trunk(repo: Path) -> str:
+    """The ref that stands for the main line in THIS repo.
+
+    `origin/main` is the right answer only while a remote exists and is current.
+    In `solo` workflow mode the task branch is merged into the trunk locally and
+    the trunk is pushed later, or there is no remote at all - so origin/main is
+    either behind or missing, and every task whose work sits on local main reads
+    as unmerged forever. Measured: task-0003 sat at awaiting_human=merge with
+    main genuinely carrying it.
+
+    Local wins when it is not behind the remote, so the union of local and
+    pushed history is what merge detection is compared against. When neither ref
+    resolves, the remote name is returned unchanged: an unreadable repo must
+    answer 'cannot tell', not 'merged'."""
+    local, remote = main_branch(), f"origin/{main_branch()}"
+    if not _ref_exists(repo, remote):
+        return local
+    if _ref_exists(repo, local) and _is_ancestor(repo, remote, local):
+        return local
+    return remote
+
+
+def merged_into_main(repo: Path, ref: str) -> bool | None:
+    """True when the trunk already contains ref - ancestry, the one signal that
+    needs nobody to have written a commit tag correctly. None when it cannot be
+    told apart from a missing ref or a broken repo."""
+    if not _ref_exists(repo, ref):
+        return None
+    return _is_ancestor(repo, ref, trunk(repo))
+
+
 def task_in_main(repo: Path, task: str) -> bool | None:
-    """True when origin/main carries a commit tagged with this task id.
+    """True when the trunk carries a commit tagged with this task id.
 
     Reads the commit log rather than the branch tip, because a squash merge
     leaves the branch itself outside main while its content is in."""
-    code, out = _git(repo, "log", f"origin/{main_branch()}", "--oneline",
+    code, out = _git(repo, "log", trunk(repo), "--oneline",
                      f"--grep=\\[{task}\\]", "-1")
     if code != 0:
         return None
@@ -98,12 +129,31 @@ def task_in_main(repo: Path, task: str) -> bool | None:
 
 
 def branch_for(repo: Path, task: str) -> str | None:
-    """The remote branch carrying this task, if one was ever pushed."""
-    code, out = _git(repo, "branch", "-r", "--list", f"origin/*{task}*")
-    if code != 0 or not out:
-        return None
-    first = out.splitlines()[0].strip()
-    return first or None
+    """The branch carrying this task - the pushed copy when there is one, the
+    local branch otherwise. A solo project never pushes a task branch, so
+    remote-only resolution found nothing and the task looked branchless."""
+    for args in (("-r", "--list", f"origin/*{task}*"), ("--list", f"*{task}*")):
+        code, out = _git(repo, "branch", *args)
+        if code != 0 or not out:
+            continue
+        # `git branch --list` marks the checked-out branch with '*' (or '+' for
+        # a worktree); the marker is not part of the name.
+        first = out.splitlines()[0].strip().lstrip("*+").strip()
+        if first:
+            return first
+    return None
+
+
+def is_pushed(repo: Path, ref: str | None) -> bool:
+    """Whether a remote copy of this branch exists.
+
+    branch_for now returns local branches too, so `ref.startswith("origin/")` is
+    no longer the same question - it would call an unpushed branch pushed."""
+    if not ref:
+        return False
+    if ref.startswith("origin/"):
+        return True
+    return _ref_exists(repo, f"origin/{ref}")
 
 
 def declared_ref(repo: Path, branch: str) -> str | None:
@@ -125,11 +175,9 @@ def declared_ref(repo: Path, branch: str) -> str | None:
 
 
 def base_is_current(repo: Path, ref: str = "HEAD") -> bool | None:
-    """True when origin/main is an ancestor of ref: the branch was cut from an
+    """True when the trunk is an ancestor of ref: the branch was cut from an
     up-to-date main and nothing has landed since that it lacks."""
-    code, _ = _git(repo, "merge-base", "--is-ancestor",
-                   f"origin/{main_branch()}", ref)
-    return code == 0
+    return _is_ancestor(repo, trunk(repo), ref)
 
 
 def task_report(task: str, do_fetch: bool = True, branch: str = "") -> list[dict]:
@@ -146,20 +194,21 @@ def task_report(task: str, do_fetch: bool = True, branch: str = "") -> list[dict
     for repo in repos():
         if do_fetch:
             fetch(repo)
-        ref = declared_ref(repo, branch)
-        found = ref or branch_for(repo, task)
-        # Either signal proving a merge is enough; only when both are silent
-        # (None) does the repo stay unknown.
+        found = declared_ref(repo, branch) or branch_for(repo, task)
+        # Merged is the UNION of the signals: ancestry proves an ordinary merge
+        # and needs no commit tag, the tag proves a squash merge that left no
+        # ancestry. Either one is enough; only when both are silent (None) does
+        # the repo stay unknown.
         signals = [task_in_main(repo, task)]
-        if ref:
-            signals.append(merged_into_main(repo, ref))
+        if found:
+            signals.append(merged_into_main(repo, found))
         in_main = True if True in signals else (False if False in signals else None)
         if found is None and in_main is not True:
             continue
         out.append({
             "repo": repo.name,
             "branch": found,
-            "pushed": found is not None,
+            "pushed": is_pushed(repo, found),
             "in_main": in_main,
         })
     return out

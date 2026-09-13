@@ -26,10 +26,15 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import shutil
+import stat
+import subprocess
 import sys
+import tempfile
 import unittest
 import unittest.mock
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 
 PIPELINE_DIR = Path(__file__).resolve().parents[1] / "pipeline"
@@ -228,6 +233,116 @@ class MergeEvidenceTest(unittest.TestCase):
         self.assertIn("does not carry this task yet", out["message"])
 
 
+def _rmtree(path: Path) -> None:
+    """Delete a throwaway git repo. Git's object files are read-only, which
+    plain rmtree cannot remove on Windows."""
+    def _force(func, target, _exc):
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+
+    shutil.rmtree(path, onerror=_force)
+
+
+class LocalMergeDetectionTest(unittest.TestCase):
+    """task-0048: merge detection read only remote refs, so in `solo` mode - the
+    mode whose whole point is that the trunk is not pushed - no task could ever
+    reach done. Measured live: task-0003 parked at awaiting_human=merge with main
+    genuinely carrying its work.
+
+    Runs against a real throwaway repo rather than a git stand-in: the defect was
+    exactly a wrong assumption about what git answers, which a stand-in built on
+    the same assumption cannot catch."""
+
+    def setUp(self):
+        # A fresh directory per test: git leaves its object files read-only, so a
+        # shared path that failed to delete on Windows broke the NEXT test's setUp.
+        self.tmp = Path(tempfile.mkdtemp(prefix="conveyor_repo_"))
+        self.repo = self.tmp / "work"
+        self.repo.mkdir()
+        self.addCleanup(_rmtree, self.tmp)
+
+        self.git("init", "-b", "main")
+        self.git("config", "user.email", "test@example.com")
+        self.git("config", "user.name", "Test")
+        self.commit("first")
+
+        p = unittest.mock.patch.object(git_state, "repos", return_value=[self.repo])
+        p.start()
+        self.addCleanup(p.stop)
+        p = unittest.mock.patch.object(state, "load_pipeline",
+                                       return_value={"main_branch": "main"})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def git(self, *args) -> str:
+        p = subprocess.run(["git", "-C", str(self.repo), *args],
+                           capture_output=True, text=True)
+        self.assertEqual(0, p.returncode, f"git {' '.join(args)}: {p.stderr}")
+        return (p.stdout or "").strip()
+
+    def commit(self, message: str) -> None:
+        f = self.repo / "log.txt"
+        f.write_text(f.read_text(encoding="utf-8") + message + "\n"
+                     if f.exists() else message + "\n", encoding="utf-8")
+        self.git("add", "log.txt")
+        self.git("commit", "-m", message)
+
+    def work_branch(self, name: str, message: str) -> None:
+        """A branch with one commit of its own, left checked out on main."""
+        self.git("checkout", "-b", name)
+        self.commit(message)
+        self.git("checkout", "main")
+
+    def report(self, task: str) -> list[dict]:
+        return git_state.task_report(task, do_fetch=False)
+
+    def test_ancestry_alone_closes_a_task_with_no_tag_and_no_remote(self):
+        self.work_branch("techdebt/task-9001", "work")
+        self.git("merge", "--no-ff", "-m", "merge the branch", "techdebt/task-9001")
+
+        self.assertFalse(git_state.task_in_main(self.repo, "task-9001"))
+        self.assertEqual([{"repo": "work", "branch": "techdebt/task-9001",
+                           "pushed": False, "in_main": True}],
+                         self.report("task-9001"))
+
+    def test_a_tagged_commit_alone_closes_the_squash_case(self):
+        self.work_branch("feature/task-9002", "work")
+        self.commit("[task-9002] the same work, squashed")
+
+        self.assertIs(False, git_state.merged_into_main(self.repo, "feature/task-9002"))
+        self.assertTrue(self.report("task-9002")[0]["in_main"])
+
+    def test_neither_signal_is_unknown_rather_than_done(self):
+        # No branch and no tag at all: an empty report, which advance.py parks on.
+        self.assertEqual([], self.report("task-9003"))
+        # A branch that exists but is merged nowhere: known, and known unmerged.
+        self.work_branch("feature/task-9004", "work")
+        self.assertIs(False, self.report("task-9004")[0]["in_main"])
+
+    def test_a_repository_with_no_remote_resolves_the_trunk(self):
+        self.assertEqual("", self.git("remote"))
+        self.assertEqual("main", git_state.trunk(self.repo))
+        self.assertTrue(git_state.base_is_current(self.repo))
+
+    def test_pushed_is_false_for_a_local_branch_and_true_for_a_remote_one(self):
+        self.git("init", "--bare", str(self.tmp / "remote.git"))
+        self.git("remote", "add", "origin", str(self.tmp / "remote.git"))
+        self.work_branch("feature/task-9005", "pushed work")
+        self.work_branch("feature/task-9006", "local work")
+        self.git("push", "-u", "origin", "main", "feature/task-9005")
+
+        self.assertTrue(git_state.is_pushed(self.repo, "feature/task-9005"))
+        self.assertFalse(git_state.is_pushed(self.repo, "feature/task-9006"))
+        self.assertTrue(self.report("task-9005")[0]["pushed"])
+        self.assertFalse(self.report("task-9006")[0]["pushed"])
+
+        # And the trunk follows local main once it moves ahead of the pushed copy,
+        # which is what a locally merged task branch does.
+        self.git("merge", "--no-ff", "-m", "merge locally", "feature/task-9006")
+        self.assertEqual("main", git_state.trunk(self.repo))
+        self.assertTrue(self.report("task-9006")[0]["in_main"])
+
+
 class BacklogFilterTest(unittest.TestCase):
     """Defect 5: which frontmatter fields take a task out of the ready set.
 
@@ -409,6 +524,136 @@ class StrandedStageTest(unittest.TestCase):
         row = self._row("task-0500")
         self.assertEqual("implement", row["stage"])
         self.assertEqual(state.ST_IN_PROGRESS, row["stage_status"])
+
+
+class SoloCheckpointTest(unittest.TestCase):
+    """task-0047, second half: in solo mode the ready stage must not gate on a
+    push, because no push happens - the approved branch is merged into the trunk
+    locally and the CEO pushes the trunk himself later.
+
+    Measured live: the trunk already carried task-0003 and advance.py still
+    returned awaiting_human=push, a checkpoint on a step the mode had removed,
+    which no approval could clear. Every remaining task of the unattended run
+    sat behind it.
+
+    Throwaway run.db and a literal stage list, so a pipeline.json edit cannot
+    move these assertions."""
+
+    def setUp(self):
+        self.mode = "pr"
+        self.tmp = Path(__file__).resolve().parent / "_tmp_solo"
+        self.tmp.mkdir(exist_ok=True)
+        for attr, value in (("STATE_DIR", self.tmp), ("DB_PATH", self.tmp / "run.db")):
+            p = unittest.mock.patch.object(state, attr, value)
+            p.start()
+            self.addCleanup(p.stop)
+        # side_effect, not return_value: self.mode is read at call time so a test
+        # can flip the mode between two calls.
+        p = unittest.mock.patch.object(
+            state, "load_pipeline",
+            side_effect=lambda: {**BUILD_PIPELINE, "workflow": {"mode": self.mode}})
+        p.start()
+        self.addCleanup(p.stop)
+        self.addCleanup(self._clean)
+
+    def _clean(self):
+        for f in self.tmp.iterdir():
+            f.unlink()
+        self.tmp.rmdir()
+
+    def _seed(self, task, stage="ready"):
+        conn = state.connect()
+        state.create_run(conn, task, "feature", stage)
+        conn.close()
+
+    def _row(self, task) -> dict:
+        conn = state.connect()
+        try:
+            return state.get_run(conn, task)
+        finally:
+            conn.close()
+
+    def _cli(self, module, *args) -> dict:
+        buf = io.StringIO()
+        with unittest.mock.patch.object(sys, "argv", ["cli.py", *args]), \
+                redirect_stdout(buf):
+            module.main()
+        return json.loads(buf.getvalue())
+
+    @contextmanager
+    def _trunk_carries(self, task):
+        """The trunk carrying the task, at the seam advance.py reads it. Yields
+        the task_report mock so a test can assert it was never consulted."""
+        report = [{"repo": "repo", "branch": f"feature/{task}", "in_main": True}]
+        with unittest.mock.patch.object(git_state, "task_report",
+                                        return_value=report) as mock, \
+                unittest.mock.patch.object(advance, "_task_frontmatter", return_value={}), \
+                unittest.mock.patch.object(state, "move_task", return_value=True):
+            yield mock
+
+    def test_ready_yields_two_checkpoints_in_pr_and_one_in_solo(self):
+        ready = state.get_stage(BUILD_PIPELINE, "ready")
+        self.mode = "pr"
+        self.assertEqual(["commit", "push"], advance.stage_checkpoints(ready))
+        self.mode = "solo"
+        self.assertEqual(["commit"], advance.stage_checkpoints(ready))
+
+    def test_pr_mode_still_parks_for_the_push(self):
+        self.mode = "pr"
+        self._seed("task-0600")
+
+        self.assertEqual("commit", self._cli(advance, "--task", "task-0600")["awaiting_human"])
+        self._cli(approve, "--task", "task-0600", "--gate", "commit")
+
+        out = self._cli(advance, "--task", "task-0600")
+        self.assertEqual("park", out["action"])
+        self.assertEqual("push", out["awaiting_human"])
+        self.assertIn("push approval", out["message"])
+
+        # And it stays parked: re-running without the approval advances nothing.
+        out = self._cli(advance, "--task", "task-0600")
+        self.assertEqual("push", out["awaiting_human"])
+        self.assertEqual("ready", self._row("task-0600")["stage"])
+
+    def test_pr_mode_reaches_done_once_both_checkpoints_are_approved(self):
+        self.mode = "pr"
+        self._seed("task-0603")
+        self._cli(advance, "--task", "task-0603")
+        for gate in ("commit", "push"):
+            self._cli(approve, "--task", "task-0603", "--gate", gate)
+
+        with self._trunk_carries("task-0603"):
+            out = self._cli(advance, "--task", "task-0603")
+        self.assertEqual("done", out["action"])
+
+    def test_solo_mode_closes_a_committed_task_the_trunk_carries(self):
+        self.mode = "solo"
+        self._seed("task-0601")
+
+        out = self._cli(advance, "--task", "task-0601")
+        self.assertEqual("commit", out["awaiting_human"])
+        self.assertIn("merge the branch into the trunk locally", out["message"])
+        self._cli(approve, "--task", "task-0601", "--gate", "commit")
+
+        with self._trunk_carries("task-0601"):
+            out = self._cli(advance, "--task", "task-0601")
+
+        self.assertEqual("done", out["action"])
+        self.assertEqual("", out["awaiting_human"])
+        self.assertEqual("done", self._row("task-0601")["stage"])
+
+    def test_solo_mode_does_not_close_a_task_whose_commit_was_never_approved(self):
+        self.mode = "solo"
+        self._seed("task-0602")
+
+        with self._trunk_carries("task-0602") as report:
+            out = self._cli(advance, "--task", "task-0602")
+            self.assertEqual(0, report.call_count)  # never reached the merge check
+
+        self.assertEqual("park", out["action"])
+        self.assertEqual("commit", out["awaiting_human"])
+        self.assertEqual("ready", self._row("task-0602")["stage"])
+        self.assertEqual(0, self._row("task-0602")["commit_approved"])
 
 
 if __name__ == "__main__":
