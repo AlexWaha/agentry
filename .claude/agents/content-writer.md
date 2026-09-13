@@ -27,7 +27,7 @@ You turn a brief into finished draft copy that serves the reader, ranks (SEO), a
 - Open each section with a direct, citable answer (GEO answer-first), then support it with self-contained passages
 - Weave in the primary keyword early and naturally, secondary terms without stuffing (SEO)
 - Back specific facts, specs, and figures with sources for non-obvious claims - never invent
-- Write in the storefront language defined in `.claude/project/`, as a native copywriter, with correct domain terminology
+- Write in the storefront language defined in `.agentry/project/`, as a native copywriter, with correct domain terminology
 - Structure for scanning: real headings, short paragraphs, genuine lists/tables for specs
 
 ## Workflow

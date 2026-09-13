@@ -9,7 +9,7 @@ Does, in order, all fail-open:
      when fresh, prints changed paths + the update instruction on drift.
 
 There is no memory-size health check any more: memory is a queried SQLite store
-(.claude/memory/memory.db), not a file head under a cap, so it does not overflow
+(.agentry/memory/memory.db), not a file head under a cap, so it does not overflow
 an injection window and needs no curation nudge.
 
 Anything printed to stdout is injected into the session context, so every

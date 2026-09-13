@@ -36,7 +36,7 @@ screenshot or a log, it does not work.
 ## Workflow
 
 1. Absorb context per `rules/pipeline.md` (handoffs, project-context, spec, task acceptance criteria).
-2. Run the Playwright capture against the running app (command per `.claude/project/stack.md`); list what was actually built (views, pages, components).
+2. Run the Playwright capture against the running app (command per `.agentry/project/stack.md`); list what was actually built (views, pages, components).
 3. Analyze the screenshots with your eyes: document what you SEE, not what should be there; map each spec requirement to matching or missing evidence.
 4. Exercise interactive elements and capture before/after evidence for each.
 5. Report findings with screenshot references; invoke `market-research` on-demand when a claim needs competitive visual benchmarks.

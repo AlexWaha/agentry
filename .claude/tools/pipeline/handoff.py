@@ -2,7 +2,7 @@
 """Handoff documentation chain - forced context absorption between tasks.
 
 Before any NEW task registers in the pipeline, every completed task above the
-configured baseline must have a valid handoff doc in .claude/tasks/handoffs/.
+configured baseline must have a valid handoff doc in .agentry/tasks/handoffs/.
 The doc is written by the NEXT task's assignee IN ITS OWN WORDS - the act of
 writing forces the incoming agent to absorb the previous task's context (task
 file, merge diff, gate history) plus the project context and its own task's
@@ -40,8 +40,8 @@ import state
 REQUIRED_SECTIONS = ("What was done", "Key decisions", "Files touched",
                      "Gotchas and lessons", "Impact on next tasks", "Context loaded")
 FILL_MARKER = "FILL-ME"
-DEFAULT_DIR = ".claude/tasks/handoffs"
-TEMPLATE_PATH = state.ROOT / ".claude" / "tasks" / "templates" / "handoff-template.md"
+DEFAULT_DIR = ".agentry/tasks/handoffs"
+TEMPLATE_PATH = state.ROOT / ".agentry" / "tasks" / "templates" / "handoff-template.md"
 
 TASK_NUM_RE = re.compile(r"(\d+)$")
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -75,9 +75,9 @@ FILL-ME
 
 ## Context loaded
 FILL-ME:
-- .claude/project/project-context.md - <takeaway>
+- .agentry/project/project-context.md - <takeaway>
 - spec for my upcoming task (<spec-id>, or none with reason) - <takeaway>
-- .claude/tasks/done/{{TASK}}.md and its diff on main - <takeaway>
+- .agentry/tasks/done/{{TASK}}.md and its diff on main - <takeaway>
 """
 
 
@@ -190,7 +190,7 @@ def validate_handoff(path: Path, task: str) -> list[str]:
     if ctx and FILL_MARKER not in ctx:
         low = ctx.lower()
         if "project-context.md" not in low:
-            problems.append("Context loaded must confirm reading .claude/project/project-context.md")
+            problems.append("Context loaded must confirm reading .agentry/project/project-context.md")
         if "spec" not in low and "none" not in low:
             problems.append("Context loaded must confirm reading the upcoming task's spec (or state 'none')")
 
@@ -205,7 +205,7 @@ def uncovered_done_tasks() -> list[dict]:
     try:
         if not enabled():
             return []
-        done_dir = state.ROOT / ".claude" / "tasks" / "done"
+        done_dir = state.ROOT / ".agentry" / "tasks" / "done"
         if not done_dir.is_dir():
             return []
         out: list[dict] = []
@@ -261,7 +261,7 @@ def latest_main_task_undocumented() -> dict | None:
 
 def _task_title(task: str) -> str:
     for sub in ("done", "active"):
-        p = state.ROOT / ".claude" / "tasks" / sub / f"{task}.md"
+        p = state.ROOT / ".agentry" / "tasks" / sub / f"{task}.md"
         try:
             if p.is_file():
                 t = _frontmatter(p.read_text(encoding="utf-8", errors="replace")).get("title", "")

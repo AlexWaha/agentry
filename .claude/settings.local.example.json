@@ -31,5 +31,5 @@
   "enableAllProjectMcpServers": false,
   "enabledMcpjsonServers": [],
   "spinnerTipsEnabled": true,
-  "autoMemoryDirectory": ".claude/memory"
+  "autoMemoryDirectory": ".agentry/memory"
 }

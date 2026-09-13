@@ -11,10 +11,10 @@ exist, be about this task, and carry actual content rather than a heading and a
 promise. Cheap to check, impossible to fake by claiming.
 
 Kinds:
-  brief   .claude/plans/*<task>*-brief.md   the problem statement
-  plan    .claude/plans/*<task>*.md         the plan itself, brief excluded
-  spec    .claude/specs/*<task>*.md         the spec
-  tasks   .claude/tasks/backlog/*.md        task files the breakdown produced
+  brief   .agentry/plans/*<task>*-brief.md   the problem statement
+  plan    .agentry/plans/*<task>*.md         the plan itself, brief excluded
+  spec    .agentry/specs/*<task>*.md         the spec
+  tasks   .agentry/tasks/backlog/*.md        task files the breakdown produced
 
 `--glob` replaces the four kinds with any path pattern, for a project whose
 planning artifact is neither a plan nor a spec. The task-naming and content
@@ -62,15 +62,15 @@ def _substantial(paths: list[Path]) -> list[Path]:
 
 
 def check(task: str, kind: str) -> tuple[bool, str]:
-    plans = state.ROOT / ".claude" / "plans"
-    specs = state.ROOT / ".claude" / "specs"
+    plans = state.ROOT / ".agentry" / "plans"
+    specs = state.ROOT / ".agentry" / "specs"
 
     if kind == "brief":
         found = _substantial([p for p in _matches(plans, task) if p.stem.endswith("-brief")])
         if found:
             return True, f"brief: {found[0].name}"
         return False, (f"no brief for {task}: write the problem statement to "
-                       f".claude/plans/<date>-<slug>-{task}-brief.md - what hurts, "
+                       f".agentry/plans/<date>-<slug>-{task}-brief.md - what hurts, "
                        f"scope, non-goals, open questions. At least {MIN_CHARS} characters.")
 
     if kind == "plan":
@@ -78,14 +78,14 @@ def check(task: str, kind: str) -> tuple[bool, str]:
         if found:
             return True, f"plan: {found[0].name}"
         return False, (f"no plan for {task}: write it to "
-                       f".claude/plans/<date>-<slug>-{task}.md. The brief alone does "
+                       f".agentry/plans/<date>-<slug>-{task}.md. The brief alone does "
                        f"not close this stage.")
 
     if kind == "spec":
         found = _substantial(_matches(specs, task))
         if found:
             return True, f"spec: {found[0].name}"
-        return False, (f"no spec for {task}: write it to .claude/specs/ with testable "
+        return False, (f"no spec for {task}: write it to .agentry/specs/ with testable "
                        f"acceptance criteria.")
 
     if kind == "tasks":
@@ -94,7 +94,7 @@ def check(task: str, kind: str) -> tuple[bool, str]:
         if produced:
             return True, f"{len(produced)} task file(s) queued in tasks/backlog/"
         return False, ("breakdown produced no task files: a spec that is not sliced "
-                       "into tasks in .claude/tasks/backlog/ is half done.")
+                       "into tasks in .agentry/tasks/backlog/ is half done.")
 
     return False, f"unknown artifact kind '{kind}'"
 

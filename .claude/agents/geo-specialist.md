@@ -34,7 +34,7 @@ Where `seo-specialist` optimizes for ranked links, you optimize for being quoted
 
 ## Workflow
 
-1. Context absorption per rules/pipeline.md, plus: read `.claude/project/` for storefront language(s), structured-data mechanism, and domain terminology.
+1. Context absorption per rules/pipeline.md, plus: read `.agentry/project/` for storefront language(s), structured-data mechanism, and domain terminology.
 2. Audit target prompts against current content: is the page the cited answer, a competitor, or absent?
 3. Fix gaps: restructure for answer-first, add missing facts/schema/entity clarity.
 4. On demand: skills/market-research when a GEO gap traces back to a market-positioning question.

@@ -115,9 +115,9 @@ def check_task_ready(task: str) -> str:
             return (f"{task}: handoff debt blocks registration - completed task {d['task']} "
                     f"lacks a valid handoff doc ({d['reason']}). Dispatch {task}'s assignee to: "
                     f"1) scaffold it: python .claude/tools/pipeline/handoff.py --for {d['task']}, "
-                    f"2) fill every section of .claude/tasks/handoffs/{d['task']}.md in its own "
+                    f"2) fill every section of .agentry/tasks/handoffs/{d['task']}.md in its own "
                     f"words from tasks/done/{d['task']}.md, its merge diff on main, and the gate "
-                    f"log, 3) read .claude/project/project-context.md and this task's spec first. "
+                    f"log, 3) read .agentry/project/project-context.md and this task's spec first. "
                     f"Then re-run advance.py --task {task}.")
 
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -137,11 +137,11 @@ def check_task_ready(task: str) -> str:
                     f"(spec: <id>), or - for trivial work with genuinely no spec - set "
                     f"'spec: none' with a one-line reason in Notes.")
         if spec_id.lower() != "none":
-            specs_dir = state.ROOT / ".claude" / "specs"
+            specs_dir = state.ROOT / ".agentry" / "specs"
             matches = sorted(specs_dir.glob(f"{spec_id}*.md")) if specs_dir.is_dir() else []
             if not matches:
                 return (f"{task}: frontmatter names spec '{spec_id}' but no such file "
-                        f"exists in .claude/specs/.")
+                        f"exists in .agentry/specs/.")
             spec_fm = _frontmatter(matches[0].read_text(encoding="utf-8", errors="replace"))
             if spec_fm.get("status") != "approved":
                 return (f"{task}: spec '{spec_id}' has status "
@@ -462,7 +462,7 @@ def main() -> int:
             return result("blocked", args.task, run,
                           f"stage '{cur}' passed its gate, but the {which} flow defines no "
                           f"stage after it and '{cur}' is not the terminal 'done' stage. Fix "
-                          f"pipelines.{which}.stages in .claude/pipeline.json (the list must "
+                          f"pipelines.{which}.stages in .agentry/pipeline.json (the list must "
                           f"end with 'done'), then re-run advance.py --task {args.task}.")
         state.set_fields(conn, args.task, stage=nxt, stage_status=state.ST_IN_PROGRESS,
                          retries=0, continuations=0)

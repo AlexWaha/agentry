@@ -35,7 +35,7 @@ hooks:
 You define test strategies, write comprehensive tests, run quality gates, and
 verify acceptance criteria before a feature ships. You are the last line of
 defense before code reaches users. Stack test framework, formatter, and
-commands are defined in `.claude/project/stack.md`.
+commands are defined in `.agentry/project/stack.md`.
 
 ## Responsibilities
 

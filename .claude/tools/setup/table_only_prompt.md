@@ -6,7 +6,7 @@ substitute_tokens.py, do NOT edit any file other than project/stack.md, do NOT
 touch pipeline.json, memory, git, or project/*.md. English only; no em/en dash
 (regular hyphen only).
 
-You are given ROOT. Target file: ROOT/.claude/project/stack.md
+You are given ROOT. Target file: ROOT/.agentry/project/stack.md
 
 The remaining {{TOKEN}} placeholders across this project's agents/rules failed to
 substitute because the "Placeholder values for CLAUDE.md" table in stack.md is
@@ -14,7 +14,7 @@ missing or lost its `{{TOKEN}}` left-column keys. Fix ONLY that table:
 
 1. Detect the real stack from the repo (manifests, lockfiles, Dockerfile/compose,
    CI, folder structure) - enough to know the commands, DB, runtime, framework.
-2. In ROOT/.claude/project/stack.md, ensure there is a section titled exactly
+2. In ROOT/.agentry/project/stack.md, ensure there is a section titled exactly
    "## Placeholder values for CLAUDE.md" containing a markdown table whose every
    row has this EXACT shape (backticks around the braced token in the LEFT cell):
 
@@ -39,7 +39,7 @@ missing or lost its `{{TOKEN}}` left-column keys. Fix ONLY that table:
    shows values instead of `{{TOKEN}}`), rewrite the left column back to the
    `{{TOKEN}}` keys. If some rows exist and are correct, keep them and add the
    missing ones.
-3. Self-check: run `grep -c '{{' ROOT/.claude/project/stack.md` (Windows-safe, no
+3. Self-check: run `grep -c '{{' ROOT/.agentry/project/stack.md` (Windows-safe, no
    redirects) and confirm it returns a number >= 38. If not, fix the table.
 
 Return ONE short line: "<project>: table has N token rows, grep {{ count = M".

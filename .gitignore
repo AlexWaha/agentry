@@ -26,7 +26,7 @@ env/
 # Pipeline runtime state
 # SQLite run state and other per-machine pipeline artifacts.
 # =============================================================================
-.claude/state/
+.agentry/state/
 
 # =============================================================================
 # Per-machine local settings
@@ -42,36 +42,36 @@ env/
 # negations below. Contents are excluded rather than the directory itself, so
 # the negations can re-include specific files inside.
 # =============================================================================
-.claude/plans/
-.claude/specs/*
-.claude/memory/*
-.claude/project/*
+.agentry/plans/
+.agentry/specs/*
+.agentry/memory/*
+.agentry/project/*
 
 # Memory store contract survives for a fresh clone; memory.db itself (and any
 # --export markdown beside it) is one project's internals and stays out.
-!.claude/memory/README.md
+!.agentry/memory/README.md
 
 # Spec template survives for a fresh clone, same scaffolding role as
-# .claude/tasks/templates/.
-!.claude/specs/_template.md
+# .agentry/tasks/templates/.
+!.agentry/specs/_template.md
 
 # Project overlay contract, and every overlay document, survive for a fresh
 # clone: rules/self-learning.md sends agents here to record project quirks, so a
-# newly created .claude/project/quirks.md must be tracked, not silently dropped.
+# newly created .agentry/project/quirks.md must be tracked, not silently dropped.
 # Markdown only - anything else under the overlay stays excluded.
-!.claude/project/*.md
+!.agentry/project/*.md
 
-# Task work product is excluded per-folder (not via .claude/tasks/) so the
+# Task work product is excluded per-folder (not via .agentry/tasks/) so the
 # templates/ folder and the pipeline's directory skeleton stay tracked.
-.claude/tasks/backlog/*
-.claude/tasks/active/*
-.claude/tasks/done/*
-.claude/tasks/epics/*
-.claude/tasks/handoffs/*
+.agentry/tasks/backlog/*
+.agentry/tasks/active/*
+.agentry/tasks/done/*
+.agentry/tasks/epics/*
+.agentry/tasks/handoffs/*
 
 # Keep the empty-directory placeholders so git tracks the skeleton itself.
-!.claude/tasks/backlog/.gitkeep
-!.claude/tasks/active/.gitkeep
-!.claude/tasks/done/.gitkeep
-!.claude/tasks/epics/.gitkeep
-!.claude/tasks/handoffs/.gitkeep
+!.agentry/tasks/backlog/.gitkeep
+!.agentry/tasks/active/.gitkeep
+!.agentry/tasks/done/.gitkeep
+!.agentry/tasks/epics/.gitkeep
+!.agentry/tasks/handoffs/.gitkeep

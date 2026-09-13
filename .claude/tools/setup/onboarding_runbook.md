@@ -15,14 +15,14 @@ Hard rules:
 - SOURCE template (read-only reference):
   d:/Work/AlexWaha.com/AI-team/AI-team-universal/.claude
   Read source `.claude/_init-prompt.md` (Phase A + Phase B) and
-  `.claude/memory/README.md` (memory-store row kinds and fields) for the full
+  `.agentry/memory/README.md` (memory-store row kinds and fields) for the full
   contract.
 - The target's gate hooks do NOT fire in this session; you may Edit/Write target
   paths freely.
 
 ## Steps (in order)
 
-1. STATE. Read ROOT/.claude/project/stack.md. If it still contains `{{...}}`
+1. STATE. Read ROOT/.agentry/project/stack.md. If it still contains `{{...}}`
    tokens or "PROJECT-SPECIFIC - REPLACE ME" markers, this project is FRESH: run
    full Phase A - detect the stack (manifests, lockfiles, Dockerfile/compose, CI,
    folder structure; note *.local projects are usually OpenCart/PHP on OpenServer,
@@ -66,7 +66,7 @@ Hard rules:
    `rules/business-standards.md` only if business agents are used. Remove the
    non-applicable import lines.
 
-4. PIPELINE.JSON (Phase B defaults, NO interview). If ROOT/.claude/pipeline.json is
+4. PIPELINE.JSON (Phase B defaults, NO interview). If ROOT/.agentry/pipeline.json is
    an older/minimal schema (missing the two-flow `pipelines` block, or the
    memory/handoff/gates/orchestrator_gate blocks), REBUILD it from the source
    pipeline.json schema with defaults derived from the detected stack:
@@ -89,8 +89,8 @@ Hard rules:
    - orchestrator_gate.enabled true
    Ensure NO `{{...}}` remain and the JSON is valid.
 
-5. MEMORY MIGRATION. Memory is one store: .claude/memory/memory.db (see
-   memory/README.md). Any .md file under .claude/memory/, any .claude/agent-memory/
+5. MEMORY MIGRATION. Memory is one store: .agentry/memory/memory.db (see
+   memory/README.md). Any .md file under .agentry/memory/, any .claude/agent-memory/
    tree, and any docs/memory/ at the project root is OLD markdown memory that must
    be migrated into it. Run the built-in migrator first - it reads the legacy
    layouts and is idempotent:
@@ -104,10 +104,10 @@ Hard rules:
    - reusable code patterns used more than once -> --kind pattern (name, use-when)
    - profile / project-overview prose -> fold into project/project-context.md
    Verify by count (`memory.py --stats`) BEFORE removing any markdown, then MOVE
-   the migrated files into .claude/memory/legacy/ (create it; delete nothing).
+   the migrated files into .agentry/memory/legacy/ (create it; delete nothing).
    SECURITY: never copy secret VALUES (passwords, tokens, keys) into memory -
    record only the method / where-to-find, and note secrets were omitted.
-   Respect the project .gitignore (some gitignore .claude/memory - still migrate
+   Respect the project .gitignore (some gitignore .agentry/memory - still migrate
    on disk). If there is NO old memory, just record one module row per top-level
    module from project/architecture.md. Then stamp:
    `python "ROOT/.claude/tools/memory/codebase_sync.py" --stamp`
@@ -115,7 +115,7 @@ Hard rules:
 6. VERIFY (run; report each). Windows-safe, no unix redirects:
    - `grep -rE '\{\{[A-Z_]+\}\}' ROOT/.claude/` then ignore matches in
      _onboarding.md / _init-prompt.md / handoff-template.md -> should be empty
-   - `grep -r 'PROJECT-SPECIFIC - REPLACE ME' ROOT/.claude/project/` -> empty
+   - `grep -r 'PROJECT-SPECIFIC - REPLACE ME' ROOT/.agentry/project/` -> empty
    - `python "ROOT/.claude/tools/pipeline/state.py" --show` -> loads without error
 
 ## Report (return this, max ~10 lines, plain text)

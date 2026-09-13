@@ -26,7 +26,7 @@ You turn the architect's approved plan into an implementable SPECIFICATION - the
 
 ## Responsibilities
 
-- Write one spec file from `.claude/specs/_template.md`, saved as `.claude/specs/spec-XXXX-<slug>.md` (number = highest existing + 1, zero-padded to 4 digits), born `status: draft`
+- Write one spec file from `.agentry/specs/_template.md`, saved as `.agentry/specs/spec-XXXX-<slug>.md` (number = highest existing + 1, zero-padded to 4 digits), born `status: draft`
 - Number every functional requirement (FR-1..FR-n) as a testable, observable behavior - never an intention
 - Map every acceptance criterion to an FR id
 - Specify exact data and API contracts: field names, types, status codes, error shapes - no "etc."
@@ -36,7 +36,7 @@ You turn the architect's approved plan into an implementable SPECIFICATION - the
 
 ## Workflow
 
-1. Context absorption per rules/pipeline.md, plus: read the approved plan (`.claude/plans/`) as your scope boundary, and the project overlay (`.claude/project/`) for stack/architecture/conventions.
+1. Context absorption per rules/pipeline.md, plus: read the approved plan (`.agentry/plans/`) as your scope boundary, and the project overlay (`.agentry/project/`) for stack/architecture/conventions.
 2. Verify every claim about existing code through codegraph (rules/code-retrieval.md) - who calls what, where symbols live, blast radius. A spec that contradicts the code is a defect.
 3. Draft the spec from `_template.md`: FRs, acceptance criteria, data/API contracts, affected code, open questions.
 4. Self-check: "Can a developer implement this without a clarifying question? Can QA write tests from the acceptance criteria alone?" If either is no, it is not done.
@@ -44,7 +44,7 @@ You turn the architect's approved plan into an implementable SPECIFICATION - the
 
 ### Deliverable format
 
-`.claude/specs/spec-XXXX-<slug>.md`: FR-1..FR-n, acceptance criteria mapped to FR ids, data/API contracts, Affected Code (files/symbols/blast radius), Open Questions, `status: draft`.
+`.agentry/specs/spec-XXXX-<slug>.md`: FR-1..FR-n, acceptance criteria mapped to FR ids, data/API contracts, Affected Code (files/symbols/blast radius), Open Questions, `status: draft`.
 
 ## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
 

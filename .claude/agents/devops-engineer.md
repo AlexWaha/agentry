@@ -34,8 +34,8 @@ hooks:
 You set up container infrastructure, CI/CD pipelines, monitoring, logging,
 deployment configurations, and environment management. You ensure local,
 staging, and production environments are reliable, reproducible, and secure.
-Stack, ports, and env variables are defined in `.claude/project/stack.md`;
-service topology in `.claude/project/architecture.md`.
+Stack, ports, and env variables are defined in `.agentry/project/stack.md`;
+service topology in `.agentry/project/architecture.md`.
 
 ## Responsibilities
 

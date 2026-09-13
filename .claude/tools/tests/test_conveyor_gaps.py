@@ -47,7 +47,7 @@ import state
 import stop_gate
 
 # The stock build flow, as a literal: these tests must keep asserting against a
-# known stage list even when .claude/pipeline.json is edited.
+# known stage list even when .agentry/pipeline.json is edited.
 BUILD_PIPELINE = {
     "retry_budget": 3,
     "pipelines": {"build": {"stages": [
@@ -80,7 +80,7 @@ def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None) -> str 
     """stop_gate.decide() over a synthetic run set. Returns the block reason, or
     None when the hook allowed the stop. No DB, no git, no task files.
 
-    busy_marker_fresh is mocked too: it reads the real .claude/state/, so a live
+    busy_marker_fresh is mocked too: it reads the real .agentry/state/, so a live
     gate marker for the task id used here (written whenever the orchestrator
     dispatches a subagent for it) silenced the hook and failed these tests for
     an environmental reason. BusyMarkerTest covers that function directly."""

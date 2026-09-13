@@ -7,12 +7,12 @@ distill the task's handoff doc into the store (Gotchas -> lessons, reusable code
 `.claude/tools/memory/memory.py --record`, then stamp. "Nothing to record" is a
 legal outcome (--none) - the gate forces the REVIEW, not fabricated content.
 
-The stamp counts ROWS IN THE STORE (.claude/memory/memory.db), not lines in a
+The stamp counts ROWS IN THE STORE (.agentry/memory/memory.db), not lines in a
 markdown file and not a number the caller asserts: a stamp without --none is
 refused unless the store gained at least one row since the previous stamp. So
 "I distilled it" has to be true before it can be recorded.
 
-Stamps live in .claude/state/memory/<task>.json (gitignored with state/).
+Stamps live in .agentry/state/memory/<task>.json (gitignored with state/).
 Config: pipeline.json "memory": {"enabled": bool, "baseline": "task-NNNN"}.
 Missing block = feature OFF. Enforced by stop_gate.py (blocks starting the
 next task while memory debt exists).
@@ -43,7 +43,7 @@ import memory
 import state
 
 STAMP_DIR = state.STATE_DIR / "memory"
-DONE_DIR = state.ROOT / ".claude" / "tasks" / "done"
+DONE_DIR = state.ROOT / ".agentry" / "tasks" / "done"
 TASK_NUM_RE = re.compile(r"(\d+)$")
 
 
@@ -176,7 +176,7 @@ def main(argv=None) -> int:
             previous, prev_task = previous_counts()
             added = rows_added(current, previous)
             if not args.none and store_exists() and added == 0:
-                print("refused: .claude/memory/memory.db gained no rows since the last stamp"
+                print("refused: .agentry/memory/memory.db gained no rows since the last stamp"
                       + (f" ({prev_task})" if prev_task else "")
                       + f" - it holds {current.get('lesson', 0)} lessons, "
                         f"{current.get('pattern', 0)} patterns, "

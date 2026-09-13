@@ -1,4 +1,4 @@
-# Memory lives in one SQLite store, .claude/memory/memory.db, ignored at the
+# Memory lives in one SQLite store, .agentry/memory/memory.db, ignored at the
 # repository root together with everything else under memory/ except README.md.
 # Per-agent markdown memory (agent-memory/) was migrated into the store and
 # deleted - nothing here retains it.

@@ -1,5 +1,5 @@
 {
-  "_comment": "Declarative execution pipeline. Stage commands use placeholders resolved from .claude/project/stack.md during interactive onboarding (see _init-prompt.md Phase B). The deterministic hooks (tools/pipeline/*.py) read this file; the model never decides a transition.",
+  "_comment": "Declarative execution pipeline. Stage commands use placeholders resolved from .agentry/project/stack.md during interactive onboarding (see _init-prompt.md Phase B). The deterministic hooks (tools/pipeline/*.py) read this file; the model never decides a transition.",
   "cwd": ".",
   "retry_budget": 3,
   "continuation_ceiling": 30,
@@ -12,7 +12,7 @@
     "push_needs_approval": true
   },
   "memory": {
-    "_comment": "Post-task memory review gate (tools/memory/update.py): every done task above baseline must be distilled into .claude/memory/ (lessons/patterns/codebase rows) and stamped before the next task starts. Enforced by stop_gate.py. baseline semantics match handoff.baseline; '' = every done task covered. enabled=false disables the gate.",
+    "_comment": "Post-task memory review gate (tools/memory/update.py): every done task above baseline must be distilled into .agentry/memory/ (lessons/patterns/codebase rows) and stamped before the next task starts. Enforced by stop_gate.py. baseline semantics match handoff.baseline; '' = every done task covered. enabled=false disables the gate.",
     "enabled": true,
     "baseline": ""
   },
@@ -33,7 +33,7 @@
   "handoff": {
     "_comment": "Forced context-absorption chain: before any NEW task registers, every done task with id above baseline must have a valid doc in dir. The doc is written by the NEXT task's assignee in its own words. baseline: '' for a fresh project (every done task covered); when adopting mid-project, set it at onboarding to the highest pre-existing done task id (those are grandfathered). Enforced by advance.py (registration refusal), stop_gate.py (start-next-task block) and pretool_gate.py (hard_edit_gate code-edit freeze). Tools: handoff.py --check / --for / --waive (waive is orchestrator-only, CEO approval required).",
     "enabled": true,
-    "dir": ".claude/tasks/handoffs",
+    "dir": ".agentry/tasks/handoffs",
     "baseline": "",
     "hard_edit_gate": true,
     "document_latest_on_start": true,
@@ -60,7 +60,7 @@
           "owner": "qa-engineer",
           "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
           "ui_evidence": true,
-          "_comment": "ui_evidence: true appends 'python .claude/tools/pipeline/ui_evidence.py --task {task}' to the exit gate at onboarding, so UI-touching tasks require real-browser evidence in .claude/state/evidence/<task>.json. Set false for API-only projects.",
+          "_comment": "ui_evidence: true appends 'python .claude/tools/pipeline/ui_evidence.py --task {task}' to the exit gate at onboarding, so UI-touching tasks require real-browser evidence in .agentry/state/evidence/<task>.json. Set false for API-only projects.",
           "exit_gate": { "cmd": "python -m unittest discover -s .claude/tools && python .claude/tools/pipeline/ui_evidence.py --task {task}", "expect_exit": 0 }
         },
         {
@@ -92,7 +92,7 @@
           "owner": "architect",
           "tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
           "_comment": "Write the problem statement: what hurts, scope, non-goals, open questions. Parks on the CEO until the questions are answered - that information exists nowhere else.",
-          "artifact": ".claude/plans/*-brief.md",
+          "artifact": ".agentry/plans/*-brief.md",
           "exit_gate": {
             "cmd": "python .claude/tools/pipeline/artifact_gate.py --task {task} --kind brief",
             "expect_exit": 0
@@ -102,7 +102,7 @@
           "name": "draft",
           "owner": "architect",
           "tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
-          "artifact": ".claude/plans/*.md",
+          "artifact": ".agentry/plans/*.md",
           "exit_gate": {
             "cmd": "python .claude/tools/pipeline/artifact_gate.py --task {task} --kind plan",
             "expect_exit": 0
@@ -125,7 +125,7 @@
           "name": "breakdown",
           "owner": "product-manager",
           "tools": ["Read", "Write", "Edit", "Glob", "Grep"],
-          "artifact": ".claude/specs/*.md",
+          "artifact": ".agentry/specs/*.md",
           "_comment": "Spec with testable acceptance criteria, then task files written into tasks/backlog/. A spec that is not sliced into tasks is half done.",
           "exit_gate": {
             "cmd": "python .claude/tools/pipeline/artifact_gate.py --task {task} --kind spec",

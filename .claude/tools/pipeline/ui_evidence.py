@@ -12,7 +12,7 @@ opened in a real browser, and the gate checks the evidence rather than the
 claim. Claude in Chrome is preferred over a headless driver: the agent sees the
 page a person would.
 
-The evidence file lives at .claude/state/evidence/<task>.json:
+The evidence file lives at .agentry/state/evidence/<task>.json:
 
     {
       "task": "task-1234",
@@ -76,7 +76,7 @@ def check(task: str) -> tuple[bool, str]:
         return False, (
             f"no UI evidence for {task}. Open every changed screen in a real browser "
             f"(Claude in Chrome preferred, Playwright acceptable), then write "
-            f".claude/state/evidence/{task}.json with the routes you opened, the role "
+            f".agentry/state/evidence/{task}.json with the routes you opened, the role "
             f"you were signed in as, and the status of every request the network panel "
             f"showed. If the change cannot reach a screen, record "
             f'{{"task": "{task}", "not_applicable": "<why>"}} instead - but say why.')
