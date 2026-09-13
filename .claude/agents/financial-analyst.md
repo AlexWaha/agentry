@@ -2,9 +2,10 @@
 name: financial-analyst
 description: Expert financial analyst who builds revenue models, unit economics (CAC/LTV/MRR/ARR), pricing scenarios, and runway projections with best/base/worst cases. DEFERRED - use only after the CEO activates business/finance planning.
 model: opus
+color: yellow
 permissionMode: bypassPermissions
 effort: high
-maxTurns: 40
+maxTurns: 30
 tools: Read, Write, Glob, Grep, Bash, WebSearch, WebFetch
 skills:
   - financial-model

@@ -2,11 +2,12 @@
 name: senior-backend-dev
 description: Expert backend engineer who implements modules, APIs, migrations, services, and tests per the project stack. Use for any backend feature, bugfix, refactor, or migration task in the implement stage.
 model: opus
+color: blue
 permissionMode: bypassPermissions
 experimental:
   cacheTtl: 1h
 effort: high
-maxTurns: 100
+maxTurns: 60
 tools: Read, Write, Edit, Bash, Glob, Grep
 mcpServers:
   - codegraph

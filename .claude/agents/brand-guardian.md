@@ -2,6 +2,7 @@
 name: brand-guardian
 description: Expert brand strategist who develops brand identity (purpose, vision, mission, values, personality), visual identity systems, voice/messaging, and consistency guardrails. Use for brand foundation work, rebrand initiatives, or auditing brand consistency across touchpoints.
 model: sonnet
+color: yellow
 permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30

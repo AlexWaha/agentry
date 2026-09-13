@@ -40,6 +40,17 @@
     "min_section_chars": 40,
     "min_total_chars": 500
   },
+  "supervisor": {
+    "_comment": "External supervisor (tools/pipeline/supervisor.py) - a process with its own clock, started DETACHED by the SessionStart hook (supervisor.py --ensure-running) and a singleton per lane, because a watcher that dies with the session cannot report that session's death. Stop it with supervisor.py --stop. It polls run.db plus the task folders, classifies every in-flight run HEALTHY / STALLED / LOOPING / DEAD from observed facts, relaunches STALLED and DEAD work as a headless session, and parks LOOPING work blocked. LOOPING is NEVER relaunched and there is no key here that can change that. stall_seconds: no change to the STAGE for this long, with no other evidence, is a stall (keep it above a slow exit gate - advance.py's own gate timeout is 900s). loop_ticks: how many consecutive polls must show continuations climbing on an unchanged stage before it counts as a loop. idle_exit_polls: consecutive polls with nothing in flight after which the daemon exits and releases its lock (0 never exits). spawn_cmd: argv, never a shell string; placeholders {task} {stage} {prompt}. Both caps are hard - exceeding either stops the supervisor and notifies. enabled=false makes it exit without looking, and makes the SessionStart hook a no-op.",
+    "enabled": true,
+    "poll_seconds": 60,
+    "stall_seconds": 1200,
+    "loop_ticks": 2,
+    "max_actions_per_task": 3,
+    "max_actions_per_hour": 6,
+    "idle_exit_polls": 30,
+    "spawn_cmd": ["claude", "-p", "{prompt}"]
+  },
   "pipelines": {
     "build": {
       "_comment": "Implementation. Drives a task from code to a pushed branch. Merging into the main branch is always the CEO's, never the agent's.",

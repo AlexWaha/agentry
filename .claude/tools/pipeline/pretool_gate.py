@@ -13,6 +13,10 @@ Wired to Claude Code's `PreToolUse` event (matchers: Bash, Edit|Write). It denie
   - `git merge` runs while HEAD sits on a protected branch, unless the project
     is in `solo` workflow mode AND the source is an approved task branch - see
     check_trunk_merge();
+  - `git merge`, `git push` or an approve.py invocation runs inside a session
+    the supervisor spawned unattended (env AGENTRY_UNATTENDED) - see
+    check_unattended(), which holds at every approvals level and in both
+    workflow modes;
   - a code file is edited while the active task sits in the read-only `review`
     stage (bookkeeping under .claude/, .agentry/ and docs/ is always allowed);
   - a code file is edited while handoff debt exists and no task is mid-stage
@@ -31,6 +35,7 @@ bug here can never brick the agent.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -730,6 +735,46 @@ def check_trunk_merge(command: str, trunk: str) -> int:
     return allow()
 
 
+# --- Unattended sessions (env: AGENTRY_UNATTENDED) --------------------------
+# supervisor.py's relaunch() starts `claude -p`, which is a new MAIN session:
+# agent_gate.py's profiles bind subagents, so none of them reach it. At
+# approvals level `auto` with workflow.mode `solo` every remaining link is
+# automatic - the spawned session drives the task, advance.py clears the commit
+# checkpoint itself, and check_trunk_merge() below asks only for a task-shaped
+# branch, a run row and that flag - so the trunk gets written by a process
+# nobody is watching. The push stays held by approvals.NEVER_GRANTED, so nothing
+# leaves the machine, but the CEO reads the trunk before it moves and that is
+# the point.
+#
+# The spawn therefore marks itself, and these three steps are refused for as
+# long as the mark is set, at every approvals level and in every workflow mode.
+# The name must stay equal to supervisor.UNATTENDED_ENV (pinned by a test).
+UNATTENDED_ENV = "AGENTRY_UNATTENDED"
+APPROVE_SCRIPT_RE = re.compile(r"\bapprove\.py\b", re.IGNORECASE)
+
+
+def check_unattended(command: str) -> int:
+    """Deny the three irreversible steps inside a supervisor-spawned session.
+
+    Not merge_invokes-by-substring: `git merge-base --is-ancestor` is the
+    read-only base check every task runs, so the merge question goes through
+    argv resolution exactly as handle_bash() does it."""
+    if not os.environ.get(UNATTENDED_ENV):
+        return allow()
+    step = ("a merge" if merge_invocations(command)
+            else "a push" if git_invokes(command, "push")
+            else "recording a checkpoint approval" if APPROVE_SCRIPT_RE.search(command)
+            else "")
+    if not step:
+        return allow()
+    return deny(
+        f"This session was started UNATTENDED by the supervisor ({UNATTENDED_ENV}=1), so "
+        f"{step} is refused - whatever the approvals level and workflow mode allow, there "
+        f"is no human here to approve it. Finish the stage work, run advance.py, and stop: "
+        f"the CEO reads the diff and takes this step himself. See "
+        f".claude/rules/orchestration.md and .claude/tools/pipeline/supervisor.py.")
+
+
 def push_protected_branches() -> set:
     """Every branch a push may never target: main + master always, the
     configured trunk, and pipeline.json "protected_branches" (default staging /
@@ -1070,6 +1115,7 @@ def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
         return deny(UNPARSEABLE_GIT_MSG)
 
     for check in (
+        check_unattended(command),                 # supervisor-spawned session
         check_branch_creation(command, cwd),      # 4 (naming) + C (base)
         check_destructive_and_repl(command, low),  # A + B + G
         check_commit_attribution(command),         # D

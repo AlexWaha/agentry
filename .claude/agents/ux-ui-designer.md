@@ -2,6 +2,7 @@
 name: ux-ui-designer
 description: Expert UX/UI designer who produces text-based wireframes, Mermaid user flows, and component specs for web and mobile. Use when designing new screens or interaction patterns.
 model: sonnet
+color: green
 permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30

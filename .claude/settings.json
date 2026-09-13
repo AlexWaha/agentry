@@ -42,6 +42,12 @@
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/session_start.py\"",
             "timeout": 60,
             "statusMessage": "Session start: pipeline state, codegraph sync, memory health..."
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/supervisor.py\" --ensure-running",
+            "timeout": 20,
+            "statusMessage": "Starting the pipeline supervisor if it is not already running..."
           }
         ]
       }

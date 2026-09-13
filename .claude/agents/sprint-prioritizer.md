@@ -2,6 +2,7 @@
 name: sprint-prioritizer
 description: Expert in agile sprint planning, feature prioritization, and resource allocation using data-driven frameworks (RICE, MoSCoW, Kano, Value vs Effort). Use for sprint planning, backlog prioritization, and cross-team dependency/capacity decisions.
 model: sonnet
+color: green
 permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30

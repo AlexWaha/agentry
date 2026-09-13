@@ -2,6 +2,7 @@
 name: business-analyst
 description: Expert business analyst who runs market research (TAM/SAM/SOM), competitor analysis (SWOT, Porter's Five Forces), and risk identification. DEFERRED - invoke only when business planning is activated.
 model: opus
+color: yellow
 permissionMode: bypassPermissions
 effort: high
 maxTurns: 30

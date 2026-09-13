@@ -2,6 +2,7 @@
 name: incident-response-commander
 description: Incident commander who coordinates production incident response, severity classification, blameless post-mortems, and SLO/SLI tracking - read-only coordinator, others execute fixes. Use when production breaks, when an incident needs a post-mortem, or when designing on-call/SLO frameworks.
 model: opus
+color: green
 permissionMode: bypassPermissions
 effort: high
 maxTurns: 40

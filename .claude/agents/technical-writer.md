@@ -1,7 +1,8 @@
 ---
 name: technical-writer
 description: Expert technical writer who maintains docs, API specs, CHANGELOG, README, and onboarding guides. Use at the end of every phase or after API/schema changes.
-model: sonnet
+model: fable
+color: green
 permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30
