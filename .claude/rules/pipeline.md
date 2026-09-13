@@ -99,9 +99,9 @@ A pasted task description fails validation (`handoff.py --check`).
 - **Gate failure.** The owning agent fixes and re-runs; after the retry budget
   (`pipeline.json`), the task is parked `blocked` and surfaced to the CEO.
 - **Self-learning.** At each stage/session end, capture lessons per
-  `self-learning.md` (shared rules for general lessons, agent memory for
-  role-specific). A finished task with zero captured lessons should prompt "did
-  nothing really surprise me?".
+  `self-learning.md` (shared rules for universal policy, a `lesson` row in the
+  memory store for anything project- or role-specific). A finished task with zero
+  captured lessons should prompt "did nothing really surprise me?".
 
 ## Stage -> agent map
 

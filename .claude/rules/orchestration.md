@@ -19,15 +19,15 @@ outside the bookkeeping allowlist (`.claude/`, `docs/`, `README*`, root
 them. If the orchestrator hits this deny, the correct move is always the same:
 dispatch the owning agent.
 
-## Memory layers in every dispatch
+## Memory in every dispatch
 
-Three cross-agent memory layers live in `.claude/memory/` (see `memory/README.md`):
-L1 `codebase.md` (module map), L2 `lessons.md` (mistakes never to repeat),
-L3 `patterns.md` (reusable code patterns). SubagentStart hooks inject the right
-layers per agent type automatically; as a fallback, every dispatch prompt for a
-planning agent must name L1+L3, for a spec-writing agent L2 (+L1), and for an
-implementing agent L2 - in addition to the context-absorption chain from
-`pipeline.md`.
+Project memory is one queried store, `.claude/memory/memory.db` (SQLite + FTS5,
+see `memory/README.md`), holding `lesson`, `pattern` and `module` rows.
+SubagentStart hooks query it with the dispatch text and inject the ranked
+matches per agent type automatically - nothing to name in the prompt. When a
+dispatch needs more than the injected rows, the agent queries the store itself
+(`python .claude/tools/memory/memory.py --query "<topic>"`), in addition to the
+context-absorption chain from `pipeline.md`.
 
 ## The autonomy contract
 

@@ -106,6 +106,24 @@ def branch_for(repo: Path, task: str) -> str | None:
     return first or None
 
 
+def declared_ref(repo: Path, branch: str) -> str | None:
+    """The ref that really exists for a branch a task DECLARED it rides on
+    (frontmatter `branch:`), preferring the pushed copy over the local one.
+
+    Not every task gets a branch named after itself. Work that deliberately
+    rides on a sibling's branch matches neither `<type>/task-NNNN` nor a
+    `[task-NNNN]` commit, so without the declaration it looks like a task with
+    no branch at all - which is exactly how one got called done while its code
+    sat unmerged on a sibling's branch."""
+    if not branch:
+        return None
+    for ref in (f"origin/{branch}", branch):
+        code, _ = _git(repo, "rev-parse", "--verify", "--quiet", ref)
+        if code == 0:
+            return ref
+    return None
+
+
 def base_is_current(repo: Path, ref: str = "HEAD") -> bool | None:
     """True when origin/main is an ancestor of ref: the branch was cut from an
     up-to-date main and nothing has landed since that it lacks."""
@@ -114,20 +132,34 @@ def base_is_current(repo: Path, ref: str = "HEAD") -> bool | None:
     return code == 0
 
 
-def task_report(task: str, do_fetch: bool = True) -> list[dict]:
-    """Where a task stands in every repo that knows about it."""
+def task_report(task: str, do_fetch: bool = True, branch: str = "") -> list[dict]:
+    """Where a task stands in every repo that knows about it.
+
+    `branch` is the task's declared carrier branch (see declared_ref). Merge
+    detection resolves against it when given, so two tasks sharing one branch
+    are both detectable.
+
+    An EMPTY list means no repo carries either signal - no branch and no tagged
+    commit. That is UNKNOWN, never "nothing to merge": the caller must park, not
+    finish the task."""
     out = []
     for repo in repos():
         if do_fetch:
             fetch(repo)
-        branch = branch_for(repo, task)
-        in_main = task_in_main(repo, task)
-        if branch is None and not in_main:
+        ref = declared_ref(repo, branch)
+        found = ref or branch_for(repo, task)
+        # Either signal proving a merge is enough; only when both are silent
+        # (None) does the repo stay unknown.
+        signals = [task_in_main(repo, task)]
+        if ref:
+            signals.append(merged_into_main(repo, ref))
+        in_main = True if True in signals else (False if False in signals else None)
+        if found is None and in_main is not True:
             continue
         out.append({
             "repo": repo.name,
-            "branch": branch,
-            "pushed": branch is not None,
+            "branch": found,
+            "pushed": found is not None,
             "in_main": in_main,
         })
     return out

@@ -23,7 +23,7 @@ After ANY of the following, update the knowledge base immediately - same session
 | External library behavior | `.claude/project/` overlay or rules file for that domain |
 | Personal preference / workflow style | `.claude/project/` overlay (project operational fact) or `.claude/rules/<area>.md` (generalizable norm) |
 
-> **STRICT - never store project knowledge in the runtime/home memory dir.** Every lesson, fact, preference, and workflow note lives INSIDE the project (`.claude/rules/`, `.claude/project/`, or `.claude/agent-memory/<agent>/`), next to the code it is about. NEVER write project knowledge to the host/runtime memory location (e.g. a per-project dir under the agent host's home `.claude/projects/.../memory/`) - it is machine-local, uncommitted, and lost on reinstall or when working from another machine. This mirrors the global file-storage rule. If your runtime auto-creates a home memory file, treat it as a redirect stub only: it must contain nothing but a pointer to the in-project locations above.
+> **STRICT - never store project knowledge in the runtime/home memory dir.** Every lesson, fact, preference, and workflow note lives INSIDE the project (`.claude/rules/`, `.claude/project/`, or the memory store `.claude/memory/memory.db`), next to the code it is about. NEVER write project knowledge to the host/runtime memory location (e.g. a per-project dir under the agent host's home `.claude/projects/.../memory/`) - it is machine-local, uncommitted, and lost on reinstall or when working from another machine. This mirrors the global file-storage rule. If your runtime auto-creates a home memory file, treat it as a redirect stub only: it must contain nothing but a pointer to the in-project locations above.
 
 ### Format
 
@@ -36,51 +36,63 @@ No vague "be careful with X". Bad: "be careful with services". Good: "before cre
 
 ---
 
-## Native Agent Memory (two-tier)
+## The memory store (two-tier)
 
-Agents whose frontmatter declares `memory: project` get a persistent, committed
-memory dir at `.claude/agent-memory/<agent>/`. Claude Code auto-injects the first
-~200 lines / 25KB of that agent's `MEMORY.md` at startup and auto-enables
-Read/Write/Edit on the dir. Currently enabled for: reviewer, security-engineer,
-qa-engineer, architect, senior-backend-dev, senior-frontend-dev, devops-engineer,
-data-engineer, incident-response-commander, feedback-synthesizer.
+Project memory is one SQLite store with an FTS5 index:
+`.claude/memory/memory.db`, holding `lesson`, `pattern` and `module` rows.
+Contract and CLI: `.claude/memory/README.md`. Record with:
+
+```bash
+python .claude/tools/memory/memory.py --record --kind lesson \
+  --signature <kebab-tag naming the situation> --trigger <when it applies> \
+  --what <one sentence> --why <root cause> --fix <checkable rule> \
+  [--area <tag>] [--task task-XXXX] [--agent <name>]
+```
+
+Every field is single-line and bounded: the store refuses free-form prose, so a
+lesson is recorded as structured fields or not at all.
+
+There is no per-agent `MEMORY.md` and no `memory: project` frontmatter any
+more. Claude Code auto-injected the first ~200 lines of that file, which is the
+same blind window the layer files had - it delivers the head of a file, not what
+the task needs. Retrieval we control replaced it: a `SubagentStart` hook queries
+the store with the dispatch text and injects the ranked matches.
 
 Pick the tier when recording a lesson:
 
 | Lesson scope | Where it goes |
 |--------------|---------------|
-| Only THIS agent needs it (operational gotcha, per-role pattern) | `.claude/agent-memory/<agent>/MEMORY.md` |
-| EVERY agent should follow it (convention, architecture, API quirk) | `.claude/rules/<area>.md` (the table above) |
+| THIS project (operational gotcha, per-role pattern, stack quirk) | a `lesson` row in the store, `--agent <name>` when it is role-specific |
+| EVERY future project (convention, architecture, policy) | `.claude/rules/<area>.md` (the table above) |
 
-The `self-learning` skill standardizes the record / recall / curate procedure -
-invoke it instead of free-handing the format. Canonical lesson format
-(SIGNATURE / TRIGGER / WHAT / WHY / FIX / DATE) lives in that skill.
+The `self-learning` skill standardizes the record / recall / distill procedure -
+invoke it instead of free-handing the format.
 
-**Guardrails:** memory is NOT committed. `.claude/memory/` and
-`.claude/agent-memory/` are gitignored, because they hold one project's internals and
-this template ships publicly. Two consequences to plan around: memory does not travel
-to another machine or survive a fresh clone, so back it up with the rest of the
-working tree if it matters to you; and a lesson worth keeping permanently belongs in
-`.claude/rules/`, which IS committed. Record the METHOD either way, never a secret,
-credential, or PII value. When a `MEMORY.md` nears the injection window, curate
-(merge duplicates, drop obsolete) so the highest-value lessons stay visible.
-This is persistence + disciplined recall, NOT autonomous self-improvement -
-curation is manual.
+**Guardrails:** the store is NOT committed. `.claude/memory/` is gitignored,
+because it holds one project's internals and this template ships publicly. Two
+consequences to plan around: it does not travel to another machine or survive a
+fresh clone, so back it up with the rest of the working tree if it matters to
+you; and a lesson worth keeping permanently belongs in `.claude/rules/`, which
+IS committed. Record the METHOD either way, never a secret, credential, or PII
+value. There is no curation-at-overflow rule: a queried store does not overflow
+an injection window, so rows accumulate and only duplicates or rows proven wrong
+get removed. This is persistence + disciplined recall, NOT autonomous
+self-improvement.
 
 ### Automated triggers
 
 Two hooks keep the loop honest (both fail-open, both quiet unless actionable):
 
-- **SubagentStop** (`tools/hooks/subagent_stop.py`): when a memory-enabled agent
-  finishes, the orchestrator gets a one-line reminder to record any lesson from
-  its report, and a curation nudge if that agent's `MEMORY.md` nears the
-  injection window (180 lines / 22KB soft threshold).
-- **SessionStart** (`tools/hooks/session_start.py`): prints a memory health line
-  only when some `MEMORY.md` exceeds the threshold - silence means healthy.
+- **SubagentStart** (`tools/memory/inject.py`): queries the store with the
+  dispatched task's text and injects the top-ranked rows, with their count, under
+  a 3800-byte ceiling. An absent or corrupt store injects nothing.
+- **SubagentStop** (`tools/hooks/subagent_stop.py`): when a subagent finishes,
+  the orchestrator gets a one-line reminder, with the exact command, to record any
+  lesson from its report.
 
 Note: the code knowledge graph (codegraph, see `rules/code-retrieval.md`) does
-NOT store lessons - it indexes code structure only. Lessons live here, in
-markdown, under version control.
+NOT store lessons - it indexes code structure only. Lessons live in the store;
+policy lives in these rule files, under version control.
 
 ---
 

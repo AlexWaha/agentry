@@ -45,17 +45,19 @@ Do exactly these three things:
    real and marker-free, do not touch it.
 
 3. MEMORY (only if not already migrated). If ROOT/.claude/memory/legacy/ exists,
-   memory was already migrated - SKIP. Otherwise inventory ROOT/.claude/memory/:
-   the new-layer files are codebase.md, codebase.meta.json, lessons.md,
-   patterns.md, patterns/, README.md. Any OTHER .md there, a populated MEMORY.md
-   index, and any ROOT/docs/memory/ are OLD memory - migrate per source
-   memory/README.md: module facts -> codebase.md L1 rows; caveats/gotchas ->
-   lessons.md L2 (`- [L-NNN] YYYY-MM-DD <area>: <mistake> -> <rule>`); reusable
-   patterns -> patterns.md + patterns/P-NNN-<name>.md; profile/overview ->
-   project-context.md. Never copy secret values. MOVE old files + old MEMORY.md
-   into ROOT/.claude/memory/legacy/ (create it; delete nothing). Leave
-   agent-memory/ as-is. If there is no old memory, just seed codebase.md L1 from
-   architecture.md. Then run:
+   memory was already migrated - SKIP. Otherwise: memory is one store,
+   ROOT/.claude/memory/memory.db (see memory/README.md). Any .md under
+   ROOT/.claude/memory/, any ROOT/.claude/agent-memory/ tree and any
+   ROOT/docs/memory/ are OLD markdown memory. Run the migrator (idempotent):
+   `python "ROOT/.claude/tools/memory/memory.py" --migrate`
+   Route what it did not recognise with `memory.py --record --kind
+   <lesson|pattern|module>`: module facts -> module rows; caveats/gotchas ->
+   lesson rows (signature, trigger, what, why, fix); reusable patterns -> pattern
+   rows; profile/overview -> project-context.md. Never copy secret values. Verify
+   by count (`memory.py --stats`), then MOVE the migrated files into
+   ROOT/.claude/memory/legacy/ (create it; delete nothing). If there is no old
+   memory, just record one module row per top-level module from architecture.md.
+   Then run:
    `python "ROOT/.claude/tools/memory/codebase_sync.py" --stamp`
 
 Return a SHORT report (max ~8 lines): stack one-liner; stack.md table

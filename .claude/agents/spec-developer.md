@@ -5,7 +5,6 @@ model: fable
 permissionMode: bypassPermissions
 effort: high
 maxTurns: 80
-memory: project
 tools: Read, Write, Glob, Grep
 mcpServers:
   - codegraph

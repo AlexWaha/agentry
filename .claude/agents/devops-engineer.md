@@ -8,7 +8,6 @@ experimental:
 effort: high
 maxTurns: 100
 tools: Read, Write, Edit, Bash, Glob, Grep
-memory: project
 mcpServers:
   - codegraph
 skills:
@@ -55,7 +54,7 @@ service topology in `.claude/project/architecture.md`.
 ## Workflow
 
 1. Absorb context per `rules/pipeline.md`: handoff docs, project-context, the
-   task's spec, memory layer files named in your dispatch.
+   task's spec, the memory rows injected at dispatch.
 2. Explore via codegraph first (`rules/code-retrieval.md`) for existing
    configs before creating new ones; run Pre-Flight Checks from
    `rules/quality-standard.md`.

@@ -2,10 +2,15 @@
 """Post-task memory-update gate - mirrors the handoff-debt machinery.
 
 Every completed task must get a memory review before the next task starts:
-distill the task's handoff doc into the three layers (Gotchas -> lessons.md,
-reusable code -> patterns.md + patterns/, touched modules -> codebase.md), then
-stamp. "Nothing to record" is a legal outcome (--none) - the gate forces the
-REVIEW, not fabricated content.
+distill the task's handoff doc into the store (Gotchas -> lessons, reusable code
+-> patterns, touched modules -> module rows) with
+`.claude/tools/memory/memory.py --record`, then stamp. "Nothing to record" is a
+legal outcome (--none) - the gate forces the REVIEW, not fabricated content.
+
+The stamp counts ROWS IN THE STORE (.claude/memory/memory.db), not lines in a
+markdown file and not a number the caller asserts: a stamp without --none is
+refused unless the store gained at least one row since the previous stamp. So
+"I distilled it" has to be true before it can be recorded.
 
 Stamps live in .claude/state/memory/<task>.json (gitignored with state/).
 Config: pipeline.json "memory": {"enabled": bool, "baseline": "task-NNNN"}.
@@ -14,9 +19,10 @@ next task while memory debt exists).
 
 CLI:
     python update.py --check                       JSON debt report, exit 1 on debt
-    python update.py --stamp --task task-0007 [--lessons N --patterns N --l1-rows N | --none]
+    python update.py --stamp --task task-0007 [--none]
 
-Fail-open: internal errors report "no debt".
+Fail-open: internal errors report "no debt"; a store that does not exist yet
+cannot block a stamp.
 """
 
 from __future__ import annotations
@@ -31,7 +37,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve()
 CLAUDE_DIR = HERE.parents[2]
 sys.path.insert(0, str(CLAUDE_DIR / "tools" / "pipeline"))
+sys.path.insert(0, str(HERE.parent))
 
+import memory
 import state
 
 STAMP_DIR = state.STATE_DIR / "memory"
@@ -95,15 +103,48 @@ def unstamped_done_tasks() -> list:
         return []
 
 
-def stamp(task: str, lessons: int, patterns: int, l1_rows: int, none: bool) -> str:
+def store_counts() -> dict:
+    """Row counts per kind, straight out of memory.db. Zeros when the store is
+    missing or unreadable (fail-open, same contract as the rest of the gates)."""
+    try:
+        return memory.counts()
+    except Exception:
+        return {k: 0 for k in memory.KINDS}
+
+
+def store_exists() -> bool:
+    try:
+        return memory.DB_PATH.is_file()
+    except Exception:
+        return False
+
+
+def previous_counts() -> tuple:
+    """(counts, task) from the most recent stamp - the baseline a new stamp's
+    row delta is measured against. ({}, '') when nothing was stamped yet."""
+    try:
+        best, best_at, best_task = {}, "", ""
+        for f in STAMP_DIR.glob("task-*.json"):
+            d = json.loads(f.read_text(encoding="utf-8"))
+            at = str(d.get("stamped_at", ""))
+            if at >= best_at:
+                best, best_at, best_task = d.get("counts", {}) or {}, at, str(d.get("task", ""))
+        return best, best_task
+    except Exception:
+        return {}, ""
+
+
+def rows_added(current: dict, previous: dict) -> int:
+    return sum(max(0, int(current.get(k, 0)) - int(previous.get(k, 0))) for k in memory.KINDS)
+
+
+def stamp(task: str, none: bool) -> str:
     STAMP_DIR.mkdir(parents=True, exist_ok=True)
     p = stamp_path(task)
     p.write_text(json.dumps({
         "task": task,
         "stamped_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "lessons": lessons,
-        "patterns": patterns,
-        "l1_rows": l1_rows,
+        "counts": store_counts(),
         "none": none,
     }, indent=2) + "\n", encoding="utf-8")
     try:
@@ -112,34 +153,48 @@ def stamp(task: str, lessons: int, patterns: int, l1_rows: int, none: bool) -> s
         return str(p)
 
 
-def main() -> int:
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Post-task memory review gate")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--stamp", action="store_true")
     parser.add_argument("--task", default="")
+    # Accepted and ignored: the counts now come from the store, not from the
+    # caller. Kept so the instruction stop_gate.py prints still parses.
     parser.add_argument("--lessons", type=int, default=0)
     parser.add_argument("--patterns", type=int, default=0)
     parser.add_argument("--l1-rows", type=int, default=0, dest="l1_rows")
     parser.add_argument("--none", action="store_true",
                         help="reviewed, nothing worth recording")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     try:
         if args.stamp:
             if not args.task:
                 print("refused: --stamp requires --task")
                 return 1
-            if not args.none and not (args.lessons or args.patterns or args.l1_rows):
-                print("refused: pass --lessons/--patterns/--l1-rows counts, or --none "
-                      "if the review found nothing worth recording")
+            current = store_counts()
+            previous, prev_task = previous_counts()
+            added = rows_added(current, previous)
+            if not args.none and store_exists() and added == 0:
+                print("refused: .claude/memory/memory.db gained no rows since the last stamp"
+                      + (f" ({prev_task})" if prev_task else "")
+                      + f" - it holds {current.get('lesson', 0)} lessons, "
+                        f"{current.get('pattern', 0)} patterns, "
+                        f"{current.get('module', 0)} module rows. Record the distillation "
+                        f"with: python .claude/tools/memory/memory.py --record --kind lesson "
+                        f"--signature <tag> --trigger <when> --what <mistake> --why <cause> "
+                        f"--fix <rule>  (or pass --none if the review found nothing).")
                 return 1
-            rel = stamp(args.task, args.lessons, args.patterns, args.l1_rows, args.none)
-            print(f"memory: stamped {args.task} ({rel})")
+            rel = stamp(args.task, args.none)
+            print(f"memory: stamped {args.task} ({rel}) - {added} new row(s) in the store, "
+                  f"now {current.get('lesson', 0)} lessons / {current.get('pattern', 0)} "
+                  f"patterns / {current.get('module', 0)} module rows")
             return 0
         debt = unstamped_done_tasks()
         print(json.dumps({
             "enabled": enabled(),
             "baseline": str(cfg().get("baseline", "")),
+            "store": store_counts(),
             "memory_debt": debt,
         }, indent=2))
         return 1 if debt else 0

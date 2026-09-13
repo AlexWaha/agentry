@@ -4,7 +4,9 @@
 Wired to Claude Code's `PreToolUse` event (matchers: Bash, Edit|Write). It denies
 (exit code 2, reason on stderr) when:
   - `git commit` runs while the current task's commit is not yet approved;
-  - `git push` runs while push is not approved, or targets the protected branch;
+  - `git push` runs while push is not approved, or targets ANY protected branch
+    (main and master always, plus the configured trunk and pipeline.json
+    "protected_branches" - default staging / production);
   - a code file is edited while the active task sits in the read-only `review`
     stage (bookkeeping under .claude/ and docs/ is always allowed);
   - a code file is edited while handoff debt exists and no task is mid-stage
@@ -39,6 +41,21 @@ TASK_PREFIX = "task-"
 BRANCH_TYPES = ("feature", "bugfix", "hotfix", "enhancement", "techdebt",
                 "fix", "refactor", "chore")
 PROTECTED_BRANCHES = ("main", "staging", "production", "master", "develop")
+
+# Push protection is a SET, not the single `main_branch` name. Two names are
+# protected unconditionally: `main` and `master` are never a work branch in any
+# project, so there is no legitimate push to weigh against - and a template that
+# only reads `main_branch` ships with ZERO protection for a `master` project
+# until someone remembers to set the key, failing silently. The configured trunk
+# and the optional pipeline.json "protected_branches" list join them, so extra
+# environments need config, not code.
+PUSH_PROTECTED_ALWAYS = ("main", "master")
+PUSH_PROTECTED_DEFAULT = ("staging", "production")
+
+# `git push` options that consume the NEXT argv entry (the `--opt=value`
+# spelling is one token and falls through the generic flag skip).
+PUSH_OPTS_WITH_ARG = frozenset({"--repo", "-o", "--push-option",
+                                "--receive-pack", "--exec"})
 
 # --- Generic gates (no project/stack scope - safe in the universal template) ---
 # D: AI-authorship trailers forbidden in commit messages.
@@ -474,6 +491,100 @@ def check_branch_base(command: str, cwd: str, name: str, rest: list, main_branch
         f"branch. (branch-base-must-be-main - see .claude/rules/git-workflow.md).")
 
 
+def push_protected_branches() -> set:
+    """Every branch a push may never target: main + master always, the
+    configured trunk, and pipeline.json "protected_branches" (default staging /
+    production). Unresolved `{{PLACEHOLDER}}` values are ignored."""
+    pipeline = state.load_pipeline()
+    names = set(PUSH_PROTECTED_ALWAYS)
+    trunk = str(pipeline.get("main_branch") or "main")
+    if not trunk.startswith("{{"):
+        names.add(trunk)
+    extra = pipeline.get("protected_branches")
+    if not isinstance(extra, (list, tuple)):
+        extra = PUSH_PROTECTED_DEFAULT
+    for name in extra:
+        name = str(name).strip()
+        if name and not name.startswith("{{"):
+            names.add(name)
+    return names
+
+
+def push_refspec_targets(args: list) -> list:
+    """Destination branch names named by a `git push` argv.
+
+    The first non-flag token is the remote; each remaining one is a refspec.
+    `main`, `+main`, `HEAD:main`, `feature:main`, `:main` (delete) and
+    `refs/heads/main` all resolve to 'main'. An empty result means the command
+    named no refspec, so the caller falls back to the checked-out branch."""
+    positional = []
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok == "--":
+            positional.extend(a for a in args[i + 1:] if a)
+            break
+        if tok.startswith("-"):
+            i += 2 if tok in PUSH_OPTS_WITH_ARG else 1
+            continue
+        positional.append(tok)
+        i += 1
+    targets = []
+    for spec in positional[1:]:  # positional[0] is the remote
+        dst = spec.lstrip("+").rsplit(":", 1)[-1]
+        dst = re.sub(r"^refs/heads/", "", dst)
+        if dst:
+            targets.append(dst)
+    return targets
+
+
+def push_target_branches(command: str, branch: str) -> list | None:
+    """Branch names the push would land on, or None when it cannot be resolved.
+
+    Fail-CLOSED by design: None means the caller must DENY. Fail-open belongs at
+    the top-level exception handler, not in the step that decides whether a push
+    is gated - guessing "probably fine" there is exactly how a protected branch
+    gets pushed. Returns None for a push visible only to the substring net
+    (`bash -c "git push origin main"`), and for a refspec-less push whose
+    checked-out branch could not be read."""
+    invocations = [args for sub, args in git_invocations(command) if sub == "push"]
+    if not invocations:
+        return None
+    targets = []
+    for args in invocations:
+        specs = push_refspec_targets(args)
+        if specs:
+            targets.extend(specs)
+        elif branch:
+            targets.append(branch)
+        else:
+            return None
+    return targets
+
+
+def check_push_target(command: str, branch: str) -> int:
+    """Deny a push landing on any protected branch, in every spelling the argv
+    resolver can see: `origin main`, `HEAD:main`, `+main`, `--force origin main`,
+    `feature:main`, and the refspec-less form while sitting on a protected
+    branch."""
+    protected = push_protected_branches()
+    targets = push_target_branches(command, branch)
+    if targets is None:
+        return deny(
+            "This push cannot be resolved to a target branch, so the gate refuses "
+            "rather than guessing (an unresolvable push gates). Run git push "
+            "directly instead of wrapping it in another shell, and name the branch: "
+            "git push -u origin <type>/task-<id>. The CEO merges via a PR.")
+    for name in targets:
+        if name in protected:
+            return deny(
+                f"Push to protected branch '{name}' is forbidden (protected: "
+                f"{', '.join(sorted(protected))}). Push your work branch instead - "
+                f"the CEO merges into '{name}' via a PR. See "
+                f".claude/rules/git-workflow.md.")
+    return allow()
+
+
 def repo_bootstrap(command: str, cwd: str, main_branch: str) -> bool:
     """FR-1: true when the repo has no commits yet (unborn HEAD), or the
     configured main branch does not exist yet - there is no main to cut a
@@ -740,9 +851,10 @@ def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
 
     branch = current_branch(command, cwd)
 
-    if is_push and (branch == main_branch or " origin main" in low or low.endswith(" main")):
-        return deny(f"Push to protected branch '{main_branch}' is forbidden. "
-                    "Push the feature branch; the CEO merges via PR.")
+    if is_push:
+        verdict = check_push_target(command, branch)
+        if verdict != 0:
+            return verdict
 
     task = task_from_branch(branch)
     if not task:

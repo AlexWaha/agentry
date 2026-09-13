@@ -23,19 +23,18 @@ This file is the entry point for using this `.claude/` agent system on a brand-n
 ├── tools/
 │   ├── pipeline/            # deterministic FSM: state/gate/advance/approve + agent_gate
 │   ├── hooks/               # session_start.py, subagent_stop.py, dangerous_patterns.py
-│   ├── memory/              # codebase_sync.py, inject.py, update.py (memory layers)
+│   ├── memory/              # memory.py (store + CLI), inject.py (retrieval), update.py, codebase_sync.py
 │   ├── review/              # diff_review.py (CEO visual diff-review UI)
 │   └── setup/               # apply_optimization.py (fleet rollout tool)
 ├── pipeline.json            # declarative execution stage machine (finalized in onboarding Phase B)
 ├── specs/                   # specs written by spec-developer (_template.md inside)
 ├── state/                   # run.db pipeline state + review verdicts + memory stamps (gitignored)
-├── agent-memory/            # per-agent persistent MEMORY.md (memory: project)
 ├── tasks/
 │   ├── active/              # empty - tasks you create
 │   ├── done/                # empty - completed tasks
 │   ├── epics/               # epics created by product-manager (spec decomposition)
 │   └── templates/           # task + epic templates
-├── memory/                  # cross-agent memory layers: codebase.md (L1), lessons.md (L2), patterns.md (L3) - see memory/README.md
+├── memory/                  # project memory store: memory.db (lesson/pattern/module rows, gitignored) - see memory/README.md
 └── plans/                   # empty - in-flight plans
 ```
 
@@ -209,11 +208,13 @@ contract is in `rules/orchestration.md`; the stage machine in `rules/pipeline.md
 - Obedience is enforced inside subagents too: dev/readonly/docs agents carry
   `hooks.PreToolUse` -> `tools/pipeline/agent_gate.py` in their frontmatter
   (see `rules/orchestration.md`, "Subagent enforcement").
-- `SubagentStop` injects a lesson-recording nudge after each memory-enabled
-  agent finishes; `PreCompact` re-injects pipeline state so compaction cannot
-  lose it; SessionStart syncs codegraph and reports memory health.
-- `autoMemoryEnabled` is on; agents with `memory: project` accumulate lessons in
-  `.claude/agent-memory/<agent>/MEMORY.md` (committed, see `rules/self-learning.md`).
+- `SubagentStart` queries the memory store and injects the rows that match the
+  dispatch; `SubagentStop` injects a lesson-recording nudge after each subagent
+  finishes; `PreCompact` re-injects pipeline state so compaction cannot lose it;
+  SessionStart syncs codegraph and checks module-map drift.
+- `autoMemoryEnabled` is off and no agent declares `memory: project`: lessons go
+  into `.claude/memory/memory.db` through `tools/memory/memory.py --record`
+  (gitignored, see `rules/self-learning.md`).
 - Planning flow: plan (architect) -> spec (spec-developer, `.claude/specs/`) ->
   epic + tasks (product-manager, `.claude/tasks/epics/`) -> CEO approval flips
   tasks `backlog` -> `active`. Spec + epic are mandatory for multi-task work.

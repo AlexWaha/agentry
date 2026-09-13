@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""L1 codebase-memory drift detection - cheap, deterministic, quiet when clean.
+"""Module-map drift detection - cheap, deterministic, quiet when clean.
 
-The map itself (.claude/memory/codebase.md) is model-authored; this script only
-DETECTS drift and stamps freshness:
+The map itself is model-authored, and it now lives in the store as `module`
+rows (.claude/memory/memory.db, one row per module/dir) instead of a markdown
+table. This script only DETECTS drift and stamps freshness:
 
-  --check   compare stored git heads (codebase.meta.json) with the actual
-            workspace repos. Clean -> silent exit 0. Drift -> print the changed
-            paths grouped by top-level dir plus the update instruction, exit 1.
-            Missing/stub map -> print the generation instruction, exit 1.
-  --stamp   record the current heads as fresh (run AFTER updating codebase.md).
+  --check   compare the git heads recorded in the store's meta table with the
+            actual workspace repos. Clean -> silent exit 0. Drift -> print the
+            changed paths grouped by top-level dir plus the update instruction,
+            exit 1. No module rows at all -> print the generation instruction,
+            exit 1.
+  --stamp   record the current heads as fresh (run AFTER recording module rows).
 
 Fail-open: any internal error exits 0 silently - memory hygiene must never
 brick a session.
@@ -17,7 +19,6 @@ brick a session.
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -27,11 +28,17 @@ HERE = Path(__file__).resolve()
 CLAUDE_DIR = HERE.parents[2]
 ROOT = HERE.parents[3]
 sys.path.insert(0, str(CLAUDE_DIR / "tools" / "pipeline"))
+sys.path.insert(0, str(HERE.parent))
+
+# Sibling module; the dir is not on sys.path by default, hence the insert above.
+import memory
 
 MEMORY_DIR = CLAUDE_DIR / "memory"
-MAP_PATH = MEMORY_DIR / "codebase.md"
-META_PATH = MEMORY_DIR / "codebase.meta.json"
+META_KEY = "codebase_heads"
 DIFF_LINES_CAP = 30
+RECORD_HINT = ("python .claude/tools/memory/memory.py --record --kind module "
+               "--path <dir> --responsibility <one line> [--symbols <entry points>] "
+               "[--notes <dependency notes>]")
 
 _SKIP_DIRS = {".git", "node_modules", "vendor", ".claude", "storage",
               "dist", "build", "data", "logs"}
@@ -82,21 +89,24 @@ def current_heads() -> dict:
     return heads
 
 
-def stored_meta() -> dict:
-    try:
-        d = json.loads(META_PATH.read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else {}
-    except Exception:
+def stored_heads() -> dict:
+    """Heads recorded at the last --stamp, read from the store's meta table."""
+    conn = memory.connect_readonly()
+    if conn is None:
         return {}
-
-
-def map_is_stub() -> bool:
     try:
-        if not MAP_PATH.is_file():
-            return True
-        return "FILL-ME" in MAP_PATH.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return True
+        heads = memory.meta_get(conn, META_KEY, {})
+        return heads if isinstance(heads, dict) else {}
+    finally:
+        conn.close()
+
+
+def map_is_empty() -> bool:
+    """No module rows in the store - the map was never recorded."""
+    try:
+        return memory.counts().get("module", 0) == 0
+    except Exception:
+        return False
 
 
 def _changed_paths(repo: Path, old_sha: str, new_sha: str) -> list:
@@ -115,13 +125,13 @@ def check() -> int:
     heads = current_heads()
     if not heads:
         return 0  # non-git workspace (e.g. the template itself) - nothing to sync
-    if map_is_stub():
-        print("memory L1: .claude/memory/codebase.md is missing or still a stub. "
-              "Generate the module map (codegraph explore per module + "
-              "project/architecture.md), then run: python "
+    if map_is_empty():
+        print("memory: the store holds no module rows. Generate the module map "
+              "(codegraph explore per module + project/architecture.md) and record one row "
+              f"per module: {RECORD_HINT}. Then run: python "
               ".claude/tools/memory/codebase_sync.py --stamp")
         return 1
-    stored = stored_meta().get("heads", {})
+    stored = stored_heads()
     drifted = []
     for repo_rel, sha in heads.items():
         old = stored.get(repo_rel, "")
@@ -130,7 +140,7 @@ def check() -> int:
     if not drifted:
         return 0
 
-    print("memory L1: codebase memory is STALE - repos moved since the last sync:")
+    print("memory: the module map is STALE - repos moved since the last sync:")
     shown = 0
     for repo_rel, old, sha in drifted:
         if not old:
@@ -147,24 +157,27 @@ def check() -> int:
                 break
             print(f"  {repo_rel}/{top}: {count} file(s) changed")
             shown += 1
-    print("Update the affected rows of .claude/memory/codebase.md, then run: "
-          "python .claude/tools/memory/codebase_sync.py --stamp")
+    print(f"Re-record the affected module rows ({RECORD_HINT}) - recording a path that "
+          "already exists updates it - then run: python "
+          ".claude/tools/memory/codebase_sync.py --stamp")
     return 1
 
 
 def stamp() -> int:
     heads = current_heads()
-    META_PATH.parent.mkdir(parents=True, exist_ok=True)
-    META_PATH.write_text(json.dumps({
-        "heads": heads,
-        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }, indent=2) + "\n", encoding="utf-8")
-    print(f"memory L1: stamped {len(heads)} repo head(s) as fresh")
+    conn = memory.connect()
+    try:
+        memory.meta_set(conn, META_KEY, heads)
+        memory.meta_set(conn, "codebase_stamped_at",
+                        datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    finally:
+        conn.close()
+    print(f"memory: stamped {len(heads)} repo head(s) as fresh")
     return 0
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="L1 codebase memory drift check/stamp")
+    parser = argparse.ArgumentParser(description="Module-map drift check/stamp")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--stamp", action="store_true")
     args = parser.parse_args()

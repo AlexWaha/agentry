@@ -51,7 +51,7 @@ on-demand when the hypothesis or feature set still needs sharpening.
 ## Workflow
 
 1. Absorb context per `rules/pipeline.md`: handoff docs, project-context, the
-   task's spec, memory layer files named in your dispatch.
+   task's spec, the memory rows injected at dispatch.
 2. Define the hypothesis, the 3-5 features needed to test it, and the
    success/failure criteria before touching code.
 3. Scaffold the prototype (procedure: preloaded `feature-scaffold` skill):

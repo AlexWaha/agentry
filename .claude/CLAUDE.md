@@ -149,21 +149,27 @@ README), `readonly` (analyzes, never writes).
 Activate departments/agents as the project needs them. Deferred agents stay
 dormant until the CEO flips them on.
 
-## Memory Layers (inject, distill, sync)
+## Memory (query, record, distill)
 
-Three cross-agent layers live in `.claude/memory/` (contract: `memory/README.md`):
-L1 `codebase.md` (module map), L2 `lessons.md` (mistakes never to repeat),
-L3 `patterns.md` + `patterns/` (reusable code patterns).
+One store, `.claude/memory/memory.db` (SQLite + FTS5, gitignored; contract:
+`memory/README.md`), holding `lesson` rows (mistakes never to repeat), `pattern`
+rows (reusable code shapes) and `module` rows (the module map).
 
-- **Injection is automatic** (SubagentStart hooks): planning agents get L1+L3,
-  spec-developer gets L1+L2, dev/review agents get L2. When dispatching outside
-  those matchers, name the relevant layer files in the prompt yourself.
-- **Session start:** `codebase_sync.py --check` detects L1 drift against git
-  heads and instructs an update.
+- **Retrieval is automatic** (SubagentStart hooks): `tools/memory/inject.py`
+  queries the store with the dispatch text and injects the ranked matches with
+  their count, capped at 3800 bytes - not the head of a file. Planning agents get
+  module+pattern+lesson rows, spec-developer module+lesson, dev/review agents
+  lesson+pattern.
+- **Record / query by hand:** `python .claude/tools/memory/memory.py --record
+  --kind lesson --signature <tag> --trigger <when> --what <mistake> --why <cause>
+  --fix <rule>`; `--query "<topic>"`, `--export`, `--stats`.
+- **Session start:** `codebase_sync.py --check` detects module-map drift against
+  git heads and instructs an update.
 - **After every completed task** (stop-gate enforced): distill the handoff doc
-  into the layers, then `python .claude/tools/memory/update.py --stamp --task
-  task-XXXX ...` and `python .claude/tools/memory/codebase_sync.py --stamp`.
-  Procedure: `skills/self-learning` (mode: distill).
+  into rows, then `python .claude/tools/memory/update.py --stamp --task
+  task-XXXX` (refused unless the store gained a row, or `--none`) and `python
+  .claude/tools/memory/codebase_sync.py --stamp`. Procedure:
+  `skills/self-learning` (mode: distill).
 
 ## Project Context
 
@@ -226,8 +232,8 @@ radius of Z), query codegraph FIRST - one call replaces a grep-and-read chain:
 
 The index lives in `.codegraph/` at the project root (per project,
 gitignored), synced at SessionStart and by codegraph's file watcher. Full discipline:
-`rules/code-retrieval.md`. Codegraph indexes CODE only - lessons and setup
-markdown stay in agent-memory / rules.
+`rules/code-retrieval.md`. Codegraph indexes CODE only - lessons live in the
+memory store, policy in `rules/`.
 <!-- codegraph:end -->
 
 ## Task Management

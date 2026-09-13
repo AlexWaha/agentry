@@ -45,10 +45,10 @@ env/
 .claude/plans/
 .claude/specs/*
 .claude/memory/*
-.claude/agent-memory/
 .claude/project/*
 
-# Memory layer contract survives for a fresh clone.
+# Memory store contract survives for a fresh clone; memory.db itself (and any
+# --export markdown beside it) is one project's internals and stays out.
 !.claude/memory/README.md
 
 # Spec template survives for a fresh clone, same scaffolding role as

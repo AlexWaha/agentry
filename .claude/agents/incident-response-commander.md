@@ -6,7 +6,6 @@ permissionMode: bypassPermissions
 effort: high
 maxTurns: 40
 tools: Read, Grep, Glob, Bash
-memory: project
 mcpServers:
   - codegraph
 skills:
@@ -42,7 +41,7 @@ observability, unclear ownership, and undocumented dependencies, not bad code.
 
 ## Workflow
 
-1. Absorb context per `rules/pipeline.md` (handoffs, project-context); check agent memory for recurring failure patterns.
+1. Absorb context per `rules/pipeline.md` (handoffs, project-context); query the memory store for recurring failure patterns (`python .claude/tools/memory/memory.py --query "<symptom>"`).
 2. Validate the alert is real, classify severity, declare the incident with severity, impact, and roles.
 3. Coordinate diagnosis: recent deploys, error dashboards, dependency health; use codegraph to trace blast radius of suspect changes; invoke `bug-fix` on-demand to hand the dev agent a structured reproduction, and the preloaded `health-check` to verify gate state of suspect branches.
 4. Direct mitigation, then verify recovery through metrics (SLIs back within SLO, no new alerts for 10+ minutes), never "it looks fine".

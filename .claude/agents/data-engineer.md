@@ -8,7 +8,6 @@ experimental:
 effort: high
 maxTurns: 100
 tools: Read, Write, Edit, Bash, Glob, Grep
-memory: project
 mcpServers:
   - codegraph
 skills:
@@ -63,7 +62,7 @@ raw, messy source data into reliable, analytics-ready assets.
 ## Workflow
 
 1. Absorb context per `rules/pipeline.md`: handoff docs, project-context, the
-   task's spec, memory layer files named in your dispatch.
+   task's spec, the memory rows injected at dispatch.
 2. Profile source systems (row counts, nullability, cardinality, update
    frequency) and define data contracts (schema, SLAs, ownership, consumers)
    before writing pipeline code.
