@@ -7,6 +7,9 @@ here - no subprocess/git calls, no filesystem, no network.
 
 from __future__ import annotations
 
+import inspect
+import io
+import re
 import sys
 import unittest
 import unittest.mock
@@ -115,6 +118,55 @@ class IsBookkeepingTest(unittest.TestCase):
 
     def test_source_path_is_not_bookkeeping(self):
         self.assertFalse(pretool_gate.is_bookkeeping("src/app/models/user.py"))
+
+
+class OrchestratorDenyMessageTest(unittest.TestCase):
+    """The message must name every tree the predicate accepts.
+
+    orch_allowed_path() accepted .agentry/ from the FR-13 move onward while the
+    deny message still listed only .claude/ - so the gate behaved correctly and
+    then told the denied orchestrator the wrong place to write instead.
+
+    The earlier version of this test hardcoded its own prefix tuple, which
+    pinned today's three trees instead of the invariant: a FOURTH tree added to
+    the predicate passed, because the test never asked the predicate what it
+    accepts. Both assertions below now read pretool_gate.ORCH_ALLOW_PREFIXES -
+    the single definition the predicate iterates and the message formats - and
+    the second test denies the predicate any prefix of its own."""
+
+    def deny_message(self) -> str:
+        buf = io.StringIO()
+        with unittest.mock.patch.object(
+                pretool_gate, "orch_cfg", return_value={"enabled": True}), \
+                unittest.mock.patch.object(sys, "stderr", buf):
+            code = pretool_gate.orch_check_edit("src/app/models/user.py")
+        self.assertEqual(code, 2)
+        return buf.getvalue()
+
+    def test_message_names_every_tree_the_predicate_accepts(self):
+        message = self.deny_message()
+        self.assertTrue(pretool_gate.ORCH_ALLOW_PREFIXES, "allowlist must not be empty")
+        for prefix in pretool_gate.ORCH_ALLOW_PREFIXES:
+            with self.subTest(prefix=prefix):
+                self.assertTrue(pretool_gate.orch_allowed_path(prefix + "note.md"),
+                                f"predicate rejects its own allowlisted tree {prefix}")
+                self.assertIn(prefix, message,
+                              f"deny message does not name the allowlisted tree {prefix}")
+
+    def test_predicate_accepts_no_tree_outside_the_shared_tuple(self):
+        # A tree added as a branch inside orch_allowed_path() instead of to the
+        # tuple would be accepted while the message stayed silent - the exact
+        # FR-13 shape. Nothing enumerable proves its absence, so this pins the
+        # source: the only directory-prefix literals the function may contain
+        # are the ones in the shared tuple.
+        source = inspect.getsource(pretool_gate.orch_allowed_path)
+        literals = re.findall(r"""["']([^"'\n]*)["']""", source)
+        stray = sorted({s.lower() for s in literals
+                        if re.fullmatch(r"[A-Za-z0-9_.-]+/", s)
+                        and s.lower() not in pretool_gate.ORCH_ALLOW_PREFIXES})
+        self.assertEqual([], stray,
+                         f"orch_allowed_path() hardcodes tree prefix(es) {stray} outside "
+                         f"ORCH_ALLOW_PREFIXES, so the deny message cannot name them")
 
 
 class TaskFromBranchTest(unittest.TestCase):

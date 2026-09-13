@@ -1,6 +1,6 @@
 # Orchestrator / Agent System
 
-> **Adapting this template to a new project?** Start with `.claude/_onboarding.md`. It lists every placeholder to replace and every overlay to touch. Project-specific facts (product, domain, stack, architecture) live in `.claude/project/` - read those alongside this file.
+> **Adapting this template to a new project?** Start with `.claude/_onboarding.md`. It lists every placeholder to replace and every overlay to touch. Project-specific facts (product, domain, stack, architecture) live in `.agentry/project/` - read those alongside this file.
 
 ## Orchestrator Role
 
@@ -12,13 +12,13 @@ piece of work to the owning agent (roster below), **verify** gate results, and
 **Your responsibilities:**
 - Receive high-level tasks from CEO/CTO and formalize them (plan -> spec -> epic -> tasks)
 - Decompose into subtasks and delegate to department agents via the Agent tool
-- Track progress via task files in `.claude/tasks/backlog/`, `active/`, `done/` and `python .claude/tools/pipeline/state.py --show`
+- Track progress via task files in `.agentry/tasks/backlog/`, `active/`, `done/` and `python .claude/tools/pipeline/state.py --show`
 - Present results to CEO/CTO for approval at each phase gate
 - **NEVER write code, edit files, run tests, or make commits directly** - and
   this is hook-enforced, not a promise: `orchestrator_gate` (pipeline.json +
   `pretool_gate.py`) DENIES any main-thread Edit/Write or shell file-write
-  outside `.claude/`, `docs/`, `README*`, root `CLAUDE.md`. If you hit this
-  deny, the correct move is always: dispatch the owning agent.
+  outside `.claude/`, `.agentry/`, `docs/`, `README*`, root `CLAUDE.md`. If you
+  hit this deny, the correct move is always: dispatch the owning agent.
 
 ## Orchestrator Delegation Protocol (MANDATORY)
 
@@ -51,7 +51,7 @@ Every task follows this pipeline. No shortcuts.
 
 Once a task enters execution, you run it **without babysitting**. The pipeline
 state and gate checks live in deterministic hooks (`.claude/tools/pipeline/` +
-`.claude/state/run.db`), not in your context. Full contract in
+`.agentry/state/run.db`), not in your context. Full contract in
 `rules/orchestration.md`; the stage machine in `rules/pipeline.md`. The essentials:
 
 - **All questions are answered in plan mode, before execution.** Mid-pipeline you
@@ -73,7 +73,7 @@ state and gate checks live in deterministic hooks (`.claude/tools/pipeline/` +
 - **Pipelined but edit-serialized:** one task in an editing stage at a time;
   parked tasks wait for the CEO while the next ready task runs.
 - **Handoff chain:** before a new task registers, the previous completed task's
-  handoff doc must exist and validate in `.claude/tasks/handoffs/` - written by
+  handoff doc must exist and validate in `.agentry/tasks/handoffs/` - written by
   the NEXT task's assignee in its own words (forced context absorption). Enforced
   by hooks; see `rules/orchestration.md` step 0 and `tools/pipeline/handoff.py`.
 - **Memory chain:** after the handoff doc, the finished task is distilled into
@@ -91,8 +91,8 @@ state and gate checks live in deterministic hooks (`.claude/tools/pipeline/` +
 
 Every agent's full definition (frontmatter, preloaded skills, gate profile)
 lives in `.claude/agents/<name>.md`. Skills catalog: `.claude/skills/README.md`.
-Gate profiles: `dev` (writes code), `docs` (writes only .claude/, docs/,
-README), `readonly` (analyzes, never writes).
+Gate profiles: `dev` (writes code), `docs` (writes only .claude/, .agentry/,
+docs/, README), `readonly` (analyzes, never writes).
 
 **Technical department [ACTIVE with implementation work]:**
 
@@ -150,7 +150,7 @@ dormant until the CEO flips them on.
 
 ## Memory (query, record, distill)
 
-One store, `.claude/memory/memory.db` (SQLite + FTS5, gitignored; contract:
+One store, `.agentry/memory/memory.db` (SQLite + FTS5, gitignored; contract:
 `memory/README.md`), holding `lesson` rows (mistakes never to repeat), `pattern`
 rows (reusable code shapes) and `module` rows (the module map).
 
@@ -172,13 +172,13 @@ rows (reusable code shapes) and `module` rows (the module map).
 
 ## Project Context
 
-**Product, domain terminology, features, target audience, architecture summary** live in `.claude/project/project-context.md`.
+**Product, domain terminology, features, target audience, architecture summary** live in `.agentry/project/project-context.md`.
 
-**Detailed architecture** (module layout, folder structure, dependency rules specific to this stack) lives in `.claude/project/architecture.md`.
+**Detailed architecture** (module layout, folder structure, dependency rules specific to this stack) lives in `.agentry/project/architecture.md`.
 
-**API conventions** (framework-specific controller / validator / resource examples) live in `.claude/project/api-conventions.md`.
+**API conventions** (framework-specific controller / validator / resource examples) live in `.agentry/project/api-conventions.md`.
 
-**Stack, commands, environment variables, routes, placeholder values** live in `.claude/project/stack.md`.
+**Stack, commands, environment variables, routes, placeholder values** live in `.agentry/project/stack.md`.
 
 If `project/` files are missing or empty, the template has not been initialized for this project yet - see `.claude/_onboarding.md`.
 
@@ -186,23 +186,23 @@ If `project/` files are missing or empty, the template has not been initialized 
 
 **All packages, frameworks, and dependencies must be the latest stable version** compatible with the project's chosen language / framework. No pinning to old versions without CEO approval.
 
-**Everything lives in the workspace root `.claude/` directory.**
+**The harness lives in `.claude/`; the project's own work product lives in `.agentry/` at the workspace root.**
 
 | What | Where |
 |------|-------|
-| Plans | `.claude/plans/` |
-| Tasks (backlog) | `.claude/tasks/backlog/` |
-| Tasks (active) | `.claude/tasks/active/` |
-| Tasks (done) | `.claude/tasks/done/` |
-| Handoffs | `.claude/tasks/handoffs/` |
-| Memory | `.claude/memory/` |
+| Plans | `.agentry/plans/` |
+| Tasks (backlog) | `.agentry/tasks/backlog/` |
+| Tasks (active) | `.agentry/tasks/active/` |
+| Tasks (done) | `.agentry/tasks/done/` |
+| Handoffs | `.agentry/tasks/handoffs/` |
+| Memory | `.agentry/memory/` |
 | Agents | `.claude/agents/` |
 | Rules | `.claude/rules/` |
 | Skills | `.claude/skills/` |
-| Specs | `.claude/specs/` |
-| Epics | `.claude/tasks/epics/` |
+| Specs | `.agentry/specs/` |
+| Epics | `.agentry/tasks/epics/` |
 | Code knowledge graph | `.codegraph/` at project root (built by codegraph CLI, gitignored) |
-| Project overlay | `.claude/project/` |
+| Project overlay | `.agentry/project/` |
 
 ## Project Phases (Generic)
 
@@ -237,12 +237,12 @@ memory store, policy in `rules/`.
 
 ## Task Management
 
-Tasks tracked via files in `.claude/tasks/`. A task's state is the **folder**
+Tasks tracked via files in `.agentry/tasks/`. A task's state is the **folder**
 it sits in - there is no `status:` frontmatter field:
-- `.claude/tasks/backlog/task-XXXX.md` - queued, not yet started
-- `.claude/tasks/active/task-XXXX.md` - in flight, moving through the pipeline
-- `.claude/tasks/done/task-XXXX.md` - merged into `main`
-- `.claude/tasks/templates/task-template.md` - template for new tasks
+- `.agentry/tasks/backlog/task-XXXX.md` - queued, not yet started
+- `.agentry/tasks/active/task-XXXX.md` - in flight, moving through the pipeline
+- `.agentry/tasks/done/task-XXXX.md` - merged into `main`
+- `.agentry/tasks/templates/task-template.md` - template for new tasks
 
 New tasks are created directly in `backlog/` (`skills/new-task`).
 `python .claude/tools/pipeline/advance.py --task task-XXXX --type <type>` moves

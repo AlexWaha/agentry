@@ -2,7 +2,7 @@
 id: XXXX
 title: Short descriptive title
 status: draft
-plan: .claude/plans/YYYY-MM-DD-description.md
+plan: .agentry/plans/YYYY-MM-DD-description.md
 epic:
 created: YYYY-MM-DD
 author: spec-developer

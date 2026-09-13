@@ -16,7 +16,7 @@ without asking questions, then run Phase B as an interactive interview, then rep
 and folder structure. Determine: primary language + version, framework,
 backend/frontend stacks, test framework, formatter, container tool, CI tool,
 default DB, auth method, main branch, and the canonical commands (test, format,
-lint, build, dev). Read `.claude/project/stack.md` for the placeholder table.
+lint, build, dev). Read `.agentry/project/stack.md` for the placeholder table.
 
 **A2. Fill `project/stack.md`.** Write every detected value in. This file is the
 source of truth for all placeholders.
@@ -60,7 +60,7 @@ module/directory, one row in the store - `python
 and `project/architecture.md`. Lessons and patterns start empty; they accumulate
 as tasks complete. Then stamp freshness: `python
 .claude/tools/memory/codebase_sync.py --stamp`. The store contract is in
-`.claude/memory/README.md`.
+`.agentry/memory/README.md`.
 
 **A8. Verify.** Run and report:
 ```bash
@@ -68,7 +68,7 @@ grep -rE '\{\{[A-Z_]+\}\}' .claude/        # must be empty (ignore _onboarding.m
 # NOTE: pipeline.json may carry the HARNESS's own real values instead of {{...}} - this repo
 # is self-hosting, so the grep finds nothing there. See _onboarding.md section 2, the four
 # keys to replace (main_branch + the implement/test/review exit gates).
-grep -r 'PROJECT-SPECIFIC - REPLACE ME' .claude/project/   # must be empty
+grep -r 'PROJECT-SPECIFIC - REPLACE ME' .agentry/project/   # must be empty
 grep -rn 'WORKSPACE_ROOT' .claude/settings.json .claude/agents/  # must be empty; hook paths use $CLAUDE_PROJECT_DIR (leave as-is)
 grep -rnE '[A-Za-z]:/[^"]*\.claude/' .claude/settings.json .claude/agents/  # must be empty - no machine-local absolute paths
 python .claude/tools/pipeline/state.py --show               # engine loads: prints []
@@ -78,7 +78,7 @@ python .claude/tools/pipeline/state.py --show               # engine loads: prin
 
 This phase makes the agent autonomous. Ask the questions below **one decision at a
 time** (offer the default in brackets; accept it on a bare "yes"). Then write the
-answers into `.claude/pipeline.json`, replacing its `{{PLACEHOLDERS}}` with the
+answers into `.agentry/pipeline.json`, replacing its `{{PLACEHOLDERS}}` with the
 concrete values. Do not guess - this is the user's chance to shape autonomy.
 
 **B1. Pipeline stages.** "Which execution stages, in order? [implement, test,
@@ -144,21 +144,21 @@ base+naming, AI-attribution in commit messages, em/en dash, writes under the
 runtime `~/.claude/`) need no config and always run.
 
 **B9. Orchestrator gate.** The main thread is hook-denied from writing outside
-`.claude/`, `docs/`, `README*`, root `CLAUDE.md` (`orchestrator_gate` in
-`pipeline.json`). Ask: "Any extra repo-relative paths the ORCHESTRATOR itself
+`.claude/`, `.agentry/`, `docs/`, `README*`, root `CLAUDE.md`
+(`orchestrator_gate` in `pipeline.json`). Ask: "Any extra repo-relative paths the ORCHESTRATOR itself
 may write (e.g. `CHANGELOG.md`, `mkdocs.yml`)? [none]" -> write them as globs
 into `orchestrator_gate.extra_allow`. Keep `enabled: true` unless the user
 explicitly opts out of the gate.
 
 **B10. Memory + documentation chains.** Confirm the two post-task gates stay on
-[both on]: `memory.enabled` (distill every done task into `.claude/memory/`
+[both on]: `memory.enabled` (distill every done task into `.agentry/memory/`
 layers before the next task; `memory.baseline` = highest pre-existing done task
 id when adopting mid-project, else empty) and `handoff.document_latest_on_start`
 (single-task backlog requires the latest main commit documented first). Ask for
 `{{COMM_LANG}}` - the language agents use when reporting to the CEO (e.g.
 English, Russian) - and replace it in `rules/communication.md`.
 
-After the interview, write the finalized `.claude/pipeline.json` and confirm it has
+After the interview, write the finalized `.agentry/pipeline.json` and confirm it has
 no remaining `{{...}}` placeholders. Verify the engine loads it:
 ```bash
 python .claude/tools/pipeline/state.py --show       # should print [] (no runs yet)
@@ -169,7 +169,7 @@ python .claude/tools/pipeline/state.py --show       # should print [] (no runs y
 **First artifacts.** If the project starts with feature work, run the planning
 pipeline: architect plan -> `spec-developer` writes `spec-0001` -> after CEO
 approval `product-manager` runs skills/new-epic -> `epic-0001` + tasks. For an
-infrastructure/setup start, create `.claude/tasks/active/task-0001.md` directly
+infrastructure/setup start, create `.agentry/tasks/backlog/task-0001.md` directly
 via skills/new-task ("Draft architecture" or "Set up infrastructure").
 
 **Report.** Summarize: stack detected, files changed, placeholders replaced, rules

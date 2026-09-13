@@ -7,7 +7,7 @@
 **What it does:** Agentry is a deterministic orchestration harness for Claude
 Code. It runs a gated finite-state machine per task: a stage advances only
 when its exit-gate command actually passes, state lives in SQLite
-(`.claude/state/run.db`), and enforcement runs in PreToolUse and Stop hooks
+(`.agentry/state/run.db`), and enforcement runs in PreToolUse and Stop hooks
 rather than inside the model's own context. The model proposes a transition;
 only the hook scripts record one.
 
@@ -43,7 +43,7 @@ team - who wants Claude Code to keep advancing a task without being asked
 "shall I continue?", and wants each stage's pass or fail to come from a real
 command rather than a self-report. This repository is also Agentry's first
 adopter: the harness under `.claude/` is the product, and the tasks tracked
-in `.claude/tasks/` are the harness improving itself.
+in `.agentry/tasks/` are the harness improving itself.
 
 ## Architecture
 
@@ -51,11 +51,11 @@ Agentry has no application server and no request/response cycle. Its
 architecture is the pipeline itself - the components that sit between the
 CEO's instruction and the model's next tool call:
 
-- **Stage machine** (`.claude/pipeline.json` +
+- **Stage machine** (`.agentry/pipeline.json` +
   `.claude/tools/pipeline/advance.py`) - declares each pipeline's stages,
   owning agent, and exit-gate command, and runs that command before
   recording an advance.
-- **Run state** (`.claude/state/run.db`, SQLite) - one row per task in
+- **Run state** (`.agentry/state/run.db`, SQLite) - one row per task in
   flight: pipeline, stage, stage status, and which approvals are still
   outstanding.
 - **Hooks** (`.claude/tools/pipeline/pretool_gate.py`, `agent_gate.py`,
@@ -64,7 +64,7 @@ CEO's instruction and the model's next tool call:
   stage, and scope what each agent profile (`dev`, `readonly`, `docs`) may
   touch; the Stop hook keeps a session advancing in-flight work instead of
   asking what to do next.
-- **Memory store** (`.claude/memory/memory.db`, SQLite + FTS5) - lesson,
+- **Memory store** (`.agentry/memory/memory.db`, SQLite + FTS5) - lesson,
   pattern, and module rows, queried automatically at the start of every
   agent dispatch.
 - **Rules and agents** (`.claude/rules/`, `.claude/agents/`) - the policy
@@ -94,7 +94,7 @@ out of scope for this task (FR-12 names only this file).
 - `gate` - the actual command (test suite, formatter, lint) that decides
   whether a stage passed; "green" means this command's real output, read
   this session, not an assumption.
-- `handoff doc` - the file in `.claude/tasks/handoffs/` that the next task's
+- `handoff doc` - the file in `.agentry/tasks/handoffs/` that the next task's
   assignee writes about the previous task, in their own words, before their
   own task can register. Validation checks structure and length (six named
   sections, no scaffold marker, minimum length), not whether the content is

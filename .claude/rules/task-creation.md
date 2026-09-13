@@ -1,6 +1,6 @@
 # Task Creation
 
-Rules governing how new tasks are decomposed and written. Applies to all task files, wherever they currently sit - `.claude/tasks/backlog/` (queued), `active/` (in flight), or `done/` (merged). New tasks are created directly in `.claude/tasks/backlog/`; there is no `status:` field, the folder is the state.
+Rules governing how new tasks are decomposed and written. Applies to all task files, wherever they currently sit - `.agentry/tasks/backlog/` (queued), `active/` (in flight), or `done/` (merged). New tasks are created directly in `.agentry/tasks/backlog/`; there is no `status:` field, the folder is the state.
 
 ---
 
@@ -95,7 +95,7 @@ When a task is born from an epic (skills/new-epic):
   `tasks: []` list carries the task id back - bidirectional, discoverable from
   either side
 - Acceptance criteria cite spec FR ids (`- [ ] (FR-2) ...`) - the Spec Trace
-- Tasks are created as files in `.claude/tasks/backlog/`; only the CEO's
+- Tasks are created as files in `.agentry/tasks/backlog/`; only the CEO's
   approval of the epic breakdown - and then `advance.py` starting the task -
   moves them to `active/`. The Stop hook only reads `backlog/`, and only takes
   from it when the approvals level grants the `take` checkpoint, so nothing

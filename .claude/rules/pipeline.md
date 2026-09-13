@@ -4,25 +4,25 @@ Every task travels a gated finite-state machine. No stage is skipped, and a stag
 is "done" only when its exit gate passes - verified by deterministic code
 (`.claude/tools/pipeline/`), not asserted by the model. The enforcement mechanism
 and the autonomy contract live in `orchestration.md`; this file is the stage map.
-Gate command details are resolved from `.claude/project/stack.md` and declared in
-`.claude/pipeline.json`.
+Gate command details are resolved from `.agentry/project/stack.md` and declared in
+`.agentry/pipeline.json`.
 
 ## Two pipelines
 
 Both are gated stage machines driven by the same `advance.py`, over different
 stages (`pipeline.json` `pipelines.build` / `pipelines.plan`). Which one a new
-task follows is picked by the session mode (`.claude/state/mode`, see
+task follows is picked by the session mode (`.agentry/state/mode`, see
 `skills/pipeline/SKILL.md`) unless `advance.py --pipeline` is passed
 explicitly. Neither pipeline asks the CEO a clarifying question mid-flow - the
 `plan` pipeline is where all questions get answered, before any task registers
 on `build`. `pipelines.plan`'s stock stages are `formalize -> draft ->
 plan-review -> approval -> breakdown -> done`; this project layers its richer
 epic/spec-developer workflow on top of that skeleton (knowledge -> plan
-(`architect`) -> spec (`spec-developer`, `.claude/specs/`, `status: draft`) ->
+(`architect`) -> spec (`spec-developer`, `.agentry/specs/`, `status: draft`) ->
 epic + task breakdown (`product-manager` via skills/new-epic, support:
 `sprint-prioritizer`) -> CEO approval, spec flips to `approved`). Output: an
-approved spec, an epic in `.claude/tasks/epics/`, and task files queued in
-`.claude/tasks/backlog/`. This is where ALL questions are answered - a spec
+approved spec, an epic in `.agentry/tasks/epics/`, and task files queued in
+`.agentry/tasks/backlog/`. This is where ALL questions are answered - a spec
 cannot be approved with a non-empty Open Questions section.
 
 Threshold: spec + epic are MANDATORY for multi-task work. A single-task
@@ -55,10 +55,10 @@ adds `performance-benchmarker` in review.
 
 Every dispatched agent reads, in this order, BEFORE producing anything:
 
-1. The last 1-3 handoff docs in `.claude/tasks/handoffs/` - what the previous
+1. The last 1-3 handoff docs in `.agentry/tasks/handoffs/` - what the previous
    tasks shipped, decided, and warned about.
-2. `.claude/project/project-context.md` - the overall project context.
-3. The task's spec (`spec:` in the task frontmatter -> `.claude/specs/`), or the
+2. `.agentry/project/project-context.md` - the overall project context.
+3. The task's spec (`spec:` in the task frontmatter -> `.agentry/specs/`), or the
    task file's acceptance criteria when `spec: none`.
 4. Any `## CEO Review Feedback` sections at the end of the task file - comments
    the CEO recorded when sending the task back from the commit checkpoint; each
@@ -90,7 +90,7 @@ A pasted task description fails validation (`handoff.py --check`).
   that also carries backend code is not green until the backend test + formatter
   pass too. A passing subset is not a pass.
 - **Handoff-gated pickup.** Before a new task registers, the previous completed
-  task must have a valid handoff doc in `.claude/tasks/handoffs/`, written by the
+  task must have a valid handoff doc in `.agentry/tasks/handoffs/`, written by the
   NEW task's assignee in its own words - forced context absorption. Enforced by
   `advance.py`, `stop_gate.py` and (hard_edit_gate) `pretool_gate.py`; details in
   `orchestration.md` step 0.

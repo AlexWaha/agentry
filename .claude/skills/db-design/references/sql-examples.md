@@ -3,7 +3,7 @@
 Reference examples for lakehouse pipeline engineering: Spark + Delta Lake
 ingestion, dbt data quality contracts, Great Expectations validation, and
 Kafka streaming. All snippets are `[EXAMPLE - <tool>]` - adapt to the
-project's actual stack per `.claude/project/stack.md`.
+project's actual stack per `.agentry/project/stack.md`.
 
 ## Spark Pipeline (PySpark + Delta Lake)
 

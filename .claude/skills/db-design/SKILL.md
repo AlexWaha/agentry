@@ -9,7 +9,7 @@ allowed-tools: Read, Grep, Glob, Write, Edit, Bash
 Design a complete database schema from product requirements and API
 contracts: entity definitions, relationships, indexes, an ER diagram, and a
 migration execution plan. Concrete migration CLI commands and column type
-conventions live in `.claude/project/stack.md`.
+conventions live in `.agentry/project/stack.md`.
 
 ## Steps
 

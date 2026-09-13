@@ -8,7 +8,7 @@ allowed-tools: Read, Grep, Glob, Write, Edit, Bash
 
 RED-GREEN discipline: a bug is only fixed when a test that reproduced it turns
 green and nothing else broke. Concrete commands (`{{TEST_CMD}}`,
-`{{FORMAT_CMD}}`) live in `.claude/project/stack.md`.
+`{{FORMAT_CMD}}`) live in `.agentry/project/stack.md`.
 
 ## Steps
 

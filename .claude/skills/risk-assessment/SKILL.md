@@ -21,10 +21,10 @@ plans for the highest risks.
    `docs/technical/architecture.md`, `docs/technical/tech-stack.md`,
    `docs/finance/financial-model.md`, `docs/market/market-research.md`,
    `docs/market/competitive-landscape.md` where they exist. Glob
-   `.claude/tasks/active/*.md` and `.claude/tasks/done/*.md`, parse each
+   `.agentry/tasks/active/*.md` and `.agentry/tasks/done/*.md`, parse each
    file's YAML frontmatter (status, assignee, depends_on, epic, spec) for
    current risk signals such as stalled or blocked tasks. Cross-reference
-   `.claude/tasks/epics/*.md` for epic-level status. Run
+   `.agentry/tasks/epics/*.md` for epic-level status. Run
    `python .claude/tools/pipeline/state.py --resume` for in-flight pipeline
    state. A missing context file is itself a risk signal (incomplete
    planning) - note it.

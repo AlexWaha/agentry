@@ -19,11 +19,11 @@ After ANY of the following, update the knowledge base immediately - same session
 |---------|---------------|
 | Generalizable coding/architecture mistake | `.claude/rules/<area>.md` (add a "Common mistakes" or "Pre-flight checks" subsection) |
 | Agent produced wrong output / missed step | `.claude/agents/<agent>.md` (tighten instructions) |
-| Tool/API quirk specific to this project | `.claude/project/` overlay (stack.md or a new "Quirks" section) |
-| External library behavior | `.claude/project/` overlay or rules file for that domain |
-| Personal preference / workflow style | `.claude/project/` overlay (project operational fact) or `.claude/rules/<area>.md` (generalizable norm) |
+| Tool/API quirk specific to this project | `.agentry/project/` overlay (stack.md or a new "Quirks" section) |
+| External library behavior | `.agentry/project/` overlay or rules file for that domain |
+| Personal preference / workflow style | `.agentry/project/` overlay (project operational fact) or `.claude/rules/<area>.md` (generalizable norm) |
 
-> **STRICT - never store project knowledge in the runtime/home memory dir.** Every lesson, fact, preference, and workflow note lives INSIDE the project (`.claude/rules/`, `.claude/project/`, or the memory store `.claude/memory/memory.db`), next to the code it is about. NEVER write project knowledge to the host/runtime memory location (e.g. a per-project dir under the agent host's home `.claude/projects/.../memory/`) - it is machine-local, uncommitted, and lost on reinstall or when working from another machine. This mirrors the global file-storage rule. If your runtime auto-creates a home memory file, treat it as a redirect stub only: it must contain nothing but a pointer to the in-project locations above.
+> **STRICT - never store project knowledge in the runtime/home memory dir.** Every lesson, fact, preference, and workflow note lives INSIDE the project (`.claude/rules/`, `.agentry/project/`, or the memory store `.agentry/memory/memory.db`), next to the code it is about. NEVER write project knowledge to the host/runtime memory location (e.g. a per-project dir under the agent host's home `.claude/projects/.../memory/`) - it is machine-local, uncommitted, and lost on reinstall or when working from another machine. This mirrors the global file-storage rule. If your runtime auto-creates a home memory file, treat it as a redirect stub only: it must contain nothing but a pointer to the in-project locations above.
 
 ### Format
 
@@ -39,8 +39,8 @@ No vague "be careful with X". Bad: "be careful with services". Good: "before cre
 ## The memory store (two-tier)
 
 Project memory is one SQLite store with an FTS5 index:
-`.claude/memory/memory.db`, holding `lesson`, `pattern` and `module` rows.
-Contract and CLI: `.claude/memory/README.md`. Record with:
+`.agentry/memory/memory.db`, holding `lesson`, `pattern` and `module` rows.
+Contract and CLI: `.agentry/memory/README.md`. Record with:
 
 ```bash
 python .claude/tools/memory/memory.py --record --kind lesson \
@@ -68,7 +68,7 @@ Pick the tier when recording a lesson:
 The `self-learning` skill standardizes the record / recall / distill procedure -
 invoke it instead of free-handing the format.
 
-**Guardrails:** the store is NOT committed. `.claude/memory/` is gitignored,
+**Guardrails:** the store is NOT committed. `.agentry/memory/` is gitignored,
 because it holds one project's internals and this template ships publicly. Two
 consequences to plan around: it does not travel to another machine or survive a
 fresh clone, so back it up with the rest of the working tree if it matters to

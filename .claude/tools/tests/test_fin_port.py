@@ -755,5 +755,38 @@ class NarrowedTestRunTest(unittest.TestCase):
             passthru.assert_called_once()
 
 
+class DocsProfileWritePathsTest(unittest.TestCase):
+    """The docs profile writes the work product AND the harness config.
+
+    FR-13 moved tasks, handoffs, specs and plans to .agentry/ while rules/,
+    skills/ and agents/ stayed in .claude/. is_docs_path() kept only the old
+    tree, so every docs agent was denied its own handoff doc - which then raised
+    handoff debt and froze edits tree-wide."""
+
+    def test_the_work_product_tree_is_writable(self):
+        for path in (".agentry/tasks/handoffs/task-0008.md",
+                     ".agentry/specs/spec-0001.md",
+                     ".agentry/tasks/backlog/task-0010.md",
+                     r".agentry\tasks\handoffs\task-0008.md"):
+            with self.subTest(path=path):
+                self.assertEqual(0, agent_gate.handle_docs("Write", {"file_path": path}))
+
+    def test_the_harness_tree_is_still_writable(self):
+        # The regression the fix could introduce: .agentry/ ADDED, not substituted.
+        for path in (".claude/rules/git-workflow.md",
+                     ".claude/skills/new-task/SKILL.md",
+                     ".claude/agents/reviewer.md",
+                     "docs/technical/architecture.md",
+                     "README.md"):
+            with self.subTest(path=path):
+                self.assertEqual(0, agent_gate.handle_docs("Write", {"file_path": path}))
+
+    def test_application_source_outside_both_trees_is_denied(self):
+        for path in ("src/services/OrderService.php", "app/main.py",
+                     "frontend/src/App.tsx"):
+            with self.subTest(path=path):
+                self.assertEqual(2, agent_gate.handle_docs("Edit", {"file_path": path}))
+
+
 if __name__ == "__main__":
     unittest.main()

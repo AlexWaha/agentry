@@ -1,6 +1,6 @@
 ---
 name: new-epic
-description: Create an epic file under .claude/tasks/epics/ from an approved spec and decompose it into linked task files with bidirectional depends_on. Use when a spec-developer's spec has status approved and needs breaking into tasks, when the CEO says "turn this spec into tasks" or "plan the epic", or when a product-manager is starting sprint planning for a new spec.
+description: Create an epic file under .agentry/tasks/epics/ from an approved spec and decompose it into linked task files with bidirectional depends_on. Use when a spec-developer's spec has status approved and needs breaking into tasks, when the CEO says "turn this spec into tasks" or "plan the epic", or when a product-manager is starting sprint planning for a new spec.
 allowed-tools: Read, Grep, Glob, Write
 ---
 
@@ -12,22 +12,22 @@ last planning step before the CEO releases work to the execution pipeline.
 
 ## Preconditions
 
-1. The spec exists in `.claude/specs/` with `status: approved`. A draft spec
+1. The spec exists in `.agentry/specs/` with `status: approved`. A draft spec
    MUST NOT be decomposed - send it back to the spec-developer / CEO instead.
 2. The spec's Open Questions section is empty.
-3. `.claude/tasks/epics/` and `.claude/tasks/templates/epic-template.md` exist.
+3. `.agentry/tasks/epics/` and `.agentry/tasks/templates/epic-template.md` exist.
 
 ## Process
 
 ### Step 1: Number the epic
 
-Highest existing id across `.claude/tasks/epics/` plus 1, zero-padded to 4
+Highest existing id across `.agentry/tasks/epics/` plus 1, zero-padded to 4
 digits. Epics and tasks have INDEPENDENT number sequences.
 
 ### Step 2: Create the epic file
 
-Copy `.claude/tasks/templates/epic-template.md` to
-`.claude/tasks/epics/epic-XXXX-<slug>.md`. Fill frontmatter (`spec:` points to
+Copy `.agentry/tasks/templates/epic-template.md` to
+`.agentry/tasks/epics/epic-XXXX-<slug>.md`. Fill frontmatter (`spec:` points to
 the approved spec id) and the Objective / Sequencing / Out of Scope sections
 from the spec. `status: planned`.
 

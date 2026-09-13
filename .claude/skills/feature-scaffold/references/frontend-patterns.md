@@ -4,7 +4,7 @@ Reference examples for frontend feature scaffolding: web components, mobile
 components, shared state/data fetching, the API client, offline-first sync,
 push notifications, deep linking, and component tests. All snippets are
 `[EXAMPLE - <stack>]` - adapt names and idioms to the project's actual stack
-per `.claude/project/stack.md` and `.claude/project/architecture.md`.
+per `.agentry/project/stack.md` and `.agentry/project/architecture.md`.
 
 ## Web Components
 

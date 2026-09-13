@@ -6,7 +6,7 @@ allowed-tools: Read, Grep, Glob, Bash
 
 # Health Check
 
-Run the full quality gate to verify code is production-ready; every check must pass before code is committed. Concrete commands (`{{FORMAT_CMD}}`, `{{LINT_CMD}}`, `{{TYPECHECK_CMD}}`, `{{TEST_CMD}}`) live in `.claude/project/stack.md`. The same chain runs in CI, so keep local and CI commands identical - "passes locally" should mean "passes in CI."
+Run the full quality gate to verify code is production-ready; every check must pass before code is committed. Concrete commands (`{{FORMAT_CMD}}`, `{{LINT_CMD}}`, `{{TYPECHECK_CMD}}`, `{{TEST_CMD}}`) live in `.agentry/project/stack.md`. The same chain runs in CI, so keep local and CI commands identical - "passes locally" should mean "passes in CI."
 
 ## Steps
 

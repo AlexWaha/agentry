@@ -10,9 +10,9 @@ Record what went wrong so it never recurs, capture patterns worth reusing, and
 recall past lessons before repeating a risky action. Modes: record, distill,
 recall.
 
-Everything lands in one store: `.claude/memory/memory.db` (SQLite + FTS5), with
+Everything lands in one store: `.agentry/memory/memory.db` (SQLite + FTS5), with
 `lesson`, `pattern` and `module` rows. Contract and CLI:
-`.claude/memory/README.md`. The CLI is
+`.agentry/memory/README.md`. The CLI is
 `python .claude/tools/memory/memory.py`, referred to below as `$M`.
 
 ## Two tiers (where a lesson lands)
@@ -49,7 +49,7 @@ python $M --record --kind lesson \
 
 The stop gate blocks the next task until the finished task is distilled:
 
-1. Read the task's handoff doc (`.claude/tasks/handoffs/<task>.md`).
+1. Read the task's handoff doc (`.agentry/tasks/handoffs/<task>.md`).
 2. Gotchas and lessons -> `--kind lesson`; code used more than once ->
    `--kind pattern`; touched modules -> `--kind module` (recording a known path
    updates that row).

@@ -9,7 +9,7 @@ allowed-tools: Read, Grep, Glob, Write, Edit, Bash
 Create database migrations safely: never edit an existing migration, always
 create a new one, and keep every schema change reversible. Concrete migration
 tool (`{{MIGRATION_TOOL}}`) and database engine (`{{DEFAULT_DB}}`) live in
-`.claude/project/stack.md`.
+`.agentry/project/stack.md`.
 
 ## Steps
 

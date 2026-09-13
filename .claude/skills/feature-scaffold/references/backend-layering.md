@@ -3,7 +3,7 @@
 Reference examples for the universal endpoint pipeline:
 `Request -> Validator (authorization + field rules) -> Service (business logic) -> Resource/DTO (response)`.
 All snippets are `[EXAMPLE - <stack>]` - adapt names and idioms to the project's
-actual stack per `.claude/project/stack.md` and `.claude/project/architecture.md`.
+actual stack per `.agentry/project/stack.md` and `.agentry/project/architecture.md`.
 
 ## Layer responsibilities
 

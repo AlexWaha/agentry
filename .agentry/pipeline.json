@@ -17,7 +17,7 @@
     "baseline": ""
   },
   "orchestrator_gate": {
-    "_comment": "Hard gate on the MAIN THREAD (orchestrator): Edit/Write and shell file-writes are denied outside .claude/, docs/, README*, root CLAUDE.md. The orchestrator only formalizes tasks, delegates, verifies and synthesizes - it never authors code. Subagent tool calls are exempt (agent_gate.py profiles govern them). extra_allow: repo-relative globs to whitelist per project (e.g. \"CHANGELOG.md\"). enabled=false disables the gate.",
+    "_comment": "Hard gate on the MAIN THREAD (orchestrator): Edit/Write and shell file-writes are denied outside .claude/, .agentry/, docs/, README*, root CLAUDE.md. The orchestrator only formalizes tasks, delegates, verifies and synthesizes - it never authors code. Subagent tool calls are exempt (agent_gate.py profiles govern them). extra_allow: repo-relative globs to whitelist per project (e.g. \"CHANGELOG.md\"). enabled=false disables the gate.",
     "enabled": true,
     "extra_allow": []
   },

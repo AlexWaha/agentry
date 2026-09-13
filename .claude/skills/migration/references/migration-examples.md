@@ -2,7 +2,7 @@
 
 Concrete code for the patterns referenced from `SKILL.md`. Adapt to the
 project's actual migration tool (`{{MIGRATION_TOOL}}`) per
-`.claude/project/stack.md`.
+`.agentry/project/stack.md`.
 
 ## Pattern A - Create Table
 

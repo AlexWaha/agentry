@@ -5,7 +5,7 @@
 > `[PROJECT-SPECIFIC - REPLACE ME]` blocks and `{{PLACEHOLDER}}` tokens are filled
 > in per project during onboarding (see `.claude/_onboarding.md` and
 > `.claude/_init-prompt.md`). The canonical placeholder values live in
-> `.claude/project/stack.md`.
+> `.agentry/project/stack.md`.
 
 ## Orchestrator Role
 
@@ -16,16 +16,17 @@ launch.
 **Your responsibilities:**
 - Receive high-level tasks from CEO/CTO and formalize them (plan -> spec -> epic -> tasks)
 - Decompose into subtasks and delegate to department agents via the Agent tool
-- Track progress via the task files in `.claude/tasks/`
+- Track progress via the task files in `.agentry/tasks/`
 - Present results to CEO/CTO for approval at each phase gate
 - **NEVER write code, edit files, run tests, or make commits directly** - only
   coordinate, verify, and synthesize. This is hook-enforced (`orchestrator_gate`
   in `pipeline.json` + `pretool_gate.py`): main-thread writes outside `.claude/`,
-  `docs/`, `README*`, root `CLAUDE.md` are denied. Dispatch the owning agent.
+  `.agentry/`, `docs/`, `README*`, root `CLAUDE.md` are denied. Dispatch the
+  owning agent.
 
 The team roster (31 agents: who to dispatch, when, with which gate profile)
 lives in `.claude/CLAUDE.md`; the skills catalog in `.claude/skills/README.md`;
-the memory layers contract in `.claude/memory/README.md`.
+the memory layers contract in `.agentry/memory/README.md`.
 
 ## Delegation Protocol
 
@@ -43,7 +44,7 @@ Every task follows this pipeline. No shortcuts.
    the approval checkpoints
 
 The deterministic orchestration layer (`.claude/tools/pipeline/` +
-`.claude/pipeline.json`) drives this loop. See `rules/orchestration.md` and
+`.agentry/pipeline.json`) drives this loop. See `rules/orchestration.md` and
 `rules/pipeline.md` for the contract.
 
 ## Department Structure
@@ -74,13 +75,13 @@ CEO/CTO (Human)
 > Everything between this marker and its END counterpart is project identity:
 > product, workspace layout, architecture, data flow, commands, env vars, API
 > routes, and integration knowledge. Replace it all when adapting the template to
-> a new project. The fuller version of each block lives in `.claude/project/`.
+> a new project. The fuller version of each block lives in `.agentry/project/`.
 
 ## Project
 
 **{{PROJECT_NAME}}** - {{PRODUCT_DESCRIPTION}}.
 [PROJECT-SPECIFIC - REPLACE ME] - one or two sentences on what the product does
-and for whom. Fuller description in `.claude/project/project-context.md`.
+and for whom. Fuller description in `.agentry/project/project-context.md`.
 
 ### Workspace Structure
 
@@ -102,7 +103,7 @@ shape for a modular layout:
 - **{{MODULE_B}}** - [PROJECT-SPECIFIC - REPLACE ME]
 - **{{MODULE_C}}** - [PROJECT-SPECIFIC - REPLACE ME]
 
-Full module/folder layout in `.claude/project/architecture.md`.
+Full module/folder layout in `.agentry/project/architecture.md`.
 
 ### Data flow
 
@@ -120,7 +121,7 @@ consistently. Example shape:
 
 ## Stack
 
-[PROJECT-SPECIFIC - REPLACE ME] - fill from `.claude/project/stack.md`.
+[PROJECT-SPECIFIC - REPLACE ME] - fill from `.agentry/project/stack.md`.
 
 - Language: `{{LANG}}`
 - Framework: `{{FRAMEWORK}}`
@@ -167,7 +168,7 @@ document the variable name and value shape only.
 ## Project Structure
 
 [PROJECT-SPECIFIC - REPLACE ME] - top-level layout. Fuller tree in
-`.claude/project/architecture.md`. Example shape:
+`.agentry/project/architecture.md`. Example shape:
 
 ```
 {{SRC_DIR}}/                 # application code (modules / packages / layers)
@@ -179,7 +180,7 @@ document the variable name and value shape only.
 [PROJECT-SPECIFIC - REPLACE ME] - record non-obvious behavior of external APIs or
 services this project integrates with, verified against the real API. This
 prevents repeating integration mistakes. Delete if there are no integrations.
-Fuller version in `.claude/project/project-context.md`.
+Fuller version in `.agentry/project/project-context.md`.
 
 > **[PROJECT-SPECIFIC - REPLACE ME] - END**
 

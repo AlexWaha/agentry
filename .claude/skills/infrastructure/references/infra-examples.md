@@ -1,6 +1,6 @@
 # Infrastructure Examples
 
-Full config examples referenced by the `infrastructure` skill. All snippets are illustrative - adapt image names, ports, and volume paths to `.claude/project/stack.md`.
+Full config examples referenced by the `infrastructure` skill. All snippets are illustrative - adapt image names, ports, and volume paths to `.agentry/project/stack.md`.
 
 ## Service Roles
 

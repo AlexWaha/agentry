@@ -14,14 +14,14 @@ gate results, and **synthesize** reports back to the CEO. It NEVER authors
 code, tests, or application files - and this is no longer a promise: the
 `orchestrator_gate` block in `pipeline.json` wires a deterministic PreToolUse
 deny (`pretool_gate.py`) for any main-thread Edit/Write or shell file-write
-outside the bookkeeping allowlist (`.claude/`, `docs/`, `README*`, root
-`CLAUDE.md`). Subagents are exempt - their own `agent_gate.py` profiles govern
+outside the bookkeeping allowlist (`.claude/`, `.agentry/`, `docs/`, `README*`,
+root `CLAUDE.md`). Subagents are exempt - their own `agent_gate.py` profiles govern
 them. If the orchestrator hits this deny, the correct move is always the same:
 dispatch the owning agent.
 
 ## Memory in every dispatch
 
-Project memory is one queried store, `.claude/memory/memory.db` (SQLite + FTS5,
+Project memory is one queried store, `.agentry/memory/memory.db` (SQLite + FTS5,
 see `memory/README.md`), holding `lesson`, `pattern` and `module` rows.
 SubagentStart hooks query it with the dispatch text and inject the ranked
 matches per agent type automatically - nothing to name in the prompt. When a
@@ -51,20 +51,20 @@ context-absorption chain from `pipeline.md`.
 
 ## State outside the model
 
-- `.claude/state/run.db` (SQLite, gitignored) - one row per task in flight:
+- `.agentry/state/run.db` (SQLite, gitignored) - one row per task in flight:
   `pipeline` (`build` or `plan`), `stage`, `stage_status`, `awaiting_human`,
   `commit_approved`, `push_approved`, `retries`, `continuations`. This is the
   single source of truth for where a task is. Inspect with
   `python .claude/tools/pipeline/state.py --show`.
-- `.claude/pipeline.json` - the declarative stage machine, split into
+- `.agentry/pipeline.json` - the declarative stage machine, split into
   `pipelines.build` (implement -> test -> review -> ready -> done) and
   `pipelines.plan` (formalize -> draft -> plan-review -> approval ->
   breakdown -> done): stages, owner agent, allowed tools, and the exit-gate
   command per stage. Finalized by onboarding.
-- `.claude/state/mode` - one word (`build`/`plan`/`talk`) picking WHICH flow a
+- `.agentry/state/mode` - one word (`build`/`plan`/`talk`) picking WHICH flow a
   newly registered task follows. `advance.py` reads it via `mode.py` unless
   `--pipeline` is passed explicitly. See `skills/pipeline/SKILL.md`.
-- `.claude/state/approvals` - one word (`manual`/`assisted`/`auto`) picking how
+- `.agentry/state/approvals` - one word (`manual`/`assisted`/`auto`) picking how
   many checkpoints pass without the CEO. Read via `approvals.py`. Never grants
   merging into `main`, moving a task to `done`, or answering planning questions.
 - `PIPELINE_LANE` (environment variable, optional) - the name of an independent
@@ -76,7 +76,7 @@ context-absorption chain from `pipeline.md`.
   as before lanes existed. A lane holds its OWN runs: commit and push in the
   same lane the task registered in, or the gate refuses (it fails closed on a
   missing run row) with the lane named in the message.
-- A task's state is the **folder** it sits in - `.claude/tasks/backlog/`,
+- A task's state is the **folder** it sits in - `.agentry/tasks/backlog/`,
   `active/`, or `done/` - not a `status:` frontmatter field. There is nothing to
   drift out of sync with the file's actual location.
 
@@ -85,13 +85,13 @@ context-absorption chain from `pipeline.md`.
 | Event | Script | What it enforces |
 |-------|--------|------------------|
 | `SessionStart` | `state.py --resume` | Injects in-flight runs so a new session resumes, not restarts. |
-| `PreToolUse` (Bash\|Edit\|Write) | `pretool_gate.py` | Denies `git commit` until commit is approved, `git push` until push is approved, any push to the protected branch, and code edits while a task is in the read-only `review` stage. Also **generic gates** (no config): work-branch name must be `<type>/task-<id>` and be cut from `main`; no AI-authorship trailer in commit messages; no em/en dash in written content; no writes under the runtime `~/.claude/` (exception: `~/.claude/plans/` - the harness's own plan-mode scratch area). Plus **stack-configured gates** from `pipeline.json` `gates` (filled at onboarding): destructive-command deny, live-REPL write deny, and optional `/dev/null` redirect deny. With `handoff.hard_edit_gate` on, code edits are also frozen while handoff debt exists and no task is mid-stage. Bookkeeping under `.claude/` and `docs/` is otherwise allowed. |
+| `PreToolUse` (Bash\|Edit\|Write) | `pretool_gate.py` | Denies `git commit` until commit is approved, `git push` until push is approved, any push to the protected branch, and code edits while a task is in the read-only `review` stage. Also **generic gates** (no config): work-branch name must be `<type>/task-<id>` and be cut from `main`; no AI-authorship trailer in commit messages; no em/en dash in written content; no writes under the runtime `~/.claude/` (exception: `~/.claude/plans/` - the harness's own plan-mode scratch area). Plus **stack-configured gates** from `pipeline.json` `gates` (filled at onboarding): destructive-command deny, live-REPL write deny, and optional `/dev/null` redirect deny. With `handoff.hard_edit_gate` on, code edits are also frozen while handoff debt exists and no task is mid-stage. Bookkeeping under `.claude/`, `.agentry/` and `docs/` is otherwise allowed. |
 | `Stop` | `stop_gate.py` | The non-stop engine. Blocks the stop and feeds back the next instruction while any task is advanceable or a ready backlog task remains. Reads the queue from `tasks/backlog/`, not a `status:` field, and only picks up a new task when the current approvals level grants the `take` checkpoint. **Blocks starting a new task while any completed task lacks its handoff doc** - the instruction it feeds back is "write the handoff first". Before idling it also **reconciles status drift**: a merged task file still in `tasks/active/` (its run reached `done`, or `main` carries its `[task-id]` tag) is moved to `tasks/done/`, and a run whose file already left `active/` is closed - so file state and `run.db` never rot. Allows the stop only when every task is parked at a checkpoint, blocked, or done. |
 
 Two more enforcement points live inside `advance.py` (not hooks, but deterministic gates on the transition it authorizes):
 
 - **Spec gate (registration):** a task may only ENTER the pipeline when its frontmatter names an `approved` spec via `spec: <id>` - or explicitly opts out with `spec: none` + a one-line reason. No silent improvisation: formalize -> plan -> spec -> task.
-- **Handoff gate (registration):** a new task is refused while ANY completed task above `handoff.baseline` (pipeline.json) lacks a valid handoff doc in `.claude/tasks/handoffs/`. The invariant is "every done task documented before any subsequent registration", not strict N -> N+1 adjacency (the pipeline is edit-serialized but pipelined, so task N+1 may register while task N is still parked at `ready`). Validation, scaffolding and the CEO waiver live in `tools/pipeline/handoff.py`.
+- **Handoff gate (registration):** a new task is refused while ANY completed task above `handoff.baseline` (pipeline.json) lacks a valid handoff doc in `.agentry/tasks/handoffs/`. The invariant is "every done task documented before any subsequent registration", not strict N -> N+1 adjacency (the pipeline is edit-serialized but pipelined, so task N+1 may register while task N is still parked at `ready`). Validation, scaffolding and the CEO waiver live in `tools/pipeline/handoff.py`.
 - **Backlog -> active on start:** `advance.py` itself moves the task file `backlog/ -> active/` when a task first registers - there is no separate "take" step for the model to do by hand.
 - **Merge-gated done:** a task reaches `done` only when `git_state.py` confirms `main` carries it (branch merged, or a `[task-id]` commit on `main`) - not when the branch was merely pushed. Until then `advance.py` parks the task saying a merge is still needed, and re-running it later is what actually moves the file `active/ -> done/`.
 
@@ -106,9 +106,9 @@ For each task, drive the deterministic FSM - never hand-wave a stage as done:
    reports debt, dispatch the NEXT task's assignee to write the handoff doc for the
    completed task BEFORE registering anything: scaffold with `handoff.py --for
    task-XXXX`, then the agent fills every section of
-   `.claude/tasks/handoffs/task-XXXX.md` in its own words (from the done task file,
+   `.agentry/tasks/handoffs/task-XXXX.md` in its own words (from the done task file,
    its merge diff on main, and the gate log), reading
-   `.claude/project/project-context.md` and its OWN task's spec first. The writing
+   `.agentry/project/project-context.md` and its OWN task's spec first. The writing
    IS the context absorption. `advance.py` refuses registration and the Stop hook
    blocks the start message until the doc validates. `handoff.py --waive` is the
    CEO-approved escape hatch - orchestrator-only, run it only after the CEO
@@ -127,8 +127,8 @@ For each task, drive the deterministic FSM - never hand-wave a stage as done:
    work, senior-backend-dev for backend, etc. `advance.py` prints the resolved
    name; a task whose stack does not match its assignee is a task-creation defect.
    Every `implement` dispatch prompt MUST instruct the agent to read, before any
-   code: (a) the last 1-3 docs in `.claude/tasks/handoffs/`, (b)
-   `.claude/project/project-context.md`, (c) the task's spec (`spec:` frontmatter).
+   code: (a) the last 1-3 docs in `.agentry/tasks/handoffs/`, (b)
+   `.agentry/project/project-context.md`, (c) the task's spec (`spec:` frontmatter).
 3. **Advance.** When the agent reports done, run `advance.py --task task-XXXX`.
    The script runs the stage's exit gate itself and only advances on a real pass.
    On failure it bumps `retries` and tells you to fix and re-run; after the
@@ -165,7 +165,7 @@ Autonomy is pipelined: while one task waits at a checkpoint, the orchestrator
 starts the next ready task instead of idling. But **at most one task occupies an
 editing stage (`implement`/`test`/`review`) at a time** - parked tasks are frozen
 (no edits), so there are never concurrent edits to the working tree. A task is
-"ready to start" when its file sits in `.claude/tasks/backlog/` and every
+"ready to start" when its file sits in `.agentry/tasks/backlog/` and every
 `depends_on` task is done. There is no `status:` field to set - moving a file
 into or out of `backlog/` is the only way to queue or hold it. Below the `auto`
 approvals level, taking a new task is itself a CEO checkpoint: the orchestrator
@@ -183,7 +183,7 @@ rules that govern the orchestrator's own tool calls also govern the agents:
 |---------|--------|----------|
 | `dev` | senior-backend-dev, senior-frontend-dev, qa-engineer, devops-engineer, data-engineer, rapid-prototyper | commit/push approval flags, protected-branch push deny, review-stage edit freeze, no force push, no `approve.py`, no test-suite runs (`gates.dev_forbidden_commands` - the orchestrator/QA runs the suite once) |
 | `readonly` | architect, reviewer, security-engineer, evidence-collector, performance-benchmarker, ai-detector, accessibility-auditor, incident-response-commander | Edit/Write denied; mutating Bash (git writes, rm/mv/cp, redirects, sed -i, installers) denied |
-| `docs` | technical-writer, product-manager, spec-developer, sprint-prioritizer, content-manager, content-writer, editor, humanizer, seo-specialist, geo-specialist, business-analyst, financial-analyst, marketing-strategist, brand-guardian, ux-researcher, ux-ui-designer, feedback-synthesizer | Edit/Write only under `.claude/`, `docs/`, README; mutating Bash denied |
+| `docs` | technical-writer, product-manager, spec-developer, sprint-prioritizer, content-manager, content-writer, editor, humanizer, seo-specialist, geo-specialist, business-analyst, financial-analyst, marketing-strategist, brand-guardian, ux-researcher, ux-ui-designer, feedback-synthesizer | Edit/Write only under `.claude/`, `.agentry/`, `docs/`, README; mutating Bash denied |
 
 The MAIN THREAD carries its own profile: `orchestrator_gate` in `pipeline.json`
 (enforced by `pretool_gate.py`) denies orchestrator Edit/Write and shell

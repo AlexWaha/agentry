@@ -26,7 +26,7 @@ completed:
 assignee: agent-name
 ---
 <!-- No status: or branch: field. A task's state IS the folder it sits in -
-     .claude/tasks/backlog/ (queued), active/ (in flight), done/ (merged) -
+     .agentry/tasks/backlog/ (queued), active/ (in flight), done/ (merged) -
      and the branch is created only when the pipeline starts the task. -->
 
 ## Description
@@ -58,7 +58,7 @@ Replace the section above with this one for frontend tasks.
 ## Definition of Done
 
 - [ ] Code follows conventions in `.claude/rules/coding-style.md` and the project overlay
-- [ ] Backend tests pass: `{{BACKEND_TEST_CMD}}` (see `.claude/project/stack.md`)
+- [ ] Backend tests pass: `{{BACKEND_TEST_CMD}}` (see `.agentry/project/stack.md`)
 - [ ] Frontend tests pass: `{{FRONTEND_TEST_CMD}}` (if applicable)
 - [ ] Formatter clean: `{{FORMAT_CMD}}`
 - [ ] Lint/format check clean: `{{LINT_CMD}}`

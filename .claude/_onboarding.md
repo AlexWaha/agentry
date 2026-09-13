@@ -51,7 +51,7 @@ codegraph MCP server per-project - keep it committed.
 
 ## 1. Replace `project/` contents
 
-Everything under `.claude/project/` is placeholder content from the previous project. Delete or rewrite each file:
+Everything under `.agentry/project/` is placeholder content from the previous project. Delete or rewrite each file:
 
 - [ ] `project/project-context.md` - write your product description, domain terminology, key concepts, phase activation
 - [ ] `project/architecture.md` - draft once you have module/layer decisions (can be deferred until architect agent runs)
@@ -88,7 +88,7 @@ Search-and-replace these across `.claude/` files. Values you define in `project/
 ### Files that typically contain placeholders
 
 - `.claude/settings.json` and `.claude/agents/*.md` - hook commands use `$CLAUDE_PROJECT_DIR` (runtime-resolved by the harness); they need no replacement and must NEVER be rewritten to absolute local paths (those leak into the repo and break on other machines)
-- `.claude/project/stack.md` - the table there is the canonical map
+- `.agentry/project/stack.md` - the table there is the canonical map
 - `.claude/agents/senior-backend-dev.md`
 - `.claude/agents/senior-frontend-dev.md`
 - `.claude/agents/qa-engineer.md`
@@ -102,7 +102,7 @@ Search-and-replace these across `.claude/` files. Values you define in `project/
 - `.claude/skills/write-tests/SKILL.md`
 - `.claude/skills/infrastructure/SKILL.md`
 - `.claude/skills/bug-fix/SKILL.md`
-- `.claude/tasks/templates/task-template.md`
+- `.agentry/tasks/templates/task-template.md`
 
 Grep to find anything still un-replaced:
 
@@ -113,7 +113,7 @@ grep -rE '\{\{[A-Z_]+\}\}' .claude/
 ### `pipeline.json` is already filled in - this repo is also a live project
 
 This repository is self-hosting: it is the template AND a project the harness
-runs on itself. So `.claude/pipeline.json` carries this harness's own real
+runs on itself. So `.agentry/pipeline.json` carries this harness's own real
 values, and the grep above will NOT flag them. Four keys must be replaced with
 your project's commands - the originals from the pristine template are on the
 right:
@@ -171,7 +171,7 @@ Unused rules can stay imported - they're marked `[DEFERRED]` or `[OPTIONAL]` and
 For feature work the planning pipeline produces the first artifacts:
 `spec-0001` (spec-developer) -> `epic-0001` + tasks (product-manager via
 skills/new-epic). For a single-task start (e.g. "Set up infrastructure"),
-create `.claude/tasks/active/task-0001.md` directly via skills/new-task.
+create `.agentry/tasks/backlog/task-0001.md` directly via skills/new-task.
 Remember: `advance.py` refuses tasks without acceptance criteria or with an
 unapproved spec.
 
@@ -182,7 +182,7 @@ Before starting real work, confirm:
 - [ ] `project/project-context.md` describes your product, not the previous one
 - [ ] `project/stack.md` has concrete commands (no placeholders left)
 - [ ] `grep -rE '\{\{[A-Z_]+\}\}' .claude/` returns zero matches (or only inside `_onboarding.md` itself and `tasks/templates/handoff-template.md`, whose `{{...}}` are runtime tokens for `handoff.py --for`)
-- [ ] `grep -r 'PROJECT-SPECIFIC - REPLACE ME' .claude/project/` is empty (you filled everything in)
+- [ ] `grep -r 'PROJECT-SPECIFIC - REPLACE ME' .agentry/project/` is empty (you filled everything in)
 - [ ] `.claude/settings.local.json` is gitignored
 - [ ] `CLAUDE.md` imports only the rules that apply to this project
 
@@ -190,12 +190,12 @@ Before starting real work, confirm:
 
 This template ships a deterministic orchestration layer so the agent runs tasks
 end-to-end without babysitting. State and gate checks live in code, not the
-model's context (`.claude/tools/pipeline/` + `.claude/state/run.db`). The full
+model's context (`.claude/tools/pipeline/` + `.agentry/state/run.db`). The full
 contract is in `rules/orchestration.md`; the stage machine in `rules/pipeline.md`.
 
 - The interactive **Phase B** of `_init-prompt.md` is where you configure it:
   pipeline stages, exit-gate commands, stage owners, allowed tools, branching, and
-  the retry budget - written into `.claude/pipeline.json`.
+  the retry budget - written into `.agentry/pipeline.json`.
 - The `Stop` hook keeps the agent advancing (it will not stop mid-pipeline to ask
   "shall I continue?"); the `PreToolUse` hook enforces the two human checkpoints
   (approve commit, then approve push) via `tools/pipeline/approve.py`.
@@ -212,10 +212,10 @@ contract is in `rules/orchestration.md`; the stage machine in `rules/pipeline.md
   finishes; `PreCompact` re-injects pipeline state so compaction cannot lose it;
   SessionStart syncs codegraph and checks module-map drift.
 - `autoMemoryEnabled` is off and no agent declares `memory: project`: lessons go
-  into `.claude/memory/memory.db` through `tools/memory/memory.py --record`
+  into `.agentry/memory/memory.db` through `tools/memory/memory.py --record`
   (gitignored, see `rules/self-learning.md`).
-- Planning flow: plan (architect) -> spec (spec-developer, `.claude/specs/`) ->
-  epic + tasks (product-manager, `.claude/tasks/epics/`) -> CEO approval flips
+- Planning flow: plan (architect) -> spec (spec-developer, `.agentry/specs/`) ->
+  epic + tasks (product-manager, `.agentry/tasks/epics/`) -> CEO approval flips
   tasks `backlog` -> `active`. Spec + epic are mandatory for multi-task work.
 - **Handoff chain** (`pipeline.json` `handoff` block, checked at Phase B): confirm
   `enabled`, decide `hard_edit_gate` (default true: code edits freeze while a
@@ -227,10 +227,11 @@ contract is in `rules/orchestration.md`; the stage machine in `rules/pipeline.md
   `tasks/templates/handoff-template.md` are RUNTIME tokens substituted by
   `handoff.py --for` - do NOT fill them during onboarding.
 - **Orchestrator gate** (`pipeline.json` `orchestrator_gate`): the main thread
-  is hook-denied from writing outside `.claude/`, `docs/`, `README*`, root
-  `CLAUDE.md` - the "orchestrator never writes code" rule is enforced, not
-  prompted. Add project-specific exceptions to `extra_allow` at Phase B (B9).
-- **Memory layers** (`.claude/memory/`, contract in `memory/README.md`): L1
+  is hook-denied from writing outside `.claude/`, `.agentry/`, `docs/`,
+  `README*`, root `CLAUDE.md` - the "orchestrator never writes code" rule is
+  enforced, not prompted. Add project-specific exceptions to `extra_allow` at
+  Phase B (B9).
+- **Memory layers** (`.agentry/memory/`, contract in `memory/README.md`): L1
   codebase map (synced at every session start via
   `tools/memory/codebase_sync.py`), L2 lessons, L3 reusable patterns.
   SubagentStart hooks inject the right layers per agent type; the stop gate

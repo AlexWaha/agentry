@@ -1,6 +1,6 @@
 # Project Memory
 
-One store, queried per dispatch: `.claude/memory/memory.db` (SQLite with an FTS5
+One store, queried per dispatch: `.agentry/memory/memory.db` (SQLite with an FTS5
 index, gitignored). It replaced four markdown files whose heads were injected
 under a line cap - `codebase.md`, `lessons.md`, `patterns.md` and a per-agent
 `agent-memory/<agent>/MEMORY.md`. That mechanism injected whatever sat at the top
@@ -8,7 +8,7 @@ of a file rather than what the task needed: on a real project the lessons file
 reached 150 KB and travelled into every dev dispatch nearly whole, about 37k
 tokens before the agent read a line of code.
 
-Handoff docs (`.claude/tasks/handoffs/`) are separate: per-task narrative, and
+Handoff docs (`.agentry/tasks/handoffs/`) are separate: per-task narrative, and
 the distillation SOURCE for the rows below.
 
 | Kind | Content | Injected into |
@@ -43,7 +43,7 @@ python $M --record --kind module  --path <dir> --responsibility <one line> \
           [--symbols <entry points>] [--notes <dependency notes>]
 
 python $M --query "text to match" [--limit 8] [--kinds lesson,pattern,module]
-python $M --export [--out .claude/memory/export.md]    # markdown, for human reading
+python $M --export [--out .agentry/memory/export.md]    # markdown, for human reading
 python $M --stats
 python $M --migrate                                    # legacy markdown -> store, idempotent
 ```

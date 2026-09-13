@@ -1,6 +1,6 @@
 ---
 name: new-task
-description: Create a new task file in .claude/tasks/backlog/ with auto-incrementing ID and template-complete frontmatter (depends_on, epic, spec). Use when the CEO or orchestrator asks to create/add/file a task, when a product-manager is decomposing an epic into tasks, or when a standalone piece of work (not tied to a spec) needs a work order before an agent can start it.
+description: Create a new task file in .agentry/tasks/backlog/ with auto-incrementing ID and template-complete frontmatter (depends_on, epic, spec). Use when the CEO or orchestrator asks to create/add/file a task, when a product-manager is decomposing an epic into tasks, or when a standalone piece of work (not tied to a spec) needs a work order before an agent can start it.
 allowed-tools: Read, Grep, Glob, Write
 ---
 
@@ -27,7 +27,7 @@ Two things this skill deliberately does NOT do:
 
 ### Step 1: Determine the next task number
 
-1. Scan `.claude/tasks/backlog/`, `active/` AND `done/` for `task-*.md`.
+1. Scan `.agentry/tasks/backlog/`, `active/` AND `done/` for `task-*.md`.
 2. Take the highest 4-digit number found, add 1, zero-pad to 4 digits.
 3. Task numbers are sequential - never skip, never reuse.
 
@@ -69,8 +69,8 @@ Valid assignees: `architect`, `spec-developer`, `senior-backend-dev`,
 
 ### Step 4: Create the task file
 
-Copy `.claude/tasks/templates/task-template.md` to
-`.claude/tasks/backlog/task-XXXX.md` and fill EVERY section the template
+Copy `.agentry/tasks/templates/task-template.md` to
+`.agentry/tasks/backlog/task-XXXX.md` and fill EVERY section the template
 mandates - including Frontend Impact / Backend Dependencies (per
 `rules/task-creation.md`), Definition of Done, and Deploy Actions. There is no
 `status:` or `branch:` field - the task's folder is its state, and the branch
@@ -86,7 +86,7 @@ Task created:
   Title:      [title]
   Assignee:   [agent]
   depends_on: [...]         Epic: [epic or -]      Spec: [spec or -]
-  File:       .claude/tasks/backlog/task-XXXX.md
+  File:       .agentry/tasks/backlog/task-XXXX.md
 
   Acceptance Criteria:
   - [ ] ...
@@ -97,7 +97,7 @@ whole breakdown table is presented at once instead (skills/new-epic step 4).
 
 ## Error handling
 
-- **Template missing**: recreate `.claude/tasks/` structure from the template
+- **Template missing**: recreate `.agentry/tasks/` structure from the template
   repo before proceeding - do not improvise a format.
 - **Number conflict** (file already exists): re-scan, take next number, note
   the conflict to the CEO.
@@ -108,6 +108,6 @@ whole breakdown table is presented at once instead (skills/new-epic step 4).
 - One task = one future branch = one concern
 - The task file is the work order: no work starts without it
 - A task's state is its folder - never add a `status:` field back in
-- Tasks born from an epic sit in `.claude/tasks/backlog/` until the CEO
+- Tasks born from an epic sit in `.agentry/tasks/backlog/` until the CEO
   approves the breakdown (skills/new-epic step 5) and `advance.py` moves them
   to `active/`
