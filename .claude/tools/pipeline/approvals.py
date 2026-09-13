@@ -13,23 +13,27 @@ Levels, each a superset of the one before:
   assisted  take the task and commit without asking, and skip the diff review
             when the code review came back with nothing serious. Still asks
             before pushing.
-  auto      everything up to and including the push, then pick up the next
-            ready task. For a night run.
+  auto      everything up to the commit, then pick up the next ready task. For
+            a night run. Still stops at the push.
 
 What no level ever grants:
 
+  - the push. The CEO asked for that decision to stay his, every time, at every
+    level (rules/git-workflow.md, "Push is never automatic"). A push is the
+    moment work leaves the machine.
   - merging into the main branch. That happens in the web UI, by a human. The
     agent stops at a pushed branch and a merge-request link, always.
   - moving a task to done. That needs the merge above, so it needs the human.
   - answering the questions raised while planning. That information exists only
     in the CEO's head.
 
-Because of the first two, an overnight run is bounded by the dependency chain:
+Because of these, an overnight run is bounded by the dependency chain:
 independent tasks run all night, a chain of dependent ones advances by exactly
 one, since the next task needs its predecessor in the main branch.
 
-A per-stage `auto_approve` list in pipeline.json is layered on top and wins, so
-one checkpoint can be automated without moving the whole dial.
+A per-stage `auto_approve` list in pipeline.json is layered on top and wins for
+every checkpoint EXCEPT the ones in NEVER_GRANTED - listing `push` there does
+nothing, by design.
 
 Fail-open: anything unreadable resolves to `manual`, the strictest level. A
 broken file can never hand the agent more authority than it had.
@@ -58,15 +62,20 @@ PLAN_APPROVAL = "approval"  # the CEO signs off a plan
 GRANTS = {
     MANUAL: frozenset(),
     ASSISTED: frozenset({TAKE, COMMIT, DIFF_REVIEW}),
-    AUTO: frozenset({TAKE, COMMIT, DIFF_REVIEW, PUSH}),
+    AUTO: frozenset({TAKE, COMMIT, DIFF_REVIEW}),
 }
+
+# Checkpoints no level and no per-stage auto_approve may ever grant. The push
+# was in GRANTS[AUTO] while git-workflow.md forbade it - the rule was written
+# and not enforced, so the orchestrator followed the permissive document.
+NEVER_GRANTED = frozenset({PUSH})
 
 DESCRIPTIONS = {
     MANUAL: "ask at every checkpoint: which task, the diff, the commit, the push",
     ASSISTED: "take tasks and commit unasked, skip the diff review when the code "
               "review is clean, still ask before pushing",
-    AUTO: "everything through the push, then take the next ready task. Merging "
-          "stays with the CEO, so done still waits for it",
+    AUTO: "everything through the commit, then take the next ready task. The push, "
+          "the merge and done stay with the CEO",
 }
 
 
@@ -88,7 +97,9 @@ def granted(checkpoint: str, stage_auto: list | None = None) -> bool:
 
     `stage_auto` is the stage's own `auto_approve` list from pipeline.json; it
     is layered on top of the level, so a single checkpoint can be automated
-    without raising the dial for everything else."""
+    without raising the dial for everything else. NEVER_GRANTED wins over both."""
+    if checkpoint in NEVER_GRANTED:
+        return False
     if stage_auto and checkpoint in {str(c).lower() for c in stage_auto}:
         return True
     return checkpoint in GRANTS[read()]

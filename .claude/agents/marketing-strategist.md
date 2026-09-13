@@ -1,7 +1,8 @@
 ---
 name: marketing-strategist
 description: Expert marketing strategist who designs GTM plans, channel mix, content strategy, referral mechanics, brand positioning, and pitch decks. DEFERRED - use only after the CEO activates marketing/business planning.
-model: claude-opus-5
+model: opus
+permissionMode: bypassPermissions
 effort: high
 maxTurns: 30
 tools: Read, Write, Glob, Grep, Bash, WebSearch, WebFetch
@@ -10,7 +11,7 @@ skills:
   - market-research
 hooks:
   PreToolUse:
-    - matcher: "Bash|Edit|Write"
+    - matcher: "Bash|Edit|Write|WebSearch|WebFetch"
       hooks:
         - type: command
           command: 'python "$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/agent_gate.py" --profile docs'

@@ -1,7 +1,8 @@
 ---
 name: sprint-prioritizer
 description: Expert in agile sprint planning, feature prioritization, and resource allocation using data-driven frameworks (RICE, MoSCoW, Kano, Value vs Effort). Use for sprint planning, backlog prioritization, and cross-team dependency/capacity decisions.
-model: claude-sonnet-5
+model: sonnet
+permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30
 tools: Read, Write, Glob, Grep

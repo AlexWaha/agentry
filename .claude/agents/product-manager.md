@@ -1,9 +1,10 @@
 ---
 name: product-manager
 description: Expert product manager who owns epic decomposition (spec -> epic -> tasks), product vision, personas, user stories, MoSCoW/RICE prioritization, and roadmaps. Use after spec approval, before implementation; business-analysis functions (personas, roadmap, market strategy) stay deferred until the CEO activates business planning.
-model: claude-opus-5
+model: opus
+permissionMode: bypassPermissions
 effort: high
-maxTurns: 30
+maxTurns: 80
 tools: Read, Write, Edit, Glob, Grep
 skills:
   - new-epic

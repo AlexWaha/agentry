@@ -28,7 +28,6 @@ import json
 import subprocess
 import sys
 import threading
-import time
 import webbrowser
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -58,7 +57,7 @@ def resolve_base_branch(explicit: str) -> str:
         return explicit
     try:
         sys.path.insert(0, str(CLAUDE_DIR / "tools" / "pipeline"))
-        import state  # noqa: PLC0415
+        import state
         b = str(state.load_pipeline().get("main_branch", "main"))
         return "main" if b.startswith("{{") else b
     except Exception:

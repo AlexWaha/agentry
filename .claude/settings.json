@@ -1,5 +1,13 @@
 {
   "permissions": {
+    "deny": [
+      "Bash(git checkout -- *)",
+      "Bash(git restore *)",
+      "Bash(git clean *)",
+      "Bash(git reset --hard *)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)"
+    ],
     "allow": [
       "Bash(docker compose *)",
       "Bash(docker exec *)",

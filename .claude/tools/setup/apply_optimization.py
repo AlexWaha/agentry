@@ -364,19 +364,19 @@ def patch_agent(path: Path, root: Path) -> list[str]:
     changed: list[str] = []
 
     for alias, pin in MODEL_PINS.items():
-        fm2 = re.sub(rf"^model:\s*{alias}\s*$", f"model: {pin}", fm, flags=re.M)
+        fm2 = re.sub(rf"^model:\s*{alias}\s*$", f"model: {pin}", fm, flags=re.MULTILINE)
         if fm2 != fm:
             changed.append(f"model={pin}")
             fm = fm2
 
-    if name in EFFORT_MAX and not re.search(r"^effort:\s*max\s*$", fm, re.M):
-        if re.search(r"^effort:", fm, re.M):
-            fm = re.sub(r"^effort:.*$", "effort: max", fm, flags=re.M)
+    if name in EFFORT_MAX and not re.search(r"^effort:\s*max\s*$", fm, re.MULTILINE):
+        if re.search(r"^effort:", fm, re.MULTILINE):
+            fm = re.sub(r"^effort:.*$", "effort: max", fm, flags=re.MULTILINE)
         else:
             fm += "\neffort: max"
         changed.append("effort=max")
 
-    if name in MEMORY_PROJECT and not re.search(r"^memory:", fm, re.M):
+    if name in MEMORY_PROJECT and not re.search(r"^memory:", fm, re.MULTILINE):
         fm += "\nmemory: project"
         changed.append("memory=project")
 

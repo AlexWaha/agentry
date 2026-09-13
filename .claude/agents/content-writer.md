@@ -1,13 +1,14 @@
 ---
 name: content-writer
 description: Expert content writer who produces long-form and conversion copy from a brief - product descriptions, category/landing copy, blog/news articles, FAQ. Runs after content-manager's brief, before editor. Use to draft any net-new material against a content brief.
-model: claude-sonnet-5
+model: sonnet
+permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30
 tools: Read, Write, Edit, Glob, Grep, WebSearch
 hooks:
   PreToolUse:
-    - matcher: "Bash|Edit|Write"
+    - matcher: "Bash|Edit|Write|WebSearch"
       hooks:
         - type: command
           command: 'python "$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/agent_gate.py" --profile docs'

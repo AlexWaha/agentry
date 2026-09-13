@@ -1,9 +1,12 @@
 ---
 name: senior-frontend-dev
 description: Expert frontend engineer who builds web and mobile UI, shared component libraries, offline sync, push, and deep linking. Use for any frontend feature or fix.
-model: claude-sonnet-5
-effort: medium
-maxTurns: 60
+model: opus
+permissionMode: bypassPermissions
+experimental:
+  cacheTtl: 1h
+effort: high
+maxTurns: 100
 tools: Read, Write, Edit, Bash, Glob, Grep
 memory: project
 mcpServers:

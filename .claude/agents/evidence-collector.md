@@ -1,8 +1,9 @@
 ---
 name: evidence-collector
 description: Skeptical QA evidence specialist who captures Playwright screenshots and logs, and verifies every claim against visual proof - read-only, fantasy-allergic. Use during review on UI-bearing tasks, before any "production ready" claim is accepted.
-model: claude-sonnet-5
-effort: medium
+model: sonnet
+permissionMode: bypassPermissions
+effort: low
 maxTurns: 40
 tools: Read, Bash, Glob, Grep
 hooks:

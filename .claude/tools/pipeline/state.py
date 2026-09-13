@@ -49,7 +49,19 @@ EDITING_STAGES = ("implement", "test", "review")
 
 
 def now() -> str:
+    """Machine timestamp for the run log: UTC, explicitly marked Z."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def today() -> str:
+    """Calendar date for text a HUMAN reads (task files, handoff docs, review
+    stamps) - the machine's LOCAL date, so `completed: 2026-09-13` matches the
+    CEO's own clock. A bare UTC date silently shows tomorrow (or yesterday) for
+    anyone far enough from UTC, which is how a handoff doc ends up dated a day
+    off its own commit. Machine timestamps stay UTC - see now().
+    `.astimezone()` converts the UTC-aware value to local, which keeps the call
+    timezone-aware (ruff DTZ) instead of using a naive date.today()."""
+    return datetime.now(timezone.utc).astimezone().date().isoformat()
 
 
 # --- pipeline.json (declarative stage config) -------------------------------
@@ -210,9 +222,9 @@ def move_task(task: str, to: str) -> bool:
         src = TASK_DIRS[src_name] / f"{task}.md"
         text = src.read_text(encoding="utf-8", errors="replace")
         if to == "done":
-            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            stamp = today()  # local date - the CEO reads this in the task file
             if re.search(r"(?m)^completed:", text):
-                text = re.sub(r"(?m)^completed:.*$", f"completed: {today}", text, count=1)
+                text = re.sub(r"(?m)^completed:.*$", f"completed: {stamp}", text, count=1)
         dst_dir.mkdir(parents=True, exist_ok=True)
         (dst_dir / f"{task}.md").write_text(text, encoding="utf-8")
         src.unlink()

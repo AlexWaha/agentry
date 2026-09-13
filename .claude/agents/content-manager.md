@@ -1,7 +1,8 @@
 ---
 name: content-manager
 description: Expert content manager who owns content strategy, the editorial calendar, content inventory/taxonomy, briefs, and distribution. Runs before content-writer in the content pipeline (brief -> content-writer -> editor -> humanizer -> ai-detector -> publish). Use to plan content, write briefs, or audit the content inventory.
-model: claude-sonnet-5
+model: sonnet
+permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30
 tools: Read, Write, Edit, Glob, Grep

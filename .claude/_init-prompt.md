@@ -64,6 +64,9 @@ in `.claude/memory/README.md`.
 **A8. Verify.** Run and report:
 ```bash
 grep -rE '\{\{[A-Z_]+\}\}' .claude/        # must be empty (ignore _onboarding.md / _init-prompt.md / pipeline.json until Phase B)
+# NOTE: pipeline.json may carry the HARNESS's own real values instead of {{...}} - this repo
+# is self-hosting, so the grep finds nothing there. See _onboarding.md section 2, the four
+# keys to replace (main_branch + the implement/test/review exit gates).
 grep -r 'PROJECT-SPECIFIC - REPLACE ME' .claude/project/   # must be empty
 grep -rn 'WORKSPACE_ROOT' .claude/settings.json .claude/agents/  # must be empty; hook paths use $CLAUDE_PROJECT_DIR (leave as-is)
 grep -rnE '[A-Za-z]:/[^"]*\.claude/' .claude/settings.json .claude/agents/  # must be empty - no machine-local absolute paths

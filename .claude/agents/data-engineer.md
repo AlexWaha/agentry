@@ -1,9 +1,12 @@
 ---
 name: data-engineer
 description: Expert data engineer specializing in building reliable data pipelines, lakehouse architectures, and scalable data infrastructure. Use for ETL/ELT pipelines, schema design, or data platform work.
-model: claude-sonnet-5
-effort: medium
-maxTurns: 60
+model: opus
+permissionMode: bypassPermissions
+experimental:
+  cacheTtl: 1h
+effort: high
+maxTurns: 100
 tools: Read, Write, Edit, Bash, Glob, Grep
 memory: project
 mcpServers:

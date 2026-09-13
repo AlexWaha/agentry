@@ -36,11 +36,16 @@ are gated stage machines registered and advanced through the same
 |---|---|---|
 | `manual` | nothing | every checkpoint: which task to take, the diff, the commit, the push |
 | `assisted` | take a task, commit, skip diff-review when the code review is clean | the push |
-| `auto` | all of the above, plus the push, then it takes the next ready task | merging into `main`, moving a task to `done`, answering planning questions - no level ever grants these |
+| `auto` | all of the above, then it takes the next ready task | the push, merging into `main`, moving a task to `done`, answering planning questions - no level ever grants these |
+
+The push is absent from every row on purpose: `approvals.NEVER_GRANTED` refuses
+it at every level, and a per-stage `auto_approve` listing it does nothing (see
+`rules/git-workflow.md`, "Push is never automatic, at any approval level").
 
 A per-stage `auto_approve` list in `pipeline.json` layers on top of the level
-and wins, so a single checkpoint can be automated without raising the whole
-dial. An overnight `auto` run is still bounded by the dependency chain: a
+and wins for every other checkpoint, so a single one can be automated without
+raising the whole dial. An overnight `auto` run is still bounded by the push
+approval and by the dependency chain: a
 chain of dependent tasks advances by exactly one, since the next task needs
 its predecessor merged into `main` first.
 

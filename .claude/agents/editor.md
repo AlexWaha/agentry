@@ -1,7 +1,8 @@
 ---
 name: editor
 description: Expert editor who refines prose for clarity, correctness, consistency, and factual accuracy without changing meaning. Runs after content-writer, before humanizer and ai-detector. Use after a draft is written and before it ships.
-model: claude-sonnet-5
+model: sonnet
+permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30
 tools: Read, Edit, Glob, Grep

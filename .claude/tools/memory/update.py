@@ -32,7 +32,7 @@ HERE = Path(__file__).resolve()
 CLAUDE_DIR = HERE.parents[2]
 sys.path.insert(0, str(CLAUDE_DIR / "tools" / "pipeline"))
 
-import state  # noqa: E402
+import state
 
 STAMP_DIR = state.STATE_DIR / "memory"
 DONE_DIR = state.ROOT / ".claude" / "tasks" / "done"

@@ -80,7 +80,7 @@ MINIMAL = {
     "dev_forbidden_commands": [],
 }
 
-EMPTY_CMD = re.compile(r"^(none|n/a|n\.a\.|-|)$", re.I)
+EMPTY_CMD = re.compile(r"^(none|n/a|n\.a\.|-|)$", re.IGNORECASE)
 
 
 def stack_family(stack_md: Path) -> tuple[str, dict]:

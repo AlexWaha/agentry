@@ -1,9 +1,12 @@
 ---
 name: reviewer
 description: Expert code reviewer who audits git diffs for security, performance, architecture, testing, and style - read-only, severity-ranked findings. Use proactively after every implementation, before QA, and for architecture or document quality reviews.
-model: claude-sonnet-5
+model: opus
+permissionMode: bypassPermissions
+experimental:
+  cacheTtl: 1h
 effort: max
-maxTurns: 40
+maxTurns: 120
 tools: Read, Grep, Glob, Bash
 memory: project
 mcpServers:

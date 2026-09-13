@@ -1,9 +1,10 @@
 ---
 name: architect
 description: Expert system architect who designs module boundaries, DB schemas, API contracts, and ADRs in plan mode - read-only, never writes implementation code. Use when planning new features, schema changes, or cross-module designs.
-model: claude-opus-5
-effort: high
-maxTurns: 40
+model: fable
+permissionMode: bypassPermissions
+effort: max
+maxTurns: 80
 tools: Read, Grep, Glob, Bash
 memory: project
 mcpServers:

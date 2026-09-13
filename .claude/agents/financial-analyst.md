@@ -1,7 +1,8 @@
 ---
 name: financial-analyst
 description: Expert financial analyst who builds revenue models, unit economics (CAC/LTV/MRR/ARR), pricing scenarios, and runway projections with best/base/worst cases. DEFERRED - use only after the CEO activates business/finance planning.
-model: claude-opus-5
+model: opus
+permissionMode: bypassPermissions
 effort: high
 maxTurns: 40
 tools: Read, Write, Glob, Grep, Bash, WebSearch, WebFetch
@@ -9,7 +10,7 @@ skills:
   - financial-model
 hooks:
   PreToolUse:
-    - matcher: "Bash|Edit|Write"
+    - matcher: "Bash|Edit|Write|WebSearch|WebFetch"
       hooks:
         - type: command
           command: 'python "$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/agent_gate.py" --profile docs'

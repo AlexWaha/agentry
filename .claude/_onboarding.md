@@ -112,6 +112,25 @@ Grep to find anything still un-replaced:
 grep -rE '\{\{[A-Z_]+\}\}' .claude/
 ```
 
+### `pipeline.json` is already filled in - this repo is also a live project
+
+This repository is self-hosting: it is the template AND a project the harness
+runs on itself. So `.claude/pipeline.json` carries this harness's own real
+values, and the grep above will NOT flag them. Four keys must be replaced with
+your project's commands - the originals from the pristine template are on the
+right:
+
+| Key in `pipeline.json` | Value you inherit (this harness) | Template original |
+|---|---|---|
+| `main_branch` | `main` | `{{MAIN_BRANCH}}` |
+| `pipelines.build.stages[implement].exit_gate.cmd` | `python -m compileall -q .claude/tools` | `{{BUILD_CMD}}` |
+| `pipelines.build.stages[test].exit_gate.cmd` | `python -m unittest discover -s .claude/tools && python .claude/tools/pipeline/ui_evidence.py --task {task}` | `{{TEST_CMD}}` |
+| `pipelines.build.stages[review].exit_gate.cmd` | `ruff check .claude/tools` | `{{LINT_CMD}}` |
+
+Left as-is, your `implement` stage compiles the harness's Python and reports
+green without touching your code at all - a gate that passes for the wrong
+reason is worse than no gate. Replace all four before the first task.
+
 ## 3. Decide which optional rules apply
 
 These rules are included but gated. Leave them imported in `CLAUDE.md` only if the project actually needs them.

@@ -23,7 +23,7 @@ After ANY of the following, update the knowledge base immediately - same session
 | External library behavior | `.claude/project/` overlay or rules file for that domain |
 | Personal preference / workflow style | `.claude/project/` overlay (project operational fact) or `.claude/rules/<area>.md` (generalizable norm) |
 
-> **STRICT - never store project knowledge in the runtime/home memory dir.** Every lesson, fact, preference, and workflow note lives INSIDE the project (`.claude/rules/`, `.claude/project/`, or `.claude/agent-memory/<agent>/`) so it is committed to git and portable across machines. NEVER write project knowledge to the host/runtime memory location (e.g. a per-project dir under the agent host's home `.claude/projects/.../memory/`) - it is machine-local, uncommitted, and lost on reinstall or when working from another machine. This mirrors the global file-storage rule. If your runtime auto-creates a home memory file, treat it as a redirect stub only: it must contain nothing but a pointer to the in-project locations above.
+> **STRICT - never store project knowledge in the runtime/home memory dir.** Every lesson, fact, preference, and workflow note lives INSIDE the project (`.claude/rules/`, `.claude/project/`, or `.claude/agent-memory/<agent>/`), next to the code it is about. NEVER write project knowledge to the host/runtime memory location (e.g. a per-project dir under the agent host's home `.claude/projects/.../memory/`) - it is machine-local, uncommitted, and lost on reinstall or when working from another machine. This mirrors the global file-storage rule. If your runtime auto-creates a home memory file, treat it as a redirect stub only: it must contain nothing but a pointer to the in-project locations above.
 
 ### Format
 
@@ -56,7 +56,12 @@ The `self-learning` skill standardizes the record / recall / curate procedure -
 invoke it instead of free-handing the format. Canonical lesson format
 (SIGNATURE / TRIGGER / WHAT / WHY / FIX / DATE) lives in that skill.
 
-**Guardrails:** memory is committed to git - record the METHOD, never a secret,
+**Guardrails:** memory is NOT committed. `.claude/memory/` and
+`.claude/agent-memory/` are gitignored, because they hold one project's internals and
+this template ships publicly. Two consequences to plan around: memory does not travel
+to another machine or survive a fresh clone, so back it up with the rest of the
+working tree if it matters to you; and a lesson worth keeping permanently belongs in
+`.claude/rules/`, which IS committed. Record the METHOD either way, never a secret,
 credential, or PII value. When a `MEMORY.md` nears the injection window, curate
 (merge duplicates, drop obsolete) so the highest-value lessons stay visible.
 This is persistence + disciplined recall, NOT autonomous self-improvement -

@@ -43,7 +43,7 @@ def cleanup_nul() -> None:
 def pipeline_resume() -> None:
     try:
         sys.path.insert(0, str(CLAUDE_DIR / "tools" / "pipeline"))
-        import state  # noqa: PLC0415
+        import state
         conn = state.connect()
         text = state._resume_text(conn)
         conn.close()
@@ -83,7 +83,7 @@ def codebase_memory_check() -> None:
     Quiet when fresh; prints changed paths + update instruction on drift."""
     try:
         sys.path.insert(0, str(CLAUDE_DIR / "tools" / "memory"))
-        import codebase_sync  # noqa: PLC0415
+        import codebase_sync
         codebase_sync.check()
     except Exception:
         pass

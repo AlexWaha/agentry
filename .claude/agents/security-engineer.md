@@ -1,9 +1,12 @@
 ---
 name: security-engineer
 description: Expert application security engineer specializing in threat modeling, vulnerability assessment, and secure code review - read-only, severity-ranked findings. Use during design (threat modeling) and in the review stage alongside the reviewer for every security-sensitive change.
-model: claude-sonnet-5
+model: opus
+permissionMode: bypassPermissions
+experimental:
+  cacheTtl: 1h
 effort: max
-maxTurns: 40
+maxTurns: 100
 tools: Read, Grep, Glob, Bash
 memory: project
 mcpServers:
