@@ -6,6 +6,11 @@ script - not the model - runs the stage's exit gate and decides whether to move
 on. On a human-checkpoint stage (`ready`) it parks the task for commit, then push
 approval. This is the deterministic transition authority.
 
+Workflow mode narrows that tail: `pr` mode keeps both checkpoints, `solo` mode
+has no push at all (the approved branch is merged into the trunk locally), so it
+parks for the commit and then goes straight to the merge check - see
+stage_checkpoints().
+
 Registration backstop: a task may only ENTER the pipeline when its file exists
 in tasks/active/, its status is released by the CEO (`active`/`review`), its
 Acceptance Criteria are non-empty, and - when it names a spec - that spec is
@@ -42,6 +47,7 @@ import time
 import approvals
 import git_state
 import mode
+import pretool_gate
 import state
 from gate import run_gate
 
@@ -218,6 +224,33 @@ def finish_or_wait_for_merge(task: str, run: dict) -> int:
                   f"Merged into main ({repos}). Task done - file {note}.")
 
 
+# Which run.db flag records each checkpoint's approval.
+APPROVAL_FIELD = {"commit": "commit_approved", "push": "push_approved"}
+
+
+def stage_checkpoints(stage_def: dict) -> list:
+    """The checkpoints this stage really has, narrowed by the workflow mode.
+
+    In `solo` mode nothing is pushed: the approved branch is merged into the
+    trunk locally and the CEO pushes the trunk himself later. A push checkpoint
+    there gates a step that never happens, which is why the first task of an
+    unattended run reached `ready` and stopped for the night. The mode drives
+    the list rather than a branch inside the checkpoint block, so there is one
+    answer to 'does this project push at all'.
+
+    Read through pretool_gate.workflow_mode() on purpose - that is the single
+    accessor deciding the mode, and the gate that enforces the local merge must
+    not be able to disagree with the FSM that authorizes it.
+
+    Only the push is dropped. push_needs_approval is untouched: if a push does
+    happen in solo mode it still needs its recorded approval, and a push to a
+    protected branch is still refused outright."""
+    checkpoints = [str(c).lower() for c in (stage_def.get("checkpoints") or [])]
+    if pretool_gate.workflow_mode() == pretool_gate.WORKFLOW_SOLO:
+        checkpoints = [c for c in checkpoints if c != approvals.PUSH]
+    return [c for c in checkpoints if c in APPROVAL_FIELD]
+
+
 def stage_owner(pipeline: dict, name: str, task: str = "", which: str = state.BUILD) -> str:
     """Owner 'dev' is generic - resolve it to the task's assignee so frontend
     work routes to senior-frontend-dev, not whoever the pipeline hardcodes."""
@@ -356,38 +389,45 @@ def main() -> int:
     # (no CEO parking) - for flows where human participation is optional. The
     # approval FLAG is still set, so pretool_gate / stop_gate work unchanged.
     # Default (key absent / empty) keeps both checkpoints human-approved.
-    if stage_def.get("checkpoints"):
+    checkpoints = stage_checkpoints(stage_def)
+    if checkpoints:
         auto = {str(c).lower() for c in (stage_def.get("auto_approve") or [])}
-        # The push is routed through approvals.granted() rather than read out of
-        # auto_approve directly: approvals.NEVER_GRANTED refuses it at every
-        # level and for every stage list, so the config key cannot re-grant it.
-        push_auto = approvals.granted(approvals.PUSH, sorted(auto))
-        aw = run["awaiting_human"]
-        if aw == "":
-            fields = {"awaiting_human": "commit"}
-            if "commit" in auto:
-                fields["commit_approved"] = 1
-            state.set_fields(conn, args.task, **fields)
-        elif aw == "commit" and run["commit_approved"]:
-            fields = {"awaiting_human": "push"}
-            if push_auto:
-                fields["push_approved"] = 1
-            state.set_fields(conn, args.task, **fields)
-        elif aw == "push" and run["push_approved"]:
+        solo = pretool_gate.workflow_mode() == pretool_gate.WORKFLOW_SOLO
+        # The first checkpoint still unapproved is the one to park on; none left
+        # means the tail of the stage is complete, so route to the merge check -
+        # in solo mode the local merge is what satisfies it, in pr mode the
+        # CEO's merge of the pushed branch. Same check either way.
+        pending = next((c for c in checkpoints if not run[APPROVAL_FIELD[c]]), None)
+        if pending is None:
             state.set_fields(conn, args.task, stage="done", awaiting_human="",
                              stage_status=state.ST_GATE_PASSED)
+        else:
+            fields = {"awaiting_human": pending}
+            # auto_approve proposes, approvals.granted() disposes: NEVER_GRANTED
+            # refuses the push at every level and for every stage list, so the
+            # config key cannot re-grant it.
+            if pending in auto and approvals.granted(pending, sorted(auto)):
+                fields[APPROVAL_FIELD[pending]] = 1
+            state.set_fields(conn, args.task, **fields)
         run = state.get_run(conn, args.task)
         conn.close()
+        # What follows the commit differs by mode, and the orchestrator has to be
+        # told: in solo mode nothing is pushed, so waiting for a push checkpoint
+        # that will never arrive is exactly the stall this fixed.
+        after_commit = ("merge the branch into the trunk locally (solo workflow mode) "
+                        "and re-run advance.py - the trunk carrying the task is what "
+                        "closes it." if solo else
+                        "re-run advance.py for the push checkpoint.")
         msgs = {
             "commit": ("Checkpoint 'commit' auto-approved (auto_approve in pipeline.json). "
-                       "Stage files and perform the git commit now, then re-run advance.py."
+                       f"Stage files and perform the git commit now, then {after_commit}"
                        if "commit" in auto else
                        "Review passed. Stage files, surface the full diff, and wait for "
-                       "CEO commit approval (approve.py --gate commit). "
-                       "git commit is hook-blocked until then."),
+                       "CEO commit approval (approve.py --gate commit). git commit is "
+                       f"hook-blocked until then. After the commit: {after_commit}"),
             "push": ("Checkpoint 'push' auto-approved. Perform the git push now, "
                      "then re-run advance.py."
-                     if push_auto else
+                     if approvals.granted(approvals.PUSH, sorted(auto)) else
                      "Committed. Wait for CEO push approval (approve.py --gate push). "
                      "git push is hook-blocked until then."),
         }

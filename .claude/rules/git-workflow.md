@@ -21,6 +21,13 @@ coordination. The shape of the project is therefore config, not prose:
 | Who merges | the human, in the web UI | the pipeline, locally |
 | Push to a protected branch | forbidden | forbidden (unchanged) |
 | Push approval | `workflow.push_needs_approval` | `workflow.push_needs_approval` |
+| Checkpoints at `ready` | commit, then push | commit only - no push happens |
+
+The checkpoint list follows from that: `advance.py` drops the push checkpoint in
+`solo` mode (`stage_checkpoints()`), because a checkpoint on a step the mode has
+removed can never be cleared - the first solo task reached `ready` and stopped
+there with the trunk already carrying it. After the commit approval the task
+goes to the same merge check `pr` mode uses, and the local merge closes it.
 
 `pr` is the default, so a project that never sets the key keeps the
 collaborative behaviour. In `solo` mode the local merge is still gated on three
