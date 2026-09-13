@@ -12,6 +12,9 @@ Standard library only: subprocess + tempfile create and manipulate the repos.
 
 from __future__ import annotations
 
+import contextlib
+import io
+import json
 import subprocess
 import sys
 import tempfile
@@ -23,11 +26,60 @@ sys.path.insert(0, str(PIPELINE_DIR))
 
 import agent_gate
 import pretool_gate
+import state
 
 
 def run_git(args: list, cwd: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True,
                            text=True, timeout=10, check=True)
+
+
+@contextlib.contextmanager
+def gate_state(mode: str | None = None, push_approval: bool | None = None,
+               runs: dict | None = None, db_is_dir: bool = False):
+    """Swap pipeline.json config and run.db for throwaway ones.
+
+    The live `.claude/state/run.db` and the project's own pipeline.json are
+    never read, so a test asserts the shipped DEFAULT rather than whatever this
+    repository happens to be configured as. `mode=None` means "no workflow
+    block at all" - the adopter's case. `db_is_dir` makes run.db unopenable, to
+    drive the fail-closed path.
+    """
+    original = (state.load_pipeline, state.DB_PATH, state.STATE_DIR)
+    workflow = {}
+    if mode is not None:
+        workflow["mode"] = mode
+    if push_approval is not None:
+        workflow["push_needs_approval"] = push_approval
+    cfg = {"workflow": workflow} if workflow else {}
+    with tempfile.TemporaryDirectory() as tmp:
+        state.STATE_DIR = Path(tmp)
+        state.DB_PATH = Path(tmp) / "run.db"
+        state.load_pipeline = lambda: cfg
+        try:
+            if db_is_dir:
+                state.DB_PATH.mkdir()
+            else:
+                conn = state.connect()
+                try:
+                    for task, fields in (runs or {}).items():
+                        state.create_run(conn, task, "feature", "ready")
+                        if fields:
+                            state.set_fields(conn, task, **fields)
+                finally:
+                    conn.close()
+            yield
+        finally:
+            state.load_pipeline, state.DB_PATH, state.STATE_DIR = original
+
+
+def denial_reason(command: str, cwd: str) -> tuple:
+    """(exit code, stderr) of handle_bash - the deny message is an acceptance
+    criterion of its own, so tests read it instead of only the exit code."""
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        code = pretool_gate.handle_bash(command, cwd=cwd)
+    return code, err.getvalue()
 
 
 class TempRepo:
@@ -745,6 +797,275 @@ class AgentGateWebToolTest(unittest.TestCase):
 
     def test_dev_profile_is_denied(self):
         self.assertEqual(agent_gate.handle_web("dev", "WebSearch", {"query": "x"}), 2)
+
+
+class WorkflowModeDefaultTest(unittest.TestCase):
+    """task-0047: the workflow mode decides whether a local merge into the
+    trunk is a legitimate move. It must default to the collaborative shape, so
+    an adopter of this template never inherits the looser one."""
+
+    def test_mode_defaults_to_pr_without_configuration(self):
+        with gate_state():
+            self.assertEqual(pretool_gate.workflow_mode(), pretool_gate.WORKFLOW_PR)
+
+    def test_unknown_mode_value_falls_back_to_pr(self):
+        for value in ("", "SOLO-ish", "single", None):
+            with self.subTest(value=value):
+                with gate_state(mode=value):
+                    self.assertEqual(pretool_gate.workflow_mode(),
+                                     pretool_gate.WORKFLOW_PR)
+
+    def test_solo_is_recognised_case_insensitively(self):
+        for value in ("solo", "Solo", " SOLO "):
+            with self.subTest(value=value):
+                with gate_state(mode=value):
+                    self.assertEqual(pretool_gate.workflow_mode(),
+                                     pretool_gate.WORKFLOW_SOLO)
+
+    def test_push_approval_defaults_on_and_only_false_turns_it_off(self):
+        with gate_state():
+            self.assertTrue(pretool_gate.push_needs_approval())
+        with gate_state(mode="solo"):
+            self.assertTrue(pretool_gate.push_needs_approval())
+        with gate_state(mode="solo", push_approval=False):
+            self.assertFalse(pretool_gate.push_needs_approval())
+
+
+class TrunkMergeTest(unittest.TestCase):
+    """task-0047: in solo mode a local merge of an APPROVED task branch into the
+    trunk is allowed; everything else on the trunk stays refused, and the deny
+    message names which of the three conditions failed."""
+
+    TASK = "task-9990"
+    BRANCH = "feature/task-9990"
+
+    def merge_command(self) -> str:
+        return f"git merge --no-ff {self.BRANCH}"
+
+    def trunk_repo(self, stack) -> str:
+        """A repo sitting on main with `self.BRANCH` present and mergeable."""
+        repo = stack.enter_context(TempRepo())
+        repo.commit()
+        repo.checkout_new(self.BRANCH)
+        repo.commit("work.py", "work")
+        run_git(["checkout", "-q", "main"], repo.path)
+        return repo.path
+
+    def test_solo_mode_allows_merge_of_an_approved_task_branch(self):
+        with contextlib.ExitStack() as stack:
+            path = self.trunk_repo(stack)
+            with gate_state(mode="solo", runs={self.TASK: {"commit_approved": 1}}):
+                code = pretool_gate.handle_bash(self.merge_command(), cwd=path)
+        self.assertEqual(code, 0)
+
+    def test_pr_mode_refuses_the_same_merge(self):
+        with contextlib.ExitStack() as stack:
+            path = self.trunk_repo(stack)
+            with gate_state(mode="pr", runs={self.TASK: {"commit_approved": 1}}):
+                code, err = denial_reason(self.merge_command(), path)
+        self.assertEqual(code, 2)
+        self.assertIn("workflow mode", err)
+        self.assertIn("pull request", err)
+
+    def test_unconfigured_project_refuses_the_same_merge(self):
+        # The default is what an adopter inherits, so it gets its own case.
+        with contextlib.ExitStack() as stack:
+            path = self.trunk_repo(stack)
+            with gate_state(runs={self.TASK: {"commit_approved": 1}}):
+                code = pretool_gate.handle_bash(self.merge_command(), cwd=path)
+        self.assertEqual(code, 2)
+
+    def test_unapproved_commit_checkpoint_is_refused_in_solo_mode(self):
+        with contextlib.ExitStack() as stack:
+            path = self.trunk_repo(stack)
+            with gate_state(mode="solo", runs={self.TASK: {"commit_approved": 0}}):
+                code, err = denial_reason(self.merge_command(), path)
+        self.assertEqual(code, 2)
+        self.assertIn("condition 3 of 3", err)
+        self.assertIn("commit approval", err)
+        self.assertIn(self.TASK, err)
+
+    def test_task_with_no_run_row_is_refused_in_solo_mode(self):
+        with contextlib.ExitStack() as stack:
+            path = self.trunk_repo(stack)
+            with gate_state(mode="solo"):  # empty run.db
+                code, err = denial_reason(self.merge_command(), path)
+        self.assertEqual(code, 2)
+        self.assertIn("condition 2 of 3", err)
+        self.assertIn("run.db", err)
+
+    def test_source_branch_without_a_task_is_refused_in_solo_mode(self):
+        for source in ("side-branch", "task-9990", "origin/feature/task-9990",
+                       "random/task-9990", "main"):
+            with self.subTest(source=source):
+                with TempRepo() as repo:
+                    repo.commit()
+                    with gate_state(mode="solo",
+                                    runs={self.TASK: {"commit_approved": 1}}):
+                        code, err = denial_reason(f"git merge {source}", repo.path)
+                self.assertEqual(code, 2)
+                self.assertIn("condition 1 of 3", err)
+                self.assertIn("source branch", err)
+
+    def test_bare_merge_naming_no_source_is_refused_in_solo_mode(self):
+        with TempRepo() as repo:
+            repo.commit()
+            with gate_state(mode="solo", runs={self.TASK: {"commit_approved": 1}}):
+                code, err = denial_reason("git merge", repo.path)
+        self.assertEqual(code, 2)
+        self.assertIn("condition 1 of 3", err)
+
+    def test_unreadable_run_db_fails_closed(self):
+        # Everywhere else in the gate an error allows the action. Not here: the
+        # whole point is that only an approved task reaches the trunk.
+        with contextlib.ExitStack() as stack:
+            path = self.trunk_repo(stack)
+            with gate_state(mode="solo", db_is_dir=True):
+                code, err = denial_reason(self.merge_command(), path)
+        self.assertEqual(code, 2)
+        self.assertIn("could not be read", err)
+        self.assertIn("fails closed", err)
+
+    def test_plain_commit_on_the_trunk_stays_refused_in_solo_mode(self):
+        with TempRepo() as repo:
+            repo.commit()
+            repo.stage("app.py")
+            with gate_state(mode="solo", runs={self.TASK: {"commit_approved": 1}}):
+                code, err = denial_reason("git commit -m work", repo.path)
+        self.assertEqual(code, 2)
+        self.assertIn("Not on a feature branch", err)
+
+    def test_merge_options_do_not_hide_the_source_branch(self):
+        with contextlib.ExitStack() as stack:
+            path = self.trunk_repo(stack)
+            with gate_state(mode="solo", runs={self.TASK: {"commit_approved": 1}}):
+                for command in (
+                    f"git merge {self.BRANCH}",
+                    f'git merge -m "merge {self.TASK}" --no-ff {self.BRANCH}',
+                    f"git merge -s recursive {self.BRANCH}",
+                    f"git merge -X theirs {self.BRANCH}",
+                    f"git merge -- {self.BRANCH}",
+                    f'git -C "{path}" merge --no-ff {self.BRANCH}',
+                    f"git status&&git merge --no-ff {self.BRANCH}",
+                ):
+                    with self.subTest(command=command):
+                        self.assertEqual(
+                            pretool_gate.handle_bash(command, cwd=path), 0)
+
+    def test_merge_option_argument_is_not_read_as_the_source(self):
+        # `-m side-branch` is the message, not a branch: reading it positionally
+        # would refuse a legitimate merge while naming the wrong condition.
+        self.assertEqual(
+            pretool_gate.merge_sources(["-m", "side-branch", self.BRANCH]),
+            [self.BRANCH])
+
+    def test_merge_base_is_not_mistaken_for_a_merge(self):
+        # The read-only base check every task runs on main. git_invokes()' own
+        # substring net matches "git merge" inside "git merge-base", which is
+        # why the gate resolves this through argv instead.
+        with TempRepo() as repo:
+            repo.commit()
+            with gate_state(mode="pr"):
+                for command in ("git merge-base --is-ancestor main HEAD",
+                                "git log --merges --oneline",
+                                "git diff HEAD -- merge.py"):
+                    with self.subTest(command=command):
+                        self.assertEqual(
+                            pretool_gate.handle_bash(command, cwd=repo.path), 0)
+
+    def test_merge_into_a_work_branch_is_untouched_in_both_modes(self):
+        for mode in ("pr", "solo"):
+            with self.subTest(mode=mode):
+                with TempRepo() as repo:
+                    repo.commit()
+                    repo.checkout_new(self.BRANCH)
+                    with gate_state(mode=mode):
+                        code = pretool_gate.handle_bash("git merge main", cwd=repo.path)
+                self.assertEqual(code, 0)
+
+
+class SoloModePushUnchangedTest(unittest.TestCase):
+    """task-0047: the mode must not touch the one protection that matters -
+    nothing reaches the remote trunk - and push approval is decided by its own
+    key, not inferred from the mode."""
+
+    PROTECTED = ("main", "master", "staging", "production")
+    TASK = "task-9991"
+    BRANCH = "feature/task-9991"
+
+    def test_push_to_every_protected_branch_is_refused_in_solo_mode(self):
+        with TempRepo() as repo:
+            repo.commit()
+            repo.checkout_new(self.BRANCH)
+            with gate_state(mode="solo", push_approval=False,
+                            runs={self.TASK: {"commit_approved": 1,
+                                              "push_approved": 1}}):
+                for name in self.PROTECTED:
+                    for command in (f"git push origin {name}",
+                                    f"git push origin HEAD:{name}",
+                                    f"git push --force origin {name}"):
+                        with self.subTest(branch=name, command=command):
+                            self.assertEqual(
+                                pretool_gate.handle_bash(command, cwd=repo.path), 2)
+
+    def test_push_approval_is_honoured_independently_of_the_mode(self):
+        cases = {
+            ("solo", True): 2,
+            ("solo", False): 0,
+            ("pr", True): 2,
+            ("pr", False): 0,
+        }
+        for (mode, needs_approval), expected in cases.items():
+            with self.subTest(mode=mode, push_needs_approval=needs_approval):
+                with TempRepo() as repo:
+                    repo.commit()
+                    repo.checkout_new(self.BRANCH)
+                    with gate_state(mode=mode, push_approval=needs_approval,
+                                    runs={self.TASK: {"push_approved": 0}}):
+                        code = pretool_gate.handle_bash(
+                            f"git push -u origin {self.BRANCH}", cwd=repo.path)
+                self.assertEqual(code, expected)
+
+
+class StdinDecodeTest(unittest.TestCase):
+    """Both gates read the hook payload from stdin. json.load(sys.stdin) decoded
+    it with the host locale (cp1252 on Windows), where byte 0x97 becomes U+2014
+    and 0x96 becomes U+2013 - so an edit carrying Cyrillic text was refused by
+    the dash gate for dashes it never contained. Hit live by an agent writing a
+    document. The fix reads sys.stdin.buffer and decodes UTF-8; the dash rule
+    itself stays exactly as strict, which the second case below proves."""
+
+    CYRILLIC = "Заметка для задачи - обычный дефис"
+    REAL_EM_DASH = "Note with a real " + chr(0x2014) + " dash"
+
+    def run_hook(self, script: str, content: str, *args: str) -> subprocess.CompletedProcess:
+        payload = json.dumps({"tool_name": "Write",
+                              "tool_input": {"file_path": ".claude/tasks/note.md",
+                                             "content": content}},
+                             ensure_ascii=False).encode("utf-8")
+        return subprocess.run(
+            [sys.executable, str(PIPELINE_DIR / script), *args],
+            input=payload, capture_output=True, timeout=20)
+
+    def test_cyrillic_content_is_allowed_by_both_gates(self):
+        for script, args in (("pretool_gate.py", ()),
+                             ("agent_gate.py", ("--profile", "dev"))):
+            with self.subTest(script=script):
+                proc = self.run_hook(script, self.CYRILLIC, *args)
+                self.assertEqual(proc.returncode, 0,
+                                 proc.stderr.decode("utf-8", "replace"))
+
+    def test_a_genuine_em_dash_is_still_refused_by_both_gates(self):
+        for script, args in (("pretool_gate.py", ()),
+                             ("agent_gate.py", ("--profile", "dev"))):
+            with self.subTest(script=script):
+                proc = self.run_hook(script, self.REAL_EM_DASH, *args)
+                self.assertEqual(proc.returncode, 2)
+                self.assertIn("em dash", proc.stderr.decode("utf-8", "replace"))
+
+    def test_en_dash_is_still_refused(self):
+        proc = self.run_hook("pretool_gate.py", "Range 1" + chr(0x2013) + "2")
+        self.assertEqual(proc.returncode, 2)
 
 
 if __name__ == "__main__":
