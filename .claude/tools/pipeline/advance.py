@@ -15,12 +15,6 @@ Handoff gate: registration is also refused while ANY completed task above the
 handoff baseline lacks a valid handoff doc (see tools/pipeline/handoff.py) -
 the incoming task's assignee must document the previous task first.
 
-Interactive diff-review stage: a stage carrying "interactive": "diff_review"
-is not gated by a command but by a CEO verdict file written by
-tools/review/diff_review.py (browser UI). approved -> advance;
-changes_requested -> comments are appended to the task file and the task
-resets to the first stage.
-
 Merge evidence: the `done` stage resolves through git_state.py, and only a
 POSITIVE signal finishes a task. No branch and no tagged commit is unknown, so
 the task parks naming the missing signals. A task whose work rides on another
@@ -43,10 +37,7 @@ import argparse
 import json
 import os
 import re
-import subprocess
-import sys
 import time
-from pathlib import Path
 
 import approvals
 import git_state
@@ -55,7 +46,6 @@ import state
 from gate import run_gate
 
 GATE_TIMEOUT = 900
-REVIEW_DIR = state.STATE_DIR / "review"
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 CRITERIA_RE = re.compile(r"##\s*Acceptance Criteria\s*\n(.*?)(\n##\s|\Z)", re.DOTALL)
@@ -241,129 +231,6 @@ def stage_owner(pipeline: dict, name: str, task: str = "", which: str = state.BU
     return owner
 
 
-def _diff_review_repo(pipeline: dict, stage_def: dict) -> Path:
-    """Resolve the diff-review git repo dir from stage/pipeline cwd, mirroring
-    gate.py's cwd resolution so multi-repo workspaces (repo in a subdir, root
-    not a repo) target the actual git repo."""
-    cwd = stage_def.get("cwd") or pipeline.get("cwd") or "."
-    return state.ROOT if cwd == "." else (state.ROOT / cwd)
-
-
-def _repo_head(repo) -> str:
-    try:
-        proc = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
-                              capture_output=True, text=True, timeout=8)
-        return proc.stdout.strip() if proc.returncode == 0 else ""
-    except Exception:
-        return ""
-
-
-def _read_verdict(task: str) -> dict:
-    try:
-        d = json.loads((REVIEW_DIR / f"{task}.json").read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else {}
-    except Exception:
-        return {}
-
-
-def _archive_verdict(task: str, verdict: dict) -> None:
-    try:
-        rnd = int(verdict.get("round", 1))
-        src = REVIEW_DIR / f"{task}.json"
-        if src.is_file():
-            src.replace(REVIEW_DIR / f"{task}.round{rnd}.json")
-    except Exception:
-        pass
-
-
-def _append_review_feedback(task: str, verdict: dict) -> bool:
-    """Append the CEO comments to the END of the active task file (append-only
-    at EOF so the Acceptance Criteria parsing is untouched). The dev absorbs
-    them via the context-absorption chain (rules/pipeline.md)."""
-    try:
-        path = state.ROOT / ".claude" / "tasks" / "active" / f"{task}.md"
-        if not path.is_file():
-            return False
-        rnd = int(verdict.get("round", 1))
-        today = state.today()  # local date - this line is read by the dev and the CEO
-        lines = [f"\n## CEO Review Feedback (round {rnd})\n",
-                 (f"> Recorded {today} via diff-review. Address "
-                  f"EVERY comment before the task can pass diff-review again.\n")]
-        for c in verdict.get("comments", []):
-            loc = f"{c.get('file', '?')}:{c.get('start_line', '?')}"
-            if c.get("end_line") and c.get("end_line") != c.get("start_line"):
-                loc += f"-{c['end_line']}"
-            side = c.get("side", "after")
-            lines.append(f"- [ ] `{loc}` [{side}]: {c.get('text', '').strip()}\n")
-        with path.open("a", encoding="utf-8") as fh:
-            fh.writelines(lines)
-        return True
-    except Exception:
-        return False
-
-
-def handle_diff_review(conn, task: str, pipeline: dict, run: dict, cur: str,
-                       which: str = state.BUILD) -> int:
-    """Interactive CEO checkpoint. Consume a fresh verdict when present;
-    otherwise launch the review UI (blocking, gate-marker protected); park when
-    no verdict arrives."""
-    stage_def = state.get_stage(pipeline, cur, which) or {}
-    repo = _diff_review_repo(pipeline, stage_def)
-    head = _repo_head(repo)
-    verdict = _read_verdict(task)
-    stale = bool(verdict) and head and verdict.get("head") != head
-
-    if not verdict or stale:
-        script = state.ROOT / ".claude" / "tools" / "review" / "diff_review.py"
-        write_gate_marker(task, cur)
-        try:
-            subprocess.run([sys.executable, str(script), "--task", task, "--repo", str(repo)],
-                           cwd=str(state.ROOT), timeout=GATE_TIMEOUT + 60)
-        except Exception:
-            pass
-        finally:
-            clear_gate_marker(task)
-        verdict = _read_verdict(task)
-        if head and verdict.get("head") != head:
-            verdict = {}
-
-    if not verdict:
-        state.set_fields(conn, task, awaiting_human="diff-review")
-        run = state.get_run(conn, task)
-        conn.close()
-        return result("park", task, run,
-                      "CEO diff-review pending - no verdict recorded (browser closed or "
-                      "timeout). Re-run advance.py when the CEO is available.")
-
-    if verdict.get("verdict") == "approved":
-        nxt = state.next_stage(pipeline, cur, which)
-        state.set_fields(conn, task, stage=nxt, awaiting_human="",
-                         stage_status=state.ST_IN_PROGRESS, retries=0, continuations=0)
-        _archive_verdict(task, verdict)
-        run = state.get_run(conn, task)
-        conn.close()
-        return result("advanced", task, run,
-                      f"CEO approved the diff (round {verdict.get('round', 1)}): "
-                      f"'{cur}' -> '{nxt}'. Proceed.")
-
-    # changes_requested -> feedback into the task file, reset to first stage.
-    appended = _append_review_feedback(task, verdict)
-    _archive_verdict(task, verdict)
-    first = state.stage_names(pipeline, which)[0]
-    state.set_fields(conn, task, stage=first, awaiting_human="",
-                     stage_status=state.ST_IN_PROGRESS, retries=0, continuations=0,
-                     commit_approved=0, push_approved=0)
-    run = state.get_run(conn, task)
-    conn.close()
-    note = ("comments appended to the task file" if appended
-            else "WARNING: could not append comments to the task file - read the "
-                 "archived verdict in .claude/state/review/")
-    return result("rejected", task, run,
-                  f"CEO requested changes ({len(verdict.get('comments', []))} comment(s); "
-                  f"{note}). Task reset to '{first}'. Dispatch the assignee to address "
-                  f"EVERY comment in '## CEO Review Feedback', then re-run advance.py.")
-
-
 def result(action: str, task: str, run: dict, message: str) -> int:
     print(json.dumps({
         "action": action,
@@ -455,16 +322,34 @@ def main() -> int:
     if cur == "done":
         conn.close()
         return finish_or_wait_for_merge(args.task, run)
+
+    # A stage name the config does not define is a dead end, not a pass. Such a
+    # stage has no exit_gate, and gate.py reports a missing gate as configured
+    # AND passed, so the run used to be written stage=NULL under an "advanced"
+    # message - after which next_stage(None) is also None and every later call
+    # advanced from nothing to nothing. Worse, NULL is in neither the editing
+    # set nor awaiting_human, so the Stop hook read a free slot and branched new
+    # work onto the stranded task's dirty tree. Writing NULL and reporting
+    # success is not failing open (NFR-4), it is failing silently: refuse to
+    # guess, name the unknown stage, and point at the way back.
+    if cur not in names:
+        state.set_fields(conn, args.task, stage_status=state.ST_BLOCKED)
+        run = state.get_run(conn, args.task)
+        conn.close()
+        return result("blocked", args.task, run,
+                      f"stage '{cur}' is not part of the {which} flow, so no gate was run. "
+                      f"Configured stages: {', '.join(names)}. The run is stranded - a "
+                      f"pipeline.json stage list that changed under a live run, or an earlier "
+                      f"NULL write. Recover with: python .claude/tools/pipeline/approve.py "
+                      f"--task {args.task} --reject (sends it back to '{first}'), or restore "
+                      f"'{cur}' in pipelines.{which}.stages.")
+
     if run["stage_status"] == state.ST_BLOCKED:
         conn.close()
         return result("blocked", args.task, run,
                       "task is BLOCKED - needs CEO. Do not auto-retry.")
 
     stage_def = state.get_stage(pipeline, cur, which) or {}
-
-    # 1.5 Interactive CEO diff-review stage - verdict-file gated, not command-gated.
-    if stage_def.get("interactive") == "diff_review":
-        return handle_diff_review(conn, args.task, pipeline, run, cur, which)
 
     # 2. Human-checkpoint tail stage (commit, then push). A checkpoint listed in
     # the stage's optional "auto_approve" array is approved by the script itself
@@ -526,6 +411,19 @@ def main() -> int:
 
     if gate["passed"]:
         nxt = state.next_stage(pipeline, cur, which)
+        # The guard above proved `cur` is configured, so an absent successor
+        # means this flow's last stage is not `done` - the only stage allowed to
+        # end a run (it is handled before the gate). Block instead of writing
+        # NULL: same silent-death path as an unknown stage, one step later.
+        if nxt is None:
+            state.set_fields(conn, args.task, stage_status=state.ST_BLOCKED)
+            run = state.get_run(conn, args.task)
+            conn.close()
+            return result("blocked", args.task, run,
+                          f"stage '{cur}' passed its gate, but the {which} flow defines no "
+                          f"stage after it and '{cur}' is not the terminal 'done' stage. Fix "
+                          f"pipelines.{which}.stages in .claude/pipeline.json (the list must "
+                          f"end with 'done'), then re-run advance.py --task {args.task}.")
         state.set_fields(conn, args.task, stage=nxt, stage_status=state.ST_IN_PROGRESS,
                          retries=0, continuations=0)
         run = state.get_run(conn, args.task)

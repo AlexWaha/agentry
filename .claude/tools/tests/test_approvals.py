@@ -49,7 +49,11 @@ class PushIsNeverGrantedTest(unittest.TestCase):
         original = approvals.read
         approvals.read = lambda: approvals.AUTO
         try:
-            for checkpoint in (approvals.TAKE, approvals.COMMIT, approvals.DIFF_REVIEW):
+            # Derived from the data, never re-typed: a hardcoded list kept
+            # asserting a checkpoint that had already been removed from GRANTS,
+            # which is the same defect as one config key protecting one name.
+            self.assertTrue(approvals.GRANTS[approvals.AUTO])  # control
+            for checkpoint in sorted(approvals.GRANTS[approvals.AUTO]):
                 with self.subTest(checkpoint=checkpoint):
                     self.assertTrue(approvals.granted(checkpoint))
         finally:

@@ -55,24 +55,23 @@ asking "should I continue?" at every step.
 
 ### The build pipeline
 
-Every implementation task travels the same six stages. Each arrow is a real
+Every implementation task travels the same five stages. Each arrow is a real
 exit-gate command, not an agent's opinion.
 
 ```mermaid
 flowchart LR
     A[implement] -->|build command passes| B[test]
     B -->|test suite green| C[review]
-    C -->|lint clean, no Critical/High findings| D[diff-review]
-    D -->|CEO approves the visual diff| E[ready]
-    E -->|CEO approves commit, then push| F[done]
+    C -->|lint clean, no Critical/High findings| D[ready]
+    D -->|CEO approves commit, then push| E[done]
     C -.->|findings found| A
-    D -.->|changes requested| A
+    D -.->|commit rejected| A
 ```
 
-`diff-review` opens a side-by-side diff in the browser, where the CEO approves
-or sends the task back with inline comments. It is on its way out: Claude Code
-now ships a built-in `/diff`, so the stage and its tool are removed in the
-current epic and the diff moves to the commit checkpoint.
+There is no separate visual-diff stage. There used to be one, backed by a local
+browser UI, and it was removed once Claude Code shipped a built-in `/diff`: the
+CEO now reads the diff at the commit checkpoint, where the approval already
+waits. Rejecting there sends the task back to `implement`.
 
 `implement`, `test`, and `review` are editing stages: only one task occupies
 one at a time, so there is never a concurrent edit to the working tree. `done`
@@ -163,7 +162,7 @@ manifest) is planned - see [Roadmap](#roadmap) - and is not shipped today.
 
 | Mode | Pipeline |
 |---|---|
-| `build` | `implement -> test -> review -> diff-review -> ready -> done` |
+| `build` | `implement -> test -> review -> ready -> done` |
 | `plan` | `formalize -> draft -> plan-review -> approval -> breakdown -> done` |
 | `talk` | no pipeline registration |
 
@@ -171,8 +170,8 @@ manifest) is planned - see [Roadmap](#roadmap) - and is not shipped today.
 
 | Level | Behavior |
 |---|---|
-| `manual` | every checkpoint waits for you: which task to take, the diff, the commit |
-| `assisted` | taking a task and committing pass unasked; a clean code review skips the diff review |
+| `manual` | every checkpoint waits for you: which task to take, the commit |
+| `assisted` | taking a task and committing pass unasked |
 | `auto` | the above, plus taking the next ready task when the current one parks |
 
 Two things no level ever grants, whatever `pipeline.json` says: **the push** and
@@ -200,9 +199,8 @@ git push
 python .claude/tools/pipeline/advance.py --task task-0001
 ```
 
-Between the start of a task and its three checkpoints (the visual diff review,
-the commit, the push), the
-orchestrator drives it without asking to continue: the `Stop` hook
+Between the start of a task and its two checkpoints (the commit and the push),
+the orchestrator drives it without asking to continue: the `Stop` hook
 (`stop_gate.py`) blocks the session from ending while any task is
 advanceable or a ready backlog task remains, and reconciles a task's folder
 against git and `run.db` state before it allows an idle stop. A `blocked`

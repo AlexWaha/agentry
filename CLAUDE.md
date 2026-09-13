@@ -37,8 +37,8 @@ Every task follows this pipeline. No shortcuts.
 4. **Delegate to Reviewer** for code/architecture review
 5. **Delegate to QA Engineer** for tests + quality gates
 6. **Issues found** → back to agent → re-review → re-QA
-7. **All passes** → CEO reviews the visual diff (diff-review stage, browser UI);
-   Request changes routes the task back with inline comments
+7. **All passes** → CEO reads the diff at the commit checkpoint (`/diff` in the
+   session); rejecting routes the task back to `implement`
 8. **Approved** → Orchestrator presents summary to CEO, commit and push follow
    the approval checkpoints
 

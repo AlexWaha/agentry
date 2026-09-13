@@ -56,11 +56,10 @@ state and gate checks live in deterministic hooks (`.claude/tools/pipeline/` +
 
 - **All questions are answered in plan mode, before execution.** Mid-pipeline you
   do not ask the CEO clarifying questions; missing data means park and send back.
-- **The CEO re-engages at three tail checkpoints:** the visual **diff-review**
-  (advance.py opens `tools/review/diff_review.py` in the browser - side-by-side
-  diff, inline comments, Approve / Request changes; Request changes appends the
-  comments to the task file and resets the task to implement), then approve
-  commit, then approve push. The `PreToolUse` hook blocks `git commit`/`git push`
+- **The CEO re-engages at two tail checkpoints:** approve the commit, then
+  approve the push. The commit checkpoint is where the CEO reads the diff
+  (Claude Code's built-in `/diff`); rejecting there sends the task back to
+  `implement`. The `PreToolUse` hook blocks `git commit`/`git push`
   until you record the approval via `tools/pipeline/approve.py` (run it only
   after the CEO approves). A checkpoint listed in the `ready` stage's
   `auto_approve` (pipeline.json) is approved automatically - human participation

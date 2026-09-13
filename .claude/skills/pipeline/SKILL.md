@@ -22,7 +22,7 @@ unreadable.
 
 | Mode | Conveyor | What it is for |
 |---|---|---|
-| `build` | on - `pipelines.build` | Default. Tasks advance implement -> test -> review -> diff-review -> ready -> done, commit and push gated by the CEO. |
+| `build` | on - `pipelines.build` | Default. Tasks advance implement -> test -> review -> ready -> done, commit and push gated by the CEO. |
 | `plan` | on - `pipelines.plan` | Design. Tasks advance formalize -> draft -> plan-review -> approval -> breakdown -> done. Writes a brief, a plan, a spec, and task files into `.claude/tasks/backlog/`. No product code. |
 | `talk` | off | Discussion, hypotheses, exploration. Nothing tracked, nothing written. |
 
@@ -34,8 +34,8 @@ are gated stage machines registered and advanced through the same
 
 | Level | Grants without asking | What still needs the CEO |
 |---|---|---|
-| `manual` | nothing | every checkpoint: which task to take, the diff, the commit, the push |
-| `assisted` | take a task, commit, skip diff-review when the code review is clean | the push |
+| `manual` | nothing | every checkpoint: which task to take, the commit, the push |
+| `assisted` | take a task, commit | the push |
 | `auto` | all of the above, then it takes the next ready task | the push, merging into `main`, moving a task to `done`, answering planning questions - no level ever grants these |
 
 The push is absent from every row on purpose: `approvals.NEVER_GRANTED` refuses

@@ -82,11 +82,9 @@ answers into `.claude/pipeline.json`, replacing its `{{PLACEHOLDERS}}` with the
 concrete values. Do not guess - this is the user's chance to shape autonomy.
 
 **B1. Pipeline stages.** "Which execution stages, in order? [implement, test,
-review, diff-review, ready, done]" - confirm or edit the list. The
-`diff-review` stage opens a browser UI (`tools/review/diff_review.py`) where
-the CEO reviews the visual diff and approves or requests changes with inline
-comments - ask: "Keep the visual diff-review stage? Remove it only for
-headless environments (CI, no browser). [keep]"
+review, ready, done]" - confirm or edit the list. The CEO reads the diff at the
+`ready` stage's commit checkpoint using Claude Code's built-in `/diff`, so no
+separate review stage is needed.
 
 **B2. Exit gate per stage.** For each gated stage, confirm the command (defaults
 from `project/stack.md`):

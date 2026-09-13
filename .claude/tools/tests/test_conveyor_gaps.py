@@ -14,7 +14,12 @@ Each test pins one defect that cost a round trip every turn of a real session:
 5. the backlog reader read only `depends_on`, so `superseded_by:` and
    `blocked_on:` were decorative - the queue kept offering a task whose work had
    been folded into another one, and a dependency on such a task could never be
-   satisfied because a superseded task never reaches done/.
+   satisfied because a superseded task never reaches done/;
+6. a run sitting on a stage the config does not define reported success and died
+   quietly: no exit_gate means "configured and passed", so advance.py wrote
+   stage=NULL under an "advanced" message, and NULL is in neither the editing
+   set nor awaiting_human - so the Stop hook read a free slot and offered the
+   next task, which is defects 1 and 3 back through another door.
 """
 
 from __future__ import annotations
@@ -31,9 +36,23 @@ PIPELINE_DIR = Path(__file__).resolve().parents[1] / "pipeline"
 sys.path.insert(0, str(PIPELINE_DIR))
 
 import advance
+import approve
 import git_state
 import state
 import stop_gate
+
+# The stock build flow, as a literal: these tests must keep asserting against a
+# known stage list even when .claude/pipeline.json is edited.
+BUILD_PIPELINE = {
+    "retry_budget": 3,
+    "pipelines": {"build": {"stages": [
+        {"name": "implement", "owner": "dev"},
+        {"name": "test", "owner": "qa-engineer"},
+        {"name": "review", "owner": "reviewer"},
+        {"name": "ready", "owner": "orchestrator", "checkpoints": ["commit", "push"]},
+        {"name": "done", "owner": "orchestrator"},
+    ]}},
+}
 
 
 def run(task="task-0001", stage="implement", status=state.ST_IN_PROGRESS,
@@ -52,7 +71,7 @@ class _FakeConn:
         pass
 
 
-def decide_with(runs: list[dict], backlog=("task-0002",)) -> str | None:
+def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None) -> str | None:
     """stop_gate.decide() over a synthetic run set. Returns the block reason, or
     None when the hook allowed the stop. No DB, no git, no task files.
 
@@ -65,7 +84,8 @@ def decide_with(runs: list[dict], backlog=("task-0002",)) -> str | None:
     with unittest.mock.patch.object(stop_gate.mode, "conveyor_runs", return_value=True), \
             unittest.mock.patch.object(stop_gate.state, "connect", return_value=_FakeConn()), \
             unittest.mock.patch.object(stop_gate.state, "all_runs", return_value=runs), \
-            unittest.mock.patch.object(stop_gate.state, "load_pipeline", return_value={}), \
+            unittest.mock.patch.object(stop_gate.state, "load_pipeline",
+                                       return_value=pipeline or {}), \
             unittest.mock.patch.object(stop_gate.state, "set_fields"), \
             unittest.mock.patch.object(stop_gate, "read_backlog", return_value=queue), \
             unittest.mock.patch.object(stop_gate, "handoff_debt", return_value=[]), \
@@ -90,10 +110,10 @@ class FreeSlotTest(unittest.TestCase):
         self.assertIn("Start the next ready task task-0002", reason)
 
     def test_run_parked_at_a_checkpoint_offers_nothing(self):
-        for awaiting in ("commit", "push", "diff-review"):
+        # Two checkpoints remain on the build flow: the commit and the push.
+        for awaiting in ("commit", "push"):
             with self.subTest(awaiting_human=awaiting):
-                stage = "diff-review" if awaiting == "diff-review" else "ready"
-                self.assertIsNone(decide_with([run(stage=stage, awaiting_human=awaiting)]))
+                self.assertIsNone(decide_with([run(stage="ready", awaiting_human=awaiting)]))
 
     def test_finished_run_waiting_for_the_ceo_merge_offers_nothing(self):
         # The reported case: task-0001 sat at 'done' waiting to be merged while
@@ -288,6 +308,107 @@ class BacklogFilterTest(unittest.TestCase):
         self._task("task-0100")
         self._task("task-0101", deps=("task-0102",))  # never created
         self.assertEqual(["task-0100"], self._ready())
+
+
+class StrandedStageTest(unittest.TestCase):
+    """Defect 6: a stage absent from the config counted as a passed gate.
+
+    Runs against a throwaway run.db and a literal stage list - never the live
+    state - so the assertions cannot be moved by a pipeline.json edit."""
+
+    def setUp(self):
+        self.tmp = Path(__file__).resolve().parent / "_tmp_run"
+        self.tmp.mkdir(exist_ok=True)
+        for attr, value in (("STATE_DIR", self.tmp), ("DB_PATH", self.tmp / "run.db")):
+            p = unittest.mock.patch.object(state, attr, value)
+            p.start()
+            self.addCleanup(p.stop)
+        p = unittest.mock.patch.object(state, "load_pipeline", return_value=BUILD_PIPELINE)
+        p.start()
+        self.addCleanup(p.stop)
+        self.addCleanup(self._clean)
+
+    def _clean(self):
+        for f in self.tmp.iterdir():
+            f.unlink()
+        self.tmp.rmdir()
+
+    def _seed(self, task, stage):
+        conn = state.connect()
+        state.create_run(conn, task, "feature", stage)
+        conn.close()
+
+    def _row(self, task) -> dict:
+        conn = state.connect()
+        try:
+            return state.get_run(conn, task)
+        finally:
+            conn.close()
+
+    def _cli(self, module, *args) -> dict:
+        buf = io.StringIO()
+        with unittest.mock.patch.object(sys, "argv", ["cli.py", *args]), \
+                redirect_stdout(buf):
+            module.main()
+        return json.loads(buf.getvalue())
+
+    def test_unknown_stage_blocks_instead_of_advancing(self):
+        self._seed("task-0500", "ghost-stage")
+        out = self._cli(advance, "--task", "task-0500")
+
+        self.assertEqual("blocked", out["action"])
+        self.assertIn("'ghost-stage' is not part of the build flow", out["message"])
+        self.assertIn("implement, test, review, ready, done", out["message"])
+        self.assertIn("--reject", out["message"])
+
+    def test_unknown_stage_never_writes_a_null_stage(self):
+        self._seed("task-0500", "ghost-stage")
+        for _ in range(2):  # the second call must not drift further either
+            self._cli(advance, "--task", "task-0500")
+            row = self._row("task-0500")
+            self.assertEqual("ghost-stage", row["stage"])
+            self.assertEqual(state.ST_BLOCKED, row["stage_status"])
+
+    def test_stop_hook_offers_nothing_while_a_run_is_stranded(self):
+        for status in (state.ST_IN_PROGRESS, state.ST_BLOCKED):
+            with self.subTest(stage_status=status):
+                self.assertIsNone(decide_with([run(stage="ghost-stage", status=status)],
+                                              pipeline=BUILD_PIPELINE))
+
+    def test_an_unreadable_pipeline_disables_the_check_rather_than_stranding(self):
+        # Fail-open control: with no readable stage list the hook behaves as
+        # before, so a broken config cannot freeze the queue.
+        reason = decide_with([run(stage="ghost-stage")], pipeline={})
+        self.assertIn("Start the next ready task task-0002", reason)
+
+    def test_a_configured_stage_still_advances(self):
+        self._seed("task-0501", "implement")
+        out = self._cli(advance, "--task", "task-0501")
+
+        self.assertEqual("advanced", out["action"])
+        self.assertEqual("test", self._row("task-0501")["stage"])
+
+    def test_the_terminal_stage_still_routes_to_the_merge_check(self):
+        self._seed("task-0502", "done")
+        with unittest.mock.patch.object(advance, "finish_or_wait_for_merge",
+                                        return_value=0) as finish, \
+                unittest.mock.patch.object(sys, "argv", ["advance.py", "--task", "task-0502"]), \
+                redirect_stdout(io.StringIO()):
+            advance.main()
+
+        self.assertEqual(1, finish.call_count)
+        self.assertEqual("done", self._row("task-0502")["stage"])
+
+    def test_reject_recovers_a_stranded_run(self):
+        self._seed("task-0500", "ghost-stage")
+        self._cli(advance, "--task", "task-0500")
+
+        out = self._cli(approve, "--task", "task-0500", "--reject")
+
+        self.assertTrue(out["ok"])
+        row = self._row("task-0500")
+        self.assertEqual("implement", row["stage"])
+        self.assertEqual(state.ST_IN_PROGRESS, row["stage_status"])
 
 
 if __name__ == "__main__":

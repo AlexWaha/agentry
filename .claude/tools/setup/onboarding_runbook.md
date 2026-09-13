@@ -15,7 +15,8 @@ Hard rules:
 - SOURCE template (read-only reference):
   d:/Work/AlexWaha.com/AI-team/AI-team-universal/.claude
   Read source `.claude/_init-prompt.md` (Phase A + Phase B) and
-  `.claude/memory/README.md` (L1/L2/L3 entry formats) for the full contract.
+  `.claude/memory/README.md` (memory-store row kinds and fields) for the full
+  contract.
 - The target's gate hooks do NOT fire in this session; you may Edit/Write target
   paths freely.
 
@@ -66,10 +67,10 @@ Hard rules:
    non-applicable import lines.
 
 4. PIPELINE.JSON (Phase B defaults, NO interview). If ROOT/.claude/pipeline.json is
-   an older/minimal schema (missing the `diff-review` stage, or the
+   an older/minimal schema (missing the two-flow `pipelines` block, or the
    memory/handoff/gates/orchestrator_gate blocks), REBUILD it from the source
    pipeline.json schema with defaults derived from the detected stack:
-   - stages: [implement, test, review, diff-review, ready, done]
+   - stages: [implement, test, review, ready, done]
    - exit gates: implement -> build cmd, test -> test cmd, review -> lint cmd
      (empty string if the stack genuinely has none - common for infra/docs)
    - owners: implement -> senior-backend-dev (+ senior-frontend-dev if a frontend
@@ -123,8 +124,8 @@ Hard rules:
 - stack: one-liner
 - placeholders remaining after: N (must be 0)
 - pipeline.json: kept | rebuilt (+ baseline used)
-- memory: migrated N facts -> L1 x / L2 y / L3 z, originals moved to legacy;
-  OR "none - seeds only"
+- memory: migrated N facts -> module x / lesson y / pattern z rows, originals
+  moved to legacy; OR "none - store created empty"
 - verify: check1 pass/fail, check2 pass/fail, engine loads yes/no
 - manual-attention: anything left, or "none"
 

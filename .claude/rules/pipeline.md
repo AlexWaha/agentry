@@ -35,8 +35,7 @@ refused until that spec is approved.
 - **Plan pipeline** (per epic / milestone): see above. Owner: `architect`
   (spec: `spec-developer`; breakdown: `product-manager`).
 - **Build pipeline** (per task, autonomous): `implement -> test -> review ->
-  diff-review -> ready -> done`. Driven by `advance.py`; see
-  `orchestration.md`.
+  ready -> done`. Driven by `advance.py`; see `orchestration.md`.
 
 ## Execution stages
 
@@ -45,8 +44,7 @@ refused until that spec is approved.
 | implement | `senior-backend-dev` / `senior-frontend-dev` | `{{BUILD_CMD}}` succeeds; code in task scope | - |
 | test | `qa-engineer` | `{{TEST_CMD}}` green; required cases per `testing.md` | - |
 | review | `reviewer` (+ `security-engineer`) | `{{LINT_CMD}}` clean; all Critical/High findings resolved; read-only (no code edits) | - |
-| diff-review | Orchestrator (UI: `tools/review/diff_review.py`) | CEO verdict file `approved` in `.claude/state/review/` | **CEO reviews the visual diff**: Approve advances; Request changes appends the comments to the task file and resets the task to `implement` |
-| ready | Orchestrator | gates green; diff prepared | **CEO approves commit** |
+| ready | Orchestrator | gates green; diff prepared | **CEO reads the diff (`/diff`) and approves the commit**; rejecting sends the task back to `implement` |
 | done | CEO | merged into `main` (confirmed by `git_state.py`, not just pushed) | **CEO approves push**; task file moved to `done/` once the merge is confirmed; next registration is blocked until this task's handoff doc exists AND its memory review is stamped (`tools/memory/update.py`) |
 
 UI-bearing tasks add a `senior-frontend-dev` implement pass and an
@@ -62,9 +60,9 @@ Every dispatched agent reads, in this order, BEFORE producing anything:
 2. `.claude/project/project-context.md` - the overall project context.
 3. The task's spec (`spec:` in the task frontmatter -> `.claude/specs/`), or the
    task file's acceptance criteria when `spec: none`.
-4. Any `## CEO Review Feedback` sections at the end of the task file - review
-   comments from the CEO diff review; each comment must be addressed before the
-   task can pass diff-review again.
+4. Any `## CEO Review Feedback` sections at the end of the task file - comments
+   the CEO recorded when sending the task back from the commit checkpoint; each
+   comment must be addressed before the task returns there.
 
 When the Orchestrator dispatches you to WRITE a handoff doc for the previous
 completed task: write it in your own words from `tasks/done/<task>.md`, its
