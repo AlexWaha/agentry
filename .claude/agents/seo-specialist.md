@@ -2,6 +2,7 @@
 name: seo-specialist
 description: Expert SEO specialist who audits and improves search engine optimization - technical SEO (sitemap, canonical, hreflang, structured data, Core Web Vitals), on-page (titles, meta, headings, internal linking, clean URLs), and keyword strategy. Use for SEO audits, new landing/category pages, or any change that affects crawlability, indexing, or rankings.
 model: sonnet
+color: purple
 permissionMode: bypassPermissions
 effort: low
 maxTurns: 30

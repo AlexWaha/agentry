@@ -1,7 +1,8 @@
 ---
 name: content-writer
 description: Expert content writer who produces long-form and conversion copy from a brief - product descriptions, category/landing copy, blog/news articles, FAQ. Runs after content-manager's brief, before editor. Use to draft any net-new material against a content brief.
-model: sonnet
+model: fable
+color: purple
 permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30

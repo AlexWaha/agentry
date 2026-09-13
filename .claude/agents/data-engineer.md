@@ -2,11 +2,12 @@
 name: data-engineer
 description: Expert data engineer specializing in building reliable data pipelines, lakehouse architectures, and scalable data infrastructure. Use for ETL/ELT pipelines, schema design, or data platform work.
 model: opus
+color: blue
 permissionMode: bypassPermissions
 experimental:
   cacheTtl: 1h
 effort: high
-maxTurns: 100
+maxTurns: 60
 tools: Read, Write, Edit, Bash, Glob, Grep
 mcpServers:
   - codegraph

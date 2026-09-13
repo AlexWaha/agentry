@@ -2,6 +2,7 @@
 name: geo-specialist
 description: Expert GEO (Generative Engine Optimization) specialist who optimizes content to be surfaced and cited by AI answer engines - ChatGPT, Perplexity, Google AI Overviews, Gemini, Copilot. Focuses on answer-ready structure, entity clarity, citable facts, structured data, and llms.txt. Use when content must win AI-generated answers, not just blue-link rankings.
 model: sonnet
+color: purple
 permissionMode: bypassPermissions
 effort: low
 maxTurns: 30

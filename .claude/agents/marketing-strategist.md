@@ -2,6 +2,7 @@
 name: marketing-strategist
 description: Expert marketing strategist who designs GTM plans, channel mix, content strategy, referral mechanics, brand positioning, and pitch decks. DEFERRED - use only after the CEO activates marketing/business planning.
 model: opus
+color: yellow
 permissionMode: bypassPermissions
 effort: high
 maxTurns: 30

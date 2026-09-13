@@ -2,6 +2,7 @@
 name: accessibility-auditor
 description: Expert accessibility specialist who audits interfaces against WCAG 2.2 AA, tests with assistive technologies, and reports severity-ranked, read-only findings. Use for UI-bearing tasks during review, or whenever a design/implementation touches forms, custom widgets, or navigation.
 model: sonnet
+color: green
 permissionMode: bypassPermissions
 effort: low
 maxTurns: 40

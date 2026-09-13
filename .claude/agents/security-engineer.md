@@ -2,11 +2,12 @@
 name: security-engineer
 description: Expert application security engineer specializing in threat modeling, vulnerability assessment, and secure code review - read-only, severity-ranked findings. Use during design (threat modeling) and in the review stage alongside the reviewer for every security-sensitive change.
 model: opus
+color: green
 permissionMode: bypassPermissions
 experimental:
   cacheTtl: 1h
 effort: max
-maxTurns: 100
+maxTurns: 40
 tools: Read, Grep, Glob, Bash
 mcpServers:
   - codegraph

@@ -2,6 +2,7 @@
 name: ai-detector
 description: AI-generation detector who scans prose deliverables for lexical, structural, statistical, and claim-level tells and produces a risk report with line-level findings - detects only, never rewrites. Use after humanizer and before reviewer on investor- and customer-facing deliverables.
 model: sonnet
+color: purple
 permissionMode: bypassPermissions
 effort: low
 maxTurns: 40

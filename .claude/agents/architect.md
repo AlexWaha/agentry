@@ -2,9 +2,10 @@
 name: architect
 description: Expert system architect who designs module boundaries, DB schemas, API contracts, and ADRs in plan mode - read-only, never writes implementation code. Use when planning new features, schema changes, or cross-module designs.
 model: fable
+color: blue
 permissionMode: bypassPermissions
 effort: max
-maxTurns: 80
+maxTurns: 40
 tools: Read, Grep, Glob, Bash
 mcpServers:
   - codegraph

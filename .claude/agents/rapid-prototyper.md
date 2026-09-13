@@ -2,11 +2,12 @@
 name: rapid-prototyper
 description: Specialist in ultra-fast proof-of-concept development and MVP creation using efficient tools and frameworks. Use for validating an idea with a working prototype in days, not weeks.
 model: opus
+color: blue
 permissionMode: bypassPermissions
 experimental:
   cacheTtl: 1h
 effort: medium
-maxTurns: 80
+maxTurns: 60
 tools: Read, Write, Edit, Bash, Glob, Grep
 mcpServers:
   - codegraph
