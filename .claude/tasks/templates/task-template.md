@@ -4,7 +4,21 @@ type: feature|bugfix|techdebt|enhancement
 priority: high|medium|low
 title: Short descriptive title
 phase: phase-name-or-number
+# repo: key of `repos{}` in pipeline.json; empty means the default lane. Read
+# today by state.task_repo() to scope merge detection in a multi-repo project,
+# and to dispatch a stage's gate once a project fills stack_gate.STACKS. An
+# empty value in a multi-repo project can park a task forever. Lane routing on
+# this field has no reader until FR-45 (task-0030).
+repo:
 depends_on: []
+# blocked_on: a wait no other task can clear (CEO ruling, vendor answer). Leave
+# bare - empty means no block. stop_gate.py reads ANY non-whitespace value as a
+# block, `""` included, and a blocked task is never offered by the queue.
+blocked_on:
+# superseded_by: bare task id (task-0123) when this task's work moved to another
+# task. Unquoted and unbracketed - `"task-0123"` and `[task-0123]` are not read,
+# so the queue would keep offering a task that really was superseded.
+superseded_by:
 epic:
 spec:
 created: YYYY-MM-DD
