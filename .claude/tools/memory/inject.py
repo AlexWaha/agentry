@@ -30,8 +30,8 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve()
-CLAUDE_DIR = HERE.parents[2]
-ACTIVE_DIR = CLAUDE_DIR / "tasks" / "active"
+ROOT = HERE.parents[3]
+ACTIVE_DIR = ROOT / ".agentry" / "tasks" / "active"
 sys.path.insert(0, str(HERE.parent))
 
 # Sibling module; the dir is not on sys.path by default, hence the insert above.
@@ -77,7 +77,7 @@ def head_line(shown: int, matched: int, terms: list) -> str:
     count = (f"{shown} row(s) matched this dispatch" if shown == matched
              else f"{shown} of {matched} matching row(s) (byte budget)")
     return (f"## Project memory: {count}\n"
-            f"Ranked from .claude/memory/memory.db (query terms: "
+            f"Ranked from .agentry/memory/memory.db (query terms: "
             f"{', '.join(terms[:8])}). Apply a matching FIX before acting; "
             f"record new lessons with .claude/tools/memory/memory.py --record.")
 

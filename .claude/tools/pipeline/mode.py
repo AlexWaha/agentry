@@ -8,7 +8,7 @@ backlog along with it.
 
 The mode picks WHICH stage machine runs, it is not an on/off switch. Planning
 is no less formal than building: it has its own stages, its own owners and its
-own checkpoints. Stored as one word in .claude/state/mode:
+own checkpoints. Stored as one word in .agentry/state/mode:
 
   build  implementation. Drives a task from code to a pushed branch.
   plan   design. Turns a request into an approved plan, a spec and task files
@@ -36,7 +36,7 @@ import state
 
 ROOT = Path(__file__).resolve().parents[3]
 # Suffixed per lane from the single accessor in state.py - see state.LANE.
-MODE_PATH = ROOT / ".claude" / "state" / f"mode{state.LANE_SUFFIX}"
+MODE_PATH = ROOT / ".agentry" / "state" / f"mode{state.LANE_SUFFIX}"
 
 BUILD = "build"
 PLAN = "plan"

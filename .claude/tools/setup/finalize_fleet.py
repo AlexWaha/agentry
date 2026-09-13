@@ -6,7 +6,7 @@ Reuses discovery + classification from fleet_rollout. Two modes:
   --verify   (default) per-target checks, no writes:
              - leftover {{PLACEHOLDER}} under .claude/ (excluding the intentional
                runtime-token files) -> must be 0
-             - "PROJECT-SPECIFIC - REPLACE ME" under .claude/project/ -> must be 0
+             - "PROJECT-SPECIFIC - REPLACE ME" under .agentry/project/ -> must be 0
              - pipeline engine loads (state.py --show returns 0)
   --commit   for git repos only (never WSL, never excluded): stage the rollout
              paths and commit on the chore/ai-team-upgrade branch. No push.

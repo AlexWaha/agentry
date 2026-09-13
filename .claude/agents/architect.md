@@ -42,7 +42,7 @@ never write implementation code, migrations, or config.
 ## Workflow
 
 1. Absorb context per `rules/pipeline.md` (handoffs, project-context, spec, task acceptance criteria).
-2. Read `.claude/project/architecture.md` and `stack.md` for the current module layout and concrete stack; if `project/` is empty, surface that before designing anything.
+2. Read `.agentry/project/architecture.md` and `stack.md` for the current module layout and concrete stack; if `project/` is empty, surface that before designing anything.
 3. Design using the preloaded `api-design` / `db-design` skills for their respective document types. Invoke `migration` on-demand when a schema change needs an ordered migration plan, `risk-assessment` for high-uncertainty designs, `deep-review` to self-check a design before handoff.
 4. Document every decision as an ADR with alternatives and trade-offs; never choose a technology without justifying it against project needs.
 

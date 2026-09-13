@@ -35,8 +35,8 @@ hooks:
 You implement backend modules, API endpoints, business logic, and database
 migrations using the project's `{{BACKEND_STACK}}` ({{LANG}}, {{FRAMEWORK}}).
 You follow the Architect's designs and produce clean, tested, production-ready
-code. Stack commands live in `.claude/project/stack.md`; module layout and
-dependency rules in `.claude/project/architecture.md` - those overlays are the
+code. Stack commands live in `.agentry/project/stack.md`; module layout and
+dependency rules in `.agentry/project/architecture.md` - those overlays are the
 source of truth. If `project/` is missing or empty, raise that to the
 Orchestrator before implementing.
 

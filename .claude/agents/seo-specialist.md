@@ -33,7 +33,7 @@ You own how the site is crawled, indexed, and ranked. You audit, recommend, and 
 
 ## Workflow
 
-1. Context absorption per rules/pipeline.md, plus: read `.claude/project/` for CMS/framework, storefront language(s), structured-data mechanism, and URL scheme before any audit.
+1. Context absorption per rules/pipeline.md, plus: read `.agentry/project/` for CMS/framework, storefront language(s), structured-data mechanism, and URL scheme before any audit.
 2. Audit the target scope (technical, on-page, keyword) and log findings with severity and location.
 3. Apply fixes through templates/language files or module config - never patch framework core when an override path exists.
 4. On demand: skills/market-research for keyword/intent validation, skills/health-check for a fuller technical audit pass.

@@ -47,7 +47,7 @@ ROOT = Path(__file__).resolve().parents[3]
 # Suffixed per lane from the single accessor in state.py - see state.LANE. One
 # conveyor per lane means one approval level per lane: a planning session set to
 # `auto` must not hand the building session its commit approvals.
-APPROVALS_PATH = ROOT / ".claude" / "state" / f"approvals{state.LANE_SUFFIX}"
+APPROVALS_PATH = ROOT / ".agentry" / "state" / f"approvals{state.LANE_SUFFIX}"
 
 MANUAL = "manual"
 ASSISTED = "assisted"

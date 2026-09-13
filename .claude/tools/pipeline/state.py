@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-STATE_DIR = ROOT / ".claude" / "state"
+STATE_DIR = ROOT / ".agentry" / "state"
 
 # A lane is one independent conveyor. PIPELINE_LANE=<name> in the environment of
 # a session gives it its own run.db, mode and approvals file, so a session
@@ -73,10 +73,10 @@ LANE = _RAW_LANE
 LANE_SUFFIX = f".{LANE}" if LANE else ""
 
 DB_PATH = STATE_DIR / f"run{LANE_SUFFIX}.db"
-PIPELINE_PATH = ROOT / ".claude" / "pipeline.json"
-BACKLOG_DIR = ROOT / ".claude" / "tasks" / "backlog"
-ACTIVE_DIR = ROOT / ".claude" / "tasks" / "active"
-DONE_DIR = ROOT / ".claude" / "tasks" / "done"
+PIPELINE_PATH = ROOT / ".agentry" / "pipeline.json"
+BACKLOG_DIR = ROOT / ".agentry" / "tasks" / "backlog"
+ACTIVE_DIR = ROOT / ".agentry" / "tasks" / "active"
+DONE_DIR = ROOT / ".agentry" / "tasks" / "done"
 
 # The folder a task file sits in IS its state. There is no `status:` field to
 # drift out of sync with it: backlog = queued, active = moving through a

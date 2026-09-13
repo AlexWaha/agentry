@@ -22,7 +22,7 @@ class MatchesC2Test(unittest.TestCase):
     """task-0001 FR-21/FR-22: the planning-and-documentation path set."""
 
     def test_claude_plans_path_matches(self):
-        self.assertTrue(pretool_gate.matches_c2(".claude/plans/2026-01-01-foo.md"))
+        self.assertTrue(pretool_gate.matches_c2(".agentry/plans/2026-01-01-foo.md"))
 
     def test_agentry_specs_path_matches(self):
         self.assertTrue(pretool_gate.matches_c2(".agentry/specs/spec-0001.md"))
@@ -39,19 +39,19 @@ class MatchesC2Test(unittest.TestCase):
         # so this must use a non-.md file to actually isolate the backslash-to-
         # forward-slash normalization instead of accidentally riding the other
         # branch. See qa-engineer's task-0001 test-stage finding.
-        self.assertTrue(pretool_gate.matches_c2(".claude\\tasks\\backlog\\task-0043.txt"))
+        self.assertTrue(pretool_gate.matches_c2(".agentry\\tasks\\backlog\\task-0043.txt"))
 
     def test_agentry_plans_path_matches(self):
         self.assertTrue(pretool_gate.matches_c2(".agentry/plans/2026-01-01-foo.md"))
 
     def test_claude_specs_path_matches(self):
-        self.assertTrue(pretool_gate.matches_c2(".claude/specs/spec-0001.md"))
+        self.assertTrue(pretool_gate.matches_c2(".agentry/specs/spec-0001.md"))
 
     def test_agentry_tasks_path_matches(self):
         self.assertTrue(pretool_gate.matches_c2(".agentry/tasks/backlog/task-0043.md"))
 
     def test_claude_tasks_path_matches(self):
-        self.assertTrue(pretool_gate.matches_c2(".claude/tasks/backlog/task-0043.md"))
+        self.assertTrue(pretool_gate.matches_c2(".agentry/tasks/backlog/task-0043.md"))
 
     def test_paths_explicitly_outside_c2_do_not_match(self):
         # Contract C-2's explicit exclusion list (spec Data and API Contracts,
@@ -87,7 +87,7 @@ class PlanningOnlyCommitTest(unittest.TestCase):
     def test_all_staged_files_match_c2_is_exempt(self):
         with unittest.mock.patch.object(
                 pretool_gate, "staged_files",
-                return_value=["docs/readme.md", ".claude/plans/x.md"]):
+                return_value=["docs/readme.md", ".agentry/plans/x.md"]):
             self.assertTrue(pretool_gate.planning_only_commit("git commit -m x", "."))
 
     def test_one_non_c2_file_disqualifies_the_whole_commit(self):
@@ -105,7 +105,7 @@ class IsBookkeepingTest(unittest.TestCase):
     """Lint-fixed in task-0043 (tuple startswith); behavior must be unchanged."""
 
     def test_dot_claude_path_is_bookkeeping(self):
-        self.assertTrue(pretool_gate.is_bookkeeping(".claude/tasks/backlog/task-0043.md"))
+        self.assertTrue(pretool_gate.is_bookkeeping(".agentry/tasks/backlog/task-0043.md"))
 
     def test_docs_path_is_bookkeeping(self):
         self.assertTrue(pretool_gate.is_bookkeeping("docs/technical/infrastructure.md"))

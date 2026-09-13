@@ -15,7 +15,7 @@ explicit WSL platform-backend path.
 Classification per target:
   - wsl      : path under \\wsl$ / //wsl$   (git never touched here)
   - git      : has a .git at the project root and is not wsl
-  - full     : has .claude/CLAUDE.md and .claude/memory  (already onboarded)
+  - full     : has .claude/CLAUDE.md and .agentry/memory  (already onboarded)
   - partial  : otherwise (needs scaffold + onboarding from scratch)
 
 Safety:

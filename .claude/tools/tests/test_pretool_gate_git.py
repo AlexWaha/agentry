@@ -39,7 +39,7 @@ def gate_state(mode: str | None = None, push_approval: bool | None = None,
                runs: dict | None = None, db_is_dir: bool = False):
     """Swap pipeline.json config and run.db for throwaway ones.
 
-    The live `.claude/state/run.db` and the project's own pipeline.json are
+    The live `.agentry/state/run.db` and the project's own pipeline.json are
     never read, so a test asserts the shipped DEFAULT rather than whatever this
     repository happens to be configured as. `mode=None` means "no workflow
     block at all" - the adopter's case. `db_is_dir` makes run.db unopenable, to
@@ -197,7 +197,7 @@ class FR21ExemptionTest(unittest.TestCase):
     def test_planning_only_commit_on_main_is_allowed(self):
         with TempRepo() as repo:
             repo.commit()
-            repo.stage(".claude/plans/x.md", "docs/y.md")
+            repo.stage(".agentry/plans/x.md", "docs/y.md")
             code = pretool_gate.handle_bash("git commit -m plan", cwd=repo.path)
         self.assertEqual(code, 0)
 
@@ -208,7 +208,7 @@ class FR21ExemptionTest(unittest.TestCase):
         with TempRepo() as repo, gate_state(runs={"task-9982": {"commit_approved": 1}}):
             repo.commit()
             repo.checkout_new("bugfix/task-9982")
-            repo.stage(".claude/plans/x.md", "docs/y.md")
+            repo.stage(".agentry/plans/x.md", "docs/y.md")
             code = pretool_gate.handle_bash("git commit -m plan", cwd=repo.path)
         self.assertEqual(code, 0)
 
@@ -300,8 +300,8 @@ class RenameExemptionHoleTest(unittest.TestCase):
     def test_staged_rename_of_real_code_into_c2_path_is_refused(self):
         with TempRepo() as repo:
             repo.commit(".claude/tools/pipeline/state.py")
-            Path(repo.path, ".claude/plans").mkdir(parents=True, exist_ok=True)
-            run_git(["mv", ".claude/tools/pipeline/state.py", ".claude/plans/x.md"],
+            Path(repo.path, ".agentry/plans").mkdir(parents=True, exist_ok=True)
+            run_git(["mv", ".claude/tools/pipeline/state.py", ".agentry/plans/x.md"],
                     repo.path)
             code = pretool_gate.handle_bash("git commit -m sneaky", cwd=repo.path)
         self.assertEqual(code, 2)
@@ -315,7 +315,7 @@ class DashACommitHoleTest(unittest.TestCase):
         with TempRepo() as repo:
             repo.commit("app.py")
             Path(repo.path, "app.py").write_text("dirty change", encoding="utf-8")
-            repo.stage(".claude/plans/x.md")
+            repo.stage(".agentry/plans/x.md")
             code = pretool_gate.handle_bash("git commit -am sneaky", cwd=repo.path)
         self.assertEqual(code, 2)
 
@@ -323,7 +323,7 @@ class DashACommitHoleTest(unittest.TestCase):
         with TempRepo() as repo:
             repo.commit("app.py")
             Path(repo.path, "app.py").write_text("dirty change", encoding="utf-8")
-            repo.stage(".claude/plans/x.md")
+            repo.stage(".agentry/plans/x.md")
             code = pretool_gate.handle_bash("git commit --all -m sneaky", cwd=repo.path)
         self.assertEqual(code, 2)
 
@@ -331,7 +331,7 @@ class DashACommitHoleTest(unittest.TestCase):
         # Control: same planning-only staging, no -a, remains allowed.
         with TempRepo() as repo:
             repo.commit("app.py")
-            repo.stage(".claude/plans/x.md")
+            repo.stage(".agentry/plans/x.md")
             code = pretool_gate.handle_bash("git commit -m plan", cwd=repo.path)
         self.assertEqual(code, 0)
 
@@ -1064,7 +1064,7 @@ class StdinDecodeTest(unittest.TestCase):
 
     def run_hook(self, script: str, content: str, *args: str) -> subprocess.CompletedProcess:
         payload = json.dumps({"tool_name": "Write",
-                              "tool_input": {"file_path": ".claude/tasks/note.md",
+                              "tool_input": {"file_path": ".agentry/tasks/note.md",
                                              "content": content}},
                              ensure_ascii=False).encode("utf-8")
         return subprocess.run(

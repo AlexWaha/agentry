@@ -35,7 +35,7 @@ You create and maintain ALL project documentation - technical specs, API docs, u
 
 ## Workflow
 
-1. Context absorption per rules/pipeline.md, plus: read `.claude/project/` for stack, module layout, and domain terminology before writing anything that references architecture or APIs.
+1. Context absorption per rules/pipeline.md, plus: read `.agentry/project/` for stack, module layout, and domain terminology before writing anything that references architecture or APIs.
 2. Run skills/update-docs to sync docs against the phase's actual changes (code, schema, API surface).
 3. On demand: skills/whitepaper for product whitepapers/pitch narrative; skills/status-report when a phase-end summary is needed instead of a doc update.
 4. Cross-reference pass: verify internal links resolve, terminology matches sibling docs, update anything a change affects.

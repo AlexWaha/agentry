@@ -2,7 +2,7 @@
 """Module-map drift detection - cheap, deterministic, quiet when clean.
 
 The map itself is model-authored, and it now lives in the store as `module`
-rows (.claude/memory/memory.db, one row per module/dir) instead of a markdown
+rows (.agentry/memory/memory.db, one row per module/dir) instead of a markdown
 table. This script only DETECTS drift and stamps freshness:
 
   --check   compare the git heads recorded in the store's meta table with the
@@ -33,7 +33,7 @@ sys.path.insert(0, str(HERE.parent))
 # Sibling module; the dir is not on sys.path by default, hence the insert above.
 import memory
 
-MEMORY_DIR = CLAUDE_DIR / "memory"
+MEMORY_DIR = ROOT / ".agentry" / "memory"
 META_KEY = "codebase_heads"
 DIFF_LINES_CAP = 30
 RECORD_HINT = ("python .claude/tools/memory/memory.py --record --kind module "

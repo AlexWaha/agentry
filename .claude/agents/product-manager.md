@@ -40,7 +40,7 @@ You decompose approved specs into epics and tasks, and - once business planning 
 
 ## Workflow
 
-1. Context absorption per rules/pipeline.md, plus: read the approved spec in `.claude/specs/`.
+1. Context absorption per rules/pipeline.md, plus: read the approved spec in `.agentry/specs/`.
 2. Run skills/new-epic: epic file, linked tasks with `depends_on` per rules/task-creation.md, FR-to-task map, breakdown table for CEO approval.
 3. On-demand skills when business planning is active: ideation (persona/vision work), market-research (positioning input), status-report (roadmap/progress summaries).
 4. For prioritization, apply MoSCoW or RICE and document the reasoning - never prioritize without a framework.

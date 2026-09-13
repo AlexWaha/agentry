@@ -210,13 +210,21 @@ def orch_enabled() -> bool:
 
 
 def orch_allowed_path(file_path: str) -> bool:
-    """Bookkeeping allowlist for the orchestrator: any .claude/ tree, docs/,
-    README*, the root CLAUDE.md, the harness plan scratch (~/.claude/plans/),
-    plus configurable extra_allow globs (matched repo-relative)."""
+    """Bookkeeping allowlist for the orchestrator: any .claude/ or .agentry/
+    tree, docs/, README*, the root CLAUDE.md, the harness plan scratch
+    (~/.claude/plans/), plus configurable extra_allow globs (matched
+    repo-relative).
+
+    .agentry/ joined the list when FR-13 moved the work product out of
+    .claude/: task files, plans, specs and run state are exactly what the
+    orchestrator is supposed to write, so leaving it out denied the main
+    thread its own job."""
     try:
         raw = file_path.replace("\\", "/")
         low = raw.lower()
         if "/.claude/" in low or low.startswith(".claude/"):
+            return True
+        if "/.agentry/" in low or low.startswith(".agentry/"):
             return True
         if "/docs/" in low or low.startswith("docs/"):
             return True
@@ -669,7 +677,7 @@ def check_merge_source(source: str, trunk: str) -> int:
     except Exception:
         return deny(
             f"Merge into protected branch '{trunk}' refused - the pipeline run state "
-            f"(.claude/state/run.db) could not be read, so the commit approval for "
+            f"(.agentry/state/run.db) could not be read, so the commit approval for "
             f"{task} cannot be verified. This path fails closed on purpose: only an "
             f"approved task reaches the trunk.")
     if run is None:
@@ -700,7 +708,7 @@ def check_trunk_merge(command: str, trunk: str) -> int:
             f"Merge into protected branch '{trunk}' is forbidden in '{WORKFLOW_PR}' "
             f"workflow mode: push the task branch and let the human open the pull "
             f"request. A single-author project can set workflow.mode to "
-            f"'{WORKFLOW_SOLO}' in .claude/pipeline.json to merge locally instead. "
+            f"'{WORKFLOW_SOLO}' in .agentry/pipeline.json to merge locally instead. "
             f"See .claude/rules/git-workflow.md.")
     sources = [src for args in merge_invocations(command) for src in merge_sources(args)]
     if not sources:
@@ -851,12 +859,14 @@ def repo_bootstrap(command: str, cwd: str, main_branch: str) -> bool:
 
 
 # --- Contract C-2: planning-and-documentation path set (FR-21, FR-22) ---
-# Both the pre-move .claude/ spelling and the post-FR-13 .agentry/ spelling
-# are included so the exemption survives the move unchanged.
+# The work product moved to .agentry/ in FR-13. The pre-move spellings under
+# .claude/ were carried here alongside these so the exemption survived the move;
+# they are gone now that it has landed, because those paths no longer exist - a
+# write to one is a stray, not bookkeeping, and must not be exempt.
 C2_PREFIXES = (
-    ".agentry/plans/", ".claude/plans/",
-    ".agentry/specs/", ".claude/specs/",
-    ".agentry/tasks/", ".claude/tasks/",
+    ".agentry/plans/",
+    ".agentry/specs/",
+    ".agentry/tasks/",
     "docs/",
 )
 C2_ROOT_MD_RE = re.compile(r"^[^/]+\.md$", re.IGNORECASE)
@@ -875,8 +885,8 @@ def staged_files(command: str, cwd: str) -> list:
             if not Path(repo).is_dir():
                 continue
             # --no-renames: without it, git prints only the post-image path
-            # for a detected rename (e.g. `git mv real/code.py .claude/plans/x.md`
-            # shows as one line, `.claude/plans/x.md`), which would let renamed
+            # for a detected rename (e.g. `git mv real/code.py .agentry/plans/x.md`
+            # shows as one line, `.agentry/plans/x.md`), which would let renamed
             # code slip through the C-2 exemption undetected (FR-22).
             proc = subprocess.run(
                 ["git", "diff", "--cached", "--name-only", "--no-renames"],
@@ -987,7 +997,7 @@ def under_home_claude(file_path: str) -> bool:
     .claude/) store project data outside the repo - forbidden. Exception:
     ~/.claude/plans/ is the harness's own plan-mode scratch area (Claude Code
     forces the plan file there); denying it bricks plan mode, and the final
-    plan is copied into <project>/.claude/plans/ anyway."""
+    plan is copied into <project>/.agentry/plans/ anyway."""
     try:
         p = Path(file_path).resolve()
         home_claude = (Path.home() / ".claude").resolve()
@@ -1012,8 +1022,11 @@ def active_review_run(conn) -> dict | None:
 
 
 def is_bookkeeping(path: str) -> bool:
+    # .agentry/ carries the work product since FR-13 (tasks, plans, specs,
+    # state); it is bookkeeping for the same reason .claude/ is.
     p = path.replace("\\", "/").lower()
-    return "/.claude/" in p or "/docs/" in p or p.startswith((".claude/", "docs/"))
+    return ("/.claude/" in p or "/.agentry/" in p or "/docs/" in p
+            or p.startswith((".claude/", ".agentry/", "docs/")))
 
 
 def handoff_freeze_task() -> str:
@@ -1176,7 +1189,7 @@ def handle_edit(file_path: str, content: str = "", orch: bool = False) -> int:
         return deny(f"Handoff debt: completed task {frozen} has no valid handoff doc - code edits "
                     f"are frozen (handoff.hard_edit_gate) until the next task's assignee writes it. "
                     f"Scaffold: python .claude/tools/pipeline/handoff.py --for {frozen}, then fill "
-                    f".claude/tasks/handoffs/{frozen}.md. Check: handoff.py --check.")
+                    f".agentry/tasks/handoffs/{frozen}.md. Check: handoff.py --check.")
     return allow()
 
 

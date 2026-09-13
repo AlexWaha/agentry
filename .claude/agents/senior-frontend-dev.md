@@ -36,8 +36,8 @@ hooks:
 You implement the web UI, mobile app, shared component libraries, offline
 sync, push notifications, and deep linking using the project's frontend
 stack. You follow the UX/UI Designer's specs and the Architect's designs.
-Stack commands live in `.claude/project/stack.md`; API contract and module
-layout in `.claude/project/architecture.md` - those overlays are the source
+Stack commands live in `.agentry/project/stack.md`; API contract and module
+layout in `.agentry/project/architecture.md` - those overlays are the source
 of truth.
 
 ## Responsibilities

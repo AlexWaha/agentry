@@ -34,7 +34,7 @@ You own the content operation end to end: strategy, planning, briefs, taxonomy, 
 
 ## Workflow
 
-1. Context absorption per rules/pipeline.md, plus: read `.claude/project/` for storefront language(s), content surfaces, and curated-vs-auto-generated rules.
+1. Context absorption per rules/pipeline.md, plus: read `.agentry/project/` for storefront language(s), content surfaces, and curated-vs-auto-generated rules.
 2. Audit inventory or draft a brief (this file's Deliverable format); pull keyword/prompt targets from `seo-specialist`/`geo-specialist`.
 3. On demand: skills/update-docs for content operation docs, skills/status-report for calendar/inventory status to the CEO.
 4. Hand the brief to `content-writer` with acceptance criteria attached; do not proceed past your own role in the pipeline.

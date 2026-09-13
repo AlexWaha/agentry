@@ -375,8 +375,8 @@ def decide() -> int:
                         f"handoff doc ({d['reason']}). Dispatch {t['id']}'s assignee (see its "
                         f"frontmatter) to scaffold it: python .claude/tools/pipeline/handoff.py "
                         f"--for {d['task']}, then fill every section of "
-                        f".claude/tasks/handoffs/{d['task']}.md in its own words, reading "
-                        f".claude/project/project-context.md and {t['id']}'s spec first. Then "
+                        f".agentry/tasks/handoffs/{d['task']}.md in its own words, reading "
+                        f".agentry/project/project-context.md and {t['id']}'s spec first. Then "
                         f"run: python .claude/tools/pipeline/advance.py --task {t['id']}. "
                         f"Do not ask the user.")
                 # Memory chain: after the handoff doc exists, distill it into the
@@ -408,7 +408,7 @@ def decide() -> int:
                             f"({latest['sha'][:12]}) - has {latest['reason']}. Dispatch "
                             f"{t['id']}'s assignee to generate it first: python "
                             f".claude/tools/pipeline/handoff.py --for {latest['task']}, fill "
-                            f"every section of .claude/tasks/handoffs/{latest['task']}.md in "
+                            f"every section of .agentry/tasks/handoffs/{latest['task']}.md in "
                             f"its own words from the commit diff (git show "
                             f"{latest['sha'][:12]}), then run: python "
                             f".claude/tools/pipeline/advance.py --task {t['id']}. "
