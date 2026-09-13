@@ -29,6 +29,19 @@ These restrictions apply to all AI agents without exception:
 - **NEVER delete remote branches** without CEO approval
 - **NEVER skip pre-commit checks** - git hooks are disabled; linter and tests must be run manually before every commit
 
+### Every push report carries its links
+
+A push that reports only "done" makes the CEO go and find the branch himself.
+The report names, as clickable links:
+
+- the PR-creation URL, which `git push` prints in its own output on a first push
+  (`remote: https://<host>/<owner>/<repo>/pull/new/<branch>`);
+- the branch;
+- the comparison against the trunk.
+
+Do not describe where to look. Paste the URLs. The same applies to anything else
+the CEO is expected to open: a PR, an issue, a run, a deployed page.
+
 ### Push is never automatic, at any approval level
 
 `git push` requires the CEO's explicit approval in chat every single time. No
