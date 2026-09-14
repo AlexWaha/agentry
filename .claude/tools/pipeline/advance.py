@@ -20,6 +20,13 @@ Handoff gate: registration is also refused while ANY completed task above the
 handoff baseline lacks a valid handoff doc (see tools/pipeline/handoff.py) -
 the incoming task's assignee must document the previous task first.
 
+Memory gate: and then refused again while any completed task above the memory
+baseline lacks its stamp (see tools/memory/update.py). The two are one sentence
+in rules/pipeline.md and only the first half was enforced here - this file
+contained the word `memory` zero times, so two tasks ran the whole pipeline and
+closed undistilled with nothing objecting (task-0066). Handoff first, memory
+second: the rows are distilled FROM the doc.
+
 Merge evidence: the `done` stage resolves through git_state.py, and only a
 POSITIVE signal finishes a task. No branch and no tagged commit is unknown, so
 the task parks naming the missing signals. A task whose work rides on another
@@ -42,6 +49,7 @@ import argparse
 import json
 import os
 import re
+import sys
 import time
 
 import approvals
@@ -92,6 +100,38 @@ def _frontmatter(text: str) -> dict:
     return fields
 
 
+def handoff_debt() -> list:
+    """Completed tasks lacking a valid handoff doc (tools/pipeline/handoff.py).
+
+    Same reason for its own handler as memory_debt below, and it is not
+    hypothetical: this call sat bare under check_task_ready's blanket
+    `except Exception: return ""` for its whole life, so a broken handoff.py
+    did not merely switch off the handoff gate - it returned "allow" past the
+    acceptance-criteria check and the spec-approval gate too, which are the
+    pipeline's floor. One checker's failure may only disable that checker."""
+    try:
+        import handoff
+        return handoff.uncovered_done_tasks()
+    except Exception:
+        return []
+
+
+def memory_debt() -> list:
+    """Completed tasks whose memory review was never stamped (tools/memory/
+    update.py). Carries its OWN try/except instead of riding on the caller's:
+    check_task_ready's blanket handler returns "allow" on any exception, so an
+    import error here would silently take the spec and criteria checks down with
+    it. Fail-open on its own terms - no debt reported."""
+    try:
+        p = str(state.ROOT / ".claude" / "tools" / "memory")
+        if p not in sys.path:
+            sys.path.insert(0, p)
+        import update as memory_update
+        return memory_update.unstamped_done_tasks()
+    except Exception:
+        return []
+
+
 def check_task_ready(task: str) -> str:
     """Deterministic registration backstop. Returns '' when the task may enter
     the pipeline, else a one-line refusal reason. Fail-open: an internal error
@@ -106,10 +146,7 @@ def check_task_ready(task: str) -> str:
                     f"merged and closed. Reopen it deliberately if that is wrong.")
         path = state.TASK_DIRS[where] / f"{task}.md"
 
-        # Lazy import + the surrounding try/except keep this fail-open on a
-        # partially synced clone that lacks handoff.py.
-        import handoff
-        debt = handoff.uncovered_done_tasks()
+        debt = handoff_debt()
         if debt:
             d = debt[0]
             return (f"{task}: handoff debt blocks registration - completed task {d['task']} "
@@ -119,6 +156,25 @@ def check_task_ready(task: str) -> str:
                     f"words from tasks/done/{d['task']}.md, its merge diff on main, and the gate "
                     f"log, 3) read .agentry/project/project-context.md and this task's spec first. "
                     f"Then re-run advance.py --task {task}.")
+
+        # The second half of the same guarantee, and the half that was enforced
+        # nowhere. It sits here rather than only in the Stop hook because a
+        # registration is the moment the rule names, and the Stop hook's own
+        # memory check could not see one: it ran only while nothing was in
+        # flight. Handoff above, memory here, in the order the work happens.
+        mem = memory_debt()
+        if mem:
+            d = mem[0]
+            return (f"{task}: memory debt blocks registration - completed task {d['task']} "
+                    f"has no memory stamp ({d['reason']}). Distill its handoff doc "
+                    f".agentry/tasks/handoffs/{d['task']}.md into the store: python "
+                    f".claude/tools/memory/memory.py --record --kind lesson --signature <tag> "
+                    f"--trigger <when> --what <mistake> --why <cause> --fix <rule> (reusable "
+                    f"code shapes: --kind pattern; touched modules: --kind module). Then stamp "
+                    f"it: python .claude/tools/memory/update.py --stamp --task {d['task']} - "
+                    f"refused unless the store gained a row, so pass --none if the review "
+                    f"genuinely found nothing worth recording. Then re-run advance.py --task "
+                    f"{task}.")
 
         text = path.read_text(encoding="utf-8", errors="replace")
         fm = _frontmatter(text)

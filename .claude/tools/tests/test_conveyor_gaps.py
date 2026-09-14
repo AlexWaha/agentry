@@ -19,7 +19,13 @@ Each test pins one defect that cost a round trip every turn of a real session:
    quietly: no exit_gate means "configured and passed", so advance.py wrote
    stage=NULL under an "advanced" message, and NULL is in neither the editing
    set nor awaiting_human - so the Stop hook read a free slot and offered the
-   next task, which is defects 1 and 3 back through another door.
+   next task, which is defects 1 and 3 back through another door;
+7. the handoff-debt and memory-debt checks were read INSIDE that same free-slot
+   branch, so any task parked on the CEO - the normal state of a pipeline with a
+   human in it - switched off the only machine that reports undocumented work.
+   Two done tasks went undocumented with `handoff.py --check` reporting 2 and
+   nothing objecting, an hour after defect 3's fix gave a blocked run the
+   `awaiting_human` marker that the branch reads.
 """
 
 from __future__ import annotations
@@ -34,16 +40,20 @@ from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 
 PIPELINE_DIR = Path(__file__).resolve().parents[1] / "pipeline"
+MEMORY_DIR = Path(__file__).resolve().parents[1] / "memory"
 TESTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(PIPELINE_DIR))
+sys.path.insert(0, str(MEMORY_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
 import advance
 import approve
 import git_state
+import handoff
 import state
 import stop_gate
 import tmproot
+import update as memory_update
 
 # The stock build flow, as a literal: these tests must keep asserting against a
 # known stage list even when .agentry/pipeline.json is edited.
@@ -76,16 +86,32 @@ class _FakeConn:
 
 
 def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
-                set_fields=None) -> str | None:
+                set_fields=None, debt=(), mem_debt=(), count_nags=False) -> str | None:
     """stop_gate.decide() over a synthetic run set. Returns the block reason, or
     None when the hook allowed the stop. No DB, no git, no task files.
 
     busy_marker_fresh is mocked too: it reads the real .agentry/state/, so a live
     gate marker for the task id used here (written whenever the orchestrator
     dispatches a subagent for it) silenced the hook and failed these tests for
-    an environmental reason. BusyMarkerTest covers that function directly."""
+    an environmental reason. BusyMarkerTest covers that function directly.
+
+    debt / mem_debt default to none, so every pre-existing assertion here is
+    about a pipeline with its documentation paid up.
+
+    count_nags is off by default, which is deliberate and not laziness. The real
+    counter persists in a file under state.STATE_DIR: left live it would make
+    every call here mutate the project's own state, and - measured, not guessed -
+    it made two cases in DocumentationDebtTest fail because earlier subtests had
+    already spent the budget for the same debt key. Off, `debt_nags` returns 1,
+    so each call behaves as a first stop. DebtNagBoundTest turns it on with
+    STATE_DIR pointed at a sandbox, and owns the bound."""
     queue = [{"id": t, "deps": []} for t in backlog]
     buf = io.StringIO()
+    nag_patches = () if count_nags else (
+        unittest.mock.patch.object(stop_gate, "debt_nags", return_value=1),
+        unittest.mock.patch.object(stop_gate, "clear_debt_nags"))
+    for p in nag_patches:
+        p.start()
     with unittest.mock.patch.object(stop_gate.mode, "conveyor_runs", return_value=True), \
             unittest.mock.patch.object(stop_gate.state, "connect", return_value=_FakeConn()), \
             unittest.mock.patch.object(stop_gate.state, "all_runs", return_value=runs), \
@@ -94,14 +120,16 @@ def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
             unittest.mock.patch.object(stop_gate.state, "set_fields",
                                        set_fields or unittest.mock.MagicMock()), \
             unittest.mock.patch.object(stop_gate, "read_backlog", return_value=queue), \
-            unittest.mock.patch.object(stop_gate, "handoff_debt", return_value=[]), \
-            unittest.mock.patch.object(stop_gate, "memory_debt", return_value=[]), \
+            unittest.mock.patch.object(stop_gate, "handoff_debt", return_value=list(debt)), \
+            unittest.mock.patch.object(stop_gate, "memory_debt", return_value=list(mem_debt)), \
             unittest.mock.patch.object(stop_gate, "latest_undocumented", return_value=None), \
             unittest.mock.patch.object(stop_gate, "reconcile_status_drift", return_value=([], [])), \
             unittest.mock.patch.object(stop_gate.approvals, "granted", return_value=True), \
             unittest.mock.patch.object(stop_gate, "busy_marker_fresh", return_value=False), \
             redirect_stdout(buf):
         stop_gate.decide()
+    for p in nag_patches:
+        p.stop()
     out = buf.getvalue().strip()
     return json.loads(out)["reason"] if out else None
 
@@ -159,6 +187,374 @@ class FreeSlotTest(unittest.TestCase):
         # Unchanged behaviour guard: an in-flight editing stage is continued.
         reason = decide_with([run(stage="implement")])
         self.assertIn("task-0001 is at stage 'implement'", reason)
+
+
+class DocumentationDebtTest(unittest.TestCase):
+    """Defect 7: the handoff-debt and memory-debt checks were hung off the
+    free-slot calculation, so anything parked on a human switched them off.
+
+    Measured an hour after task-0067 merged, with task-0010 parked blocked and
+    two done tasks undocumented: `handoff.py --check` reported 2, and the Stop
+    hook allowed the stop without a word. The condition that disabled the check
+    was "some task is waiting for the CEO", which is the normal state of a
+    pipeline with a human in it.
+
+    A completed task's documentation is not less owed because another task is
+    parked, so neither check reads the free slot any more."""
+
+    HANDOFF = ({"task": "task-0067",
+                "reason": "no handoff doc at .agentry/tasks/handoffs/task-0067.md"},)
+    MEMORY = ({"task": "task-0067",
+               "reason": "memory layers not reviewed after completion"},)
+
+    def test_handoff_debt_is_reported_while_a_blocked_run_holds_the_slot(self):
+        # The live case, exactly: a blocked run already surfaced (so step 1 is
+        # silent about it) plus outstanding handoff debt. Before the fix this
+        # returned None - the hook allowed the stop and nothing objected.
+        reason = decide_with([run(stage="implement", status=state.ST_BLOCKED,
+                                  awaiting_human=stop_gate.AWAITING_BLOCKED)],
+                             debt=self.HANDOFF)
+        self.assertIsNotNone(reason)
+        self.assertIn("task-0067", reason)
+        self.assertIn("handoff", reason.lower())
+
+    def test_handoff_debt_is_reported_with_an_empty_backlog(self):
+        # The debt is owed by a COMPLETED task, so it does not depend on there
+        # being a next task to gate. An empty queue used to mean the debt
+        # branch was never entered even with the slot free.
+        reason = decide_with([], backlog=(), debt=self.HANDOFF)
+        self.assertIsNotNone(reason)
+        self.assertIn("task-0067", reason)
+        self.assertIn("handoff", reason.lower())
+
+    def test_handoff_debt_is_reported_while_the_ceo_reads_a_diff(self):
+        for awaiting in ("commit", "push", "merge"):
+            with self.subTest(awaiting_human=awaiting):
+                reason = decide_with([run(stage="ready", awaiting_human=awaiting)],
+                                     debt=self.HANDOFF)
+                self.assertIsNotNone(reason)
+                self.assertIn("task-0067", reason)
+
+    def test_memory_debt_is_reported_while_a_blocked_run_holds_the_slot(self):
+        reason = decide_with([run(stage="implement", status=state.ST_BLOCKED,
+                                  awaiting_human=stop_gate.AWAITING_BLOCKED)],
+                             debt=(), mem_debt=self.MEMORY)
+        self.assertIsNotNone(reason)
+        self.assertIn("task-0067", reason)
+        self.assertIn("memory", reason.lower())
+
+    def test_the_debt_message_names_the_command_that_clears_it(self):
+        # A gate that refuses without saying how to satisfy it costs a round
+        # trip every time (task-0066's criterion, applied here too).
+        reason = decide_with([run(stage="ready", awaiting_human="commit")],
+                             debt=self.HANDOFF)
+        self.assertIn("handoff.py --for task-0067", reason)
+        reason = decide_with([run(stage="ready", awaiting_human="commit")],
+                             mem_debt=self.MEMORY)
+        self.assertIn("update.py --stamp --task task-0067", reason)
+
+    def test_handoff_debt_is_reported_before_memory_debt(self):
+        # A doc must exist before it can be distilled, so the order is not
+        # cosmetic: reporting the memory debt first would ask for a
+        # distillation of a document nobody has written.
+        reason = decide_with([run(stage="ready", awaiting_human="commit")],
+                             debt=self.HANDOFF, mem_debt=self.MEMORY)
+        self.assertIn("handoff", reason.lower())
+        self.assertNotIn("--stamp", reason)
+
+    def test_driving_an_in_flight_stage_still_outranks_the_debt(self):
+        # Precedence guard: the debt report is the last thing before idling, not
+        # a new way to interrupt a stage that is actually being advanced.
+        reason = decide_with([run(stage="implement")], debt=self.HANDOFF)
+        self.assertIn("task-0001 is at stage 'implement'", reason)
+
+    def test_surfacing_a_blocked_run_still_outranks_the_debt(self):
+        # Same precedence, for the run nobody is driving: the CEO hears about
+        # the blocker first, and the debt on the stop after it.
+        reason = decide_with([run(stage="implement", status=state.ST_BLOCKED)],
+                             debt=self.HANDOFF)
+        self.assertIn("task-0001 is parked BLOCKED", reason)
+
+    def test_starting_a_task_still_gates_on_the_debt_first(self):
+        # Unchanged behaviour guard for the free-slot path: when there IS a
+        # ready task, the debt is still framed as the thing to do before it.
+        reason = decide_with([], debt=self.HANDOFF)
+        self.assertIn("Before starting task-0002", reason)
+        self.assertIn("task-0067", reason)
+
+    def test_no_debt_and_nothing_to_drive_still_allows_the_stop(self):
+        # The control. Without it every assertion above could pass on a hook
+        # that blocks unconditionally, which would be a stop loop.
+        self.assertIsNone(decide_with([run(stage="ready", awaiting_human="commit")]))
+        self.assertIsNone(decide_with([], backlog=()))
+
+
+class DebtNagBoundTest(unittest.TestCase):
+    """The debt block repeats, and repeating has to end somewhere.
+
+    The reasoning that lets it repeat at all is that the agent can clear the
+    debt, which assumes the demand is satisfiable. A handoff doc that keeps
+    failing `min_section_chars`, or a store that keeps refusing the stamp, makes
+    it unsatisfiable - and then an unbounded block is the stop loop the module
+    docstring promises never to create. Every other branch in decide() bounds
+    itself; this one now does too.
+
+    Both properties are pinned here, because a fix for either one alone is a
+    defect: the debt must still be raised, and the raising must terminate."""
+
+    DEBT = ({"task": "task-0067", "reason": "section 'Key decisions' is too thin"},)
+    MEM = ({"task": "task-0067", "reason": "memory layers not reviewed"},)
+
+    def setUp(self):
+        self.tmp = tmproot.sandbox(self, "debtnag")
+        p = unittest.mock.patch.object(state, "STATE_DIR", self.tmp)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def stop(self, **kw) -> str | None:
+        """One stop event with a run parked on the CEO and the REAL counter."""
+        return decide_with([run(stage="ready", awaiting_human="commit")],
+                           count_nags=True, **kw)
+
+    def test_the_debt_is_raised_up_to_the_ceiling_then_escalated_then_silent(self):
+        for n in range(1, stop_gate.DEBT_NAG_CEILING + 1):
+            with self.subTest(stop=n):
+                reason = self.stop(debt=self.DEBT)
+                self.assertIn("has no valid handoff doc", reason)
+                self.assertNotIn("AskUserQuestion", reason)
+
+        # One escalation, naming the card and saying it will not repeat.
+        reason = self.stop(debt=self.DEBT)
+        self.assertIn("AskUserQuestion", reason)
+        self.assertIn("task-0067", reason)
+        self.assertIn(f"survived {stop_gate.DEBT_NAG_CEILING} stops", reason)
+
+        # And then the session can actually end, which is the whole point.
+        for n in range(3):
+            with self.subTest(after_escalation=n):
+                self.assertIsNone(self.stop(debt=self.DEBT))
+
+    def test_the_count_survives_the_process(self):
+        # Each stop is a fresh interpreter, so a counter in memory would reset
+        # every time and bound nothing. The file is the mechanism.
+        self.stop(debt=self.DEBT)
+        self.assertEqual(
+            {"key": "handoff:task-0067", "count": 1},
+            json.loads((self.tmp / stop_gate.DEBT_NAG_FILE).read_text(encoding="utf-8")))
+
+    def test_a_different_debt_starts_its_own_budget(self):
+        for _ in range(stop_gate.DEBT_NAG_CEILING + 2):
+            self.stop(debt=self.DEBT)
+        # Progress on the handoff half is not a spent budget for the memory half.
+        reason = self.stop(mem_debt=self.MEM)
+        self.assertIn("has not been distilled", reason)
+        self.assertNotIn("AskUserQuestion", reason)
+
+    def test_paying_the_debt_restores_the_full_budget(self):
+        for _ in range(stop_gate.DEBT_NAG_CEILING + 2):
+            self.stop(debt=self.DEBT)
+        self.assertIsNone(self.stop())                     # debt paid, count cleared
+        self.assertFalse((self.tmp / stop_gate.DEBT_NAG_FILE).exists())
+        reason = self.stop(debt=self.DEBT)                 # a NEW debt, later
+        self.assertIn("has no valid handoff doc", reason)
+
+    def test_a_corrupt_counter_file_heals_instead_of_pinning_the_count_at_one(self):
+        # A process killed mid-write leaves a file json.loads cannot parse. While
+        # that share the function's outer handler, every call returned 1 and none
+        # of them rewrote the file, so the nag was unbounded again with no
+        # escalation - the failure the counter was added to remove. The count
+        # must climb from garbage, not sit at 1.
+        for junk in ("{not json", "", "[1, 2, 3]", "42"):
+            with self.subTest(junk=junk):
+                (self.tmp / stop_gate.DEBT_NAG_FILE).write_text(junk, encoding="utf-8")
+                self.assertEqual([1, 2, 3], [stop_gate.debt_nags("handoff:task-0067")
+                                             for _ in range(3)])
+
+    def test_a_corrupt_counter_file_still_escalates_through_decide(self):
+        # The same property at the level that matters: the bound holds end to end.
+        (self.tmp / stop_gate.DEBT_NAG_FILE).write_text("{not json", encoding="utf-8")
+        for n in range(stop_gate.DEBT_NAG_CEILING):
+            with self.subTest(stop=n + 1):
+                self.assertIn("has no valid handoff doc", self.stop(debt=self.DEBT))
+        self.assertIn("AskUserQuestion", self.stop(debt=self.DEBT))
+        self.assertIsNone(self.stop(debt=self.DEBT))
+
+    def test_a_counter_that_cannot_persist_keeps_reporting_rather_than_going_quiet(self):
+        # debt_nags() returns 1 on any internal error, which is what a state dir
+        # it cannot write looks like. Then the bound is lost and the report is
+        # not, which is the right way round: the silence is what task-0072 was
+        # filed for. count_nags=False forces exactly that value.
+        for n in range(5):
+            with self.subTest(stop=n):
+                self.assertIn("has no valid handoff doc",
+                              decide_with([run(stage="ready", awaiting_human="commit")],
+                                          debt=self.DEBT))
+
+
+class BlockedRunSurfacingBoundTest(unittest.TestCase):
+    """task-0067's bound, re-pinned because task-0072 changes the branch it
+    rests on: a blocked run is surfaced ONCE and then left alone.
+
+    The two properties have to hold together. Surfacing must stay bounded (an
+    unbounded nag is a stop loop, the opposite failure), and the debt checks
+    must no longer be silenced by the marker that bounds it. So the sequence
+    below runs three consecutive stops over one blocked run."""
+
+    DEBT = ({"task": "task-0067", "reason": "no handoff doc"},)
+
+    def blocked(self, surfaced: bool) -> list[dict]:
+        return [run(stage="implement", status=state.ST_BLOCKED,
+                    awaiting_human=stop_gate.AWAITING_BLOCKED if surfaced else "")]
+
+    def test_surfaced_once_then_silent_forever(self):
+        first = decide_with(self.blocked(False))
+        self.assertIn("task-0001 is parked BLOCKED", first)
+        # Every later stop, with the marker the first one wrote: nothing. Ten
+        # of them, because "once" is the whole point and a bound that holds for
+        # one repeat is not a bound.
+        for i in range(10):
+            with self.subTest(stop=i + 2):
+                self.assertIsNone(decide_with(self.blocked(True)))
+
+    def test_surfaced_once_and_the_debt_is_still_reported_after(self):
+        first = decide_with(self.blocked(False), debt=self.DEBT)
+        self.assertIn("task-0001 is parked BLOCKED", first)
+        self.assertNotIn("task-0067", first)
+
+        # Stop 2 onwards: the blocker is not raised again, and the debt that
+        # the marker used to hide is. Both properties, simultaneously.
+        for i in range(3):
+            with self.subTest(stop=i + 2):
+                later = decide_with(self.blocked(True), debt=self.DEBT)
+                self.assertNotIn("is parked BLOCKED", later)
+                self.assertIn("task-0067", later)
+
+        # And once the debt is paid the session is finally allowed to end, with
+        # the blocked run still parked. That is the bound, intact.
+        self.assertIsNone(decide_with(self.blocked(True)))
+
+
+class MemoryStampRegistrationGateTest(unittest.TestCase):
+    """task-0066: one sentence of rules/pipeline.md, enforced by half a gate.
+
+    "The next registration is blocked until this task's handoff doc exists AND
+    its memory review is stamped" - and advance.py contained the word `memory`
+    zero times. The handoff half fired correctly every time, which is what made
+    the other half's absence hard to see; task-0033 and task-0058 both ran the
+    whole pipeline and closed unstamped with nothing objecting.
+
+    The gate is also invisible while someone volunteers to do its job: the
+    orchestrator stamps by hand out of habit, so for task-0009 the stamp existed
+    and the missing gate made no difference."""
+
+    def setUp(self):
+        self.tmp = tmproot.sandbox(self, "memgate")
+        self.dirs = {}
+        for name in ("backlog", "active", "done"):
+            d = self.tmp / name
+            d.mkdir()
+            self.dirs[name] = d
+        # The task that wants to register, and the completed task that owes the
+        # stamp. task_dir() walks TASK_DIRS, so patching the map is enough.
+        (self.dirs["active"] / "task-0100.md").write_text(
+            "---\ntask: task-0100\nspec: none\n---\n\n"
+            "## Acceptance Criteria\n\n- [ ] the gate fires\n", encoding="utf-8")
+        (self.dirs["done"] / "task-0099.md").write_text(
+            "---\ntask: task-0099\n---\n", encoding="utf-8")
+        self.stamps = self.tmp / "stamps"
+        self.stamps.mkdir()
+        for target, attr, value in (
+                (state, "TASK_DIRS", self.dirs),
+                (memory_update, "DONE_DIR", self.dirs["done"]),
+                (memory_update, "STAMP_DIR", self.stamps)):
+            p = unittest.mock.patch.object(target, attr, value)
+            p.start()
+            self.addCleanup(p.stop)
+        # Forced on rather than read from the shipped pipeline.json: a test that
+        # passes because of config is the way the handoff gate's twin sat
+        # switched off for months (task-0067, forbid_dev_null).
+        for target, name, value in (
+                (memory_update, "cfg", {"enabled": True, "baseline": ""}),
+                (handoff, "uncovered_done_tasks", [])):
+            p = unittest.mock.patch.object(target, name, return_value=value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_an_unstamped_completed_task_refuses_the_next_registration(self):
+        refusal = advance.check_task_ready("task-0100")
+        self.assertIn("task-0099", refusal)
+        self.assertIn("memory", refusal.lower())
+
+    def test_the_refusal_names_the_command_that_satisfies_it(self):
+        # As the handoff gate's message does. A gate that refuses without saying
+        # how to clear it costs a round trip every single time.
+        refusal = advance.check_task_ready("task-0100")
+        self.assertIn("memory.py --record", refusal)
+        self.assertIn("update.py --stamp --task task-0099", refusal)
+        self.assertIn("--none", refusal)
+
+    def test_registration_proceeds_once_the_task_is_stamped(self):
+        (self.stamps / "task-0099.json").write_text(
+            '{"task": "task-0099", "stamped_at": "2026-09-14T00:00:00+00:00", '
+            '"counts": {"lesson": 1}, "none": false}', encoding="utf-8")
+        self.assertEqual("", advance.check_task_ready("task-0100"))
+
+    def test_a_task_at_or_below_the_baseline_is_grandfathered(self):
+        # Adopting the harness mid-project must not demand a distillation of
+        # every task that predates the store.
+        with unittest.mock.patch.object(
+                memory_update, "cfg",
+                return_value={"enabled": True, "baseline": "task-0099"}):
+            self.assertEqual("", advance.check_task_ready("task-0100"))
+
+    def test_the_handoff_debt_is_reported_before_the_memory_debt(self):
+        # Order is not cosmetic: the memory rows are distilled FROM the handoff
+        # doc, so demanding the distillation of a document nobody has written
+        # yet is an instruction that cannot be followed.
+        with unittest.mock.patch.object(
+                handoff, "uncovered_done_tasks",
+                return_value=[{"task": "task-0099", "reason": "no handoff doc"}]):
+            refusal = advance.check_task_ready("task-0100")
+        self.assertIn("handoff debt", refusal)
+        self.assertNotIn("--stamp", refusal)
+
+    def stamp_it(self, task="task-0099"):
+        (self.stamps / f"{task}.json").write_text(
+            f'{{"task": "{task}", "stamped_at": "2026-09-14T00:00:00+00:00", '
+            f'"counts": {{"lesson": 1}}, "none": false}}', encoding="utf-8")
+
+    def criteria_less(self):
+        (self.dirs["active"] / "task-0100.md").write_text(
+            "---\ntask: task-0100\nspec: none\n---\n", encoding="utf-8")
+
+    def test_a_broken_handoff_checker_does_not_blind_the_other_checks(self):
+        # HIGH-2. The handoff call sat bare under check_task_ready's blanket
+        # `except Exception: return ""`, so a broken handoff.py returned "allow"
+        # past the acceptance-criteria check and the spec-approval gate - the
+        # pipeline's floor - and not merely past its own gate. One checker's
+        # failure may only disable that checker.
+        self.stamp_it()
+        self.criteria_less()
+        with unittest.mock.patch.object(handoff, "uncovered_done_tasks",
+                                        side_effect=RuntimeError("boom")):
+            self.assertIn("Acceptance Criteria", advance.check_task_ready("task-0100"))
+
+    def test_a_broken_handoff_checker_still_lets_the_memory_gate_fire(self):
+        # The other half of the same containment: the check AFTER the broken one
+        # must still run, not just the ones before it.
+        with unittest.mock.patch.object(handoff, "uncovered_done_tasks",
+                                        side_effect=RuntimeError("boom")):
+            self.assertIn("memory debt", advance.check_task_ready("task-0100"))
+
+    def test_a_broken_memory_module_does_not_block_registration(self):
+        # Fail-open, like every other gate here: a checker bug must not stop
+        # real work. It must also not swallow the checks that come after it.
+        with unittest.mock.patch.object(memory_update, "unstamped_done_tasks",
+                                        side_effect=RuntimeError("boom")):
+            self.assertEqual("", advance.check_task_ready("task-0100"))
+            (self.dirs["active"] / "task-0100.md").write_text(
+                "---\ntask: task-0100\nspec: none\n---\n", encoding="utf-8")
+            self.assertIn("Acceptance Criteria", advance.check_task_ready("task-0100"))
 
 
 class BlockedRunIsVisibleAtSessionStartTest(unittest.TestCase):

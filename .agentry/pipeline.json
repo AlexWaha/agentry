@@ -12,7 +12,7 @@
     "push_needs_approval": true
   },
   "memory": {
-    "_comment": "Post-task memory review gate (tools/memory/update.py): every done task above baseline must be distilled into .agentry/memory/ (lessons/patterns/codebase rows) and stamped before the next task starts. Enforced by stop_gate.py. baseline semantics match handoff.baseline; '' = every done task covered. enabled=false disables the gate.",
+    "_comment": "Post-task memory review gate (tools/memory/update.py): every done task above baseline must be distilled into .agentry/memory/ (lessons/patterns/codebase rows) and stamped before the next task starts. Enforced by advance.py (registration refusal, beside the handoff gate - task-0066 added it, before which this line named an enforcer that did not exist) and stop_gate.py (blocks the stop while the debt stands, whatever is in flight). baseline semantics match handoff.baseline; '' = every done task covered. enabled=false disables the gate.",
     "enabled": true,
     "baseline": ""
   },

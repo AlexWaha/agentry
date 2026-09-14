@@ -286,9 +286,21 @@ class ForbidDevNullGateTest(unittest.TestCase):
     instructions, and enforced nowhere. It rested on everyone remembering, and
     during this very task the orchestrator used the redirect and was allowed.
 
-    Why it matters on this host: git-bash presents a Unix-looking shell over a
-    Windows filesystem, so the redirect does not discard output - it creates a
-    literal `nul` file in the working directory.
+    What is true on this host, both spellings finally measured (task-0070 test
+    stage, git-bash MINGW64, 2026-09-14):
+
+      * `2>/dev/null` DISCARDS the output and creates nothing. MSYS2 provides a
+        real character device (`test -c /dev/null` succeeds). The reason this
+        gate carried for months - that it "creates a literal `nul` file" - was
+        folklore, and this deny is policy, not physics.
+      * `2>NUL` is the spelling that actually breaks. bash has no device named
+        NUL, so it opens a file: `ls missing 2>NUL` in an empty directory leaves
+        a 63-byte entry named NUL containing the error text. Windows then
+        resolves that name as the reserved device, so Python cannot unlink it
+        (WinError 5) and only a bash `rm -f` clears it.
+
+    So the correct advice is still "do not redirect", but for one spelling out of
+    two, and for a different reason than was written down.
 
     The forbidden token is assembled from pieces on purpose. This file is read by
     humans grepping for the pattern, and a test that has to contain the thing it
@@ -323,9 +335,25 @@ class ForbidDevNullGateTest(unittest.TestCase):
                 code, msg = self.drive(form)
                 self.assertEqual(2, code)
                 # The message has to say WHY, or the next person just works
-                # around it. It names the environment and the alternative.
-                self.assertIn("literal `nul` file", msg)
-                self.assertIn("NUL", msg)
+                # around it. It names the environment and what to do instead.
+                #
+                # task-0070 test stage: it used to assert the message calls this
+                # redirect the thing that "creates a literal `nul` file". That
+                # claim was measured FALSE on this host - /dev/null is a real
+                # character device under MINGW64, the output is discarded and
+                # nothing is created. So the assertion now pins the corrected
+                # reason (policy, not filesystem) plus a guard against the
+                # folklore coming back. Same coupling, true claim.
+                self.assertIn("denied by project policy", msg)
+                self.assertNotIn("creates a literal `nul` file", msg)
+                # task-0070: it used to name `>NUL` / `2>NUL` as the alternative,
+                # which reproduces the defect - measured under git-bash, `ls
+                # missing 2>NUL` in an empty directory creates a regular file
+                # named NUL. The message must warn against that form rather than
+                # recommend it, and must point at what actually works.
+                self.assertIn("`>NUL` / `2>NUL` is NOT the fix", msg)
+                self.assertIn("Drop the redirect", msg)
+                self.assertIn("tmp/", msg)
 
     def test_a_command_without_the_redirect_is_allowed(self):
         # The control: without it every assertion above could pass because
@@ -334,10 +362,13 @@ class ForbidDevNullGateTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(0, self.drive(command)[0])
 
-    def test_the_windows_native_forms_the_rule_permits_still_pass(self):
-        # The rule says to use these instead, so the deny must not catch them.
-        # It does not: the check is a substring test for the Unix path, and
-        # `NUL` is a device name with no slash in it.
+    def test_the_nul_forms_are_not_caught_by_this_particular_gate(self):
+        # Behaviour pinned, claim corrected (task-0070). This gate is a
+        # substring test for the Unix path, and `NUL` has no slash in it, so
+        # these forms pass HERE. That is not an endorsement, and the measurement
+        # makes it awkward: these are the forms that DO leave a file behind,
+        # while the one this gate denies does not. Nothing enforces the NUL
+        # forms yet - this test documents the gap, it does not bless them.
         for form in ("2>NUL", ">NUL", ">NUL 2>&1"):
             with self.subTest(redirect=form):
                 self.assertEqual(0, self.drive(form)[0])

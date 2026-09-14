@@ -77,10 +77,14 @@ state and gate checks live in deterministic hooks (`.claude/tools/pipeline/` +
   the NEXT task's assignee in its own words (forced context absorption). Enforced
   by hooks; see `rules/orchestration.md` step 0 and `tools/pipeline/handoff.py`.
 - **Memory chain:** after the handoff doc, the finished task is distilled into
-  the memory layers and stamped (`tools/memory/update.py`) before the next task
-  starts - stop-gate enforced. When the backlog holds a single task, the latest
-  task-tagged commit on main must be documented first (read it, or generate its
-  handoff doc) so the incoming agent always has the previous task's context.
+  the memory store and stamped (`tools/memory/update.py`) before the next task
+  starts - refused at registration by `advance.py`, and blocking the Stop hook
+  until it is paid. Both of those were written down long before either was
+  true: the memory half was enforced nowhere (task-0066) and the Stop hook's
+  half of both halves ran only when nothing was in flight (task-0072). When
+  the backlog holds a single task, the latest task-tagged commit on main must
+  be documented first (read it, or generate its handoff doc) so the incoming
+  agent always has the previous task's context.
 
 ## Communication
 
@@ -164,7 +168,8 @@ rows (reusable code shapes) and `module` rows (the module map).
   --fix <rule>`; `--query "<topic>"`, `--export`, `--stats`.
 - **Session start:** `codebase_sync.py --check` detects module-map drift against
   git heads and instructs an update.
-- **After every completed task** (stop-gate enforced): distill the handoff doc
+- **After every completed task** (the next registration is refused and the Stop
+  hook will not release the session until this is done): distill the handoff doc
   into rows, then `python .claude/tools/memory/update.py --stamp --task
   task-XXXX` (refused unless the store gained a row, or `--none`) and `python
   .claude/tools/memory/codebase_sync.py --stamp`. Procedure:

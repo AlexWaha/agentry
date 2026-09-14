@@ -1001,8 +1001,19 @@ def check_destructive_and_repl(command: str, low: str) -> int:
     cfg = gates_cfg()
 
     if cfg.get("forbid_dev_null") and "/dev/null" in command:  # B
-        return deny("Unix redirect to /dev/null is forbidden in this environment - it "
-                    "creates a literal `nul` file. Drop the redirect or use `>NUL` / `2>NUL`.")
+        return deny("Redirect to /dev/null is denied by project policy "
+                    "(gates.forbid_dev_null). The reason once given on this deny was "
+                    "wrong and has been removed: measured on this host 2026-09-14 under "
+                    "git-bash MINGW64, /dev/null IS a real character device here, the "
+                    "output is discarded and NO file is created. The deny stands anyway - "
+                    "it is the CEO's standing rule and only he relaxes it. `>NUL` / "
+                    "`2>NUL` is NOT the fix, and is the spelling that genuinely breaks: "
+                    "measured the same day, `ls missing 2>NUL` in an empty directory "
+                    "leaves an entry named NUL holding the 63 bytes of output that was "
+                    "meant to vanish, which Windows then refuses to unlink by name. Drop "
+                    "the redirect and let the output through. If you genuinely must "
+                    "suppress it, capture it instead - `out=$(cmd 2>&1)` - or redirect "
+                    "into a file under the project's tmp/.")
 
     allow_if = [str(s).lower() for s in cfg.get("destructive_allow_if", [])]  # A
     for pat in cfg.get("destructive_command_patterns", []):
