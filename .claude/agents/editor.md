@@ -7,6 +7,8 @@ permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30
 tools: Read, Edit, Glob, Grep
+rules:
+  - i18n.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

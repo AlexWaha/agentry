@@ -16,6 +16,7 @@ skills:
   - frontend-standards
   - bug-fix
 rules:
+  - i18n.md
   - mobile.md
 hooks:
   PreToolUse:

@@ -13,6 +13,8 @@ mcpServers:
   - codegraph
 skills:
   - deep-review
+rules:
+  - i18n.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

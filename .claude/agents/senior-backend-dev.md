@@ -14,6 +14,8 @@ mcpServers:
 skills:
   - feature-scaffold
   - bug-fix
+rules:
+  - i18n.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"
