@@ -15,6 +15,7 @@ skills:
   - deep-review
 rules:
   - api-conventions.md
+  - performance.md
   - i18n.md
 hooks:
   PreToolUse:

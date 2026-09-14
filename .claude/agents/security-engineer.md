@@ -13,6 +13,8 @@ mcpServers:
   - codegraph
 skills:
   - risk-assessment
+rules:
+  - performance.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

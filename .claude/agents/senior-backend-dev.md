@@ -16,6 +16,7 @@ skills:
   - bug-fix
 rules:
   - api-conventions.md
+  - performance.md
   - i18n.md
 hooks:
   PreToolUse:

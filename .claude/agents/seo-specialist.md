@@ -8,6 +8,7 @@ effort: low
 maxTurns: 30
 tools: Read, Write, Edit, Glob, Grep, Bash
 rules:
+  - performance.md
   - i18n.md
 hooks:
   PreToolUse:

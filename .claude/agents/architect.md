@@ -14,6 +14,7 @@ skills:
   - db-design
 rules:
   - api-conventions.md
+  - performance.md
   - mobile.md
 hooks:
   PreToolUse:
