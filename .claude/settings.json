@@ -105,6 +105,15 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/inject_rules.py\"",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "SubagentStop": [
