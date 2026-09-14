@@ -10,6 +10,8 @@ tools: Read, Write, Edit, Glob, Grep
 skills:
   - new-epic
   - new-task
+rules:
+  - business-standards.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

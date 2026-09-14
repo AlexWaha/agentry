@@ -10,6 +10,8 @@ tools: Read, Write, Glob, Grep, Bash, WebSearch, WebFetch
 skills:
   - market-research
   - business-plan
+rules:
+  - business-standards.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write|WebSearch|WebFetch"

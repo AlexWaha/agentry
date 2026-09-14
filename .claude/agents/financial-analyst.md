@@ -9,6 +9,8 @@ maxTurns: 30
 tools: Read, Write, Glob, Grep, Bash, WebSearch, WebFetch
 skills:
   - financial-model
+rules:
+  - business-standards.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write|WebSearch|WebFetch"

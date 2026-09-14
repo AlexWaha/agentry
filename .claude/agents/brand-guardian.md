@@ -7,6 +7,8 @@ permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30
 tools: Read, Write, Edit, Glob, Grep
+rules:
+  - business-standards.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

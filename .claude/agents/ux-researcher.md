@@ -9,6 +9,8 @@ maxTurns: 30
 tools: Read, Write, Glob, Grep
 skills:
   - market-research
+rules:
+  - business-standards.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

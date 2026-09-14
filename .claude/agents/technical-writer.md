@@ -9,6 +9,8 @@ maxTurns: 30
 tools: Read, Write, Edit, Glob, Grep
 skills:
   - update-docs
+rules:
+  - business-standards.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

@@ -33,7 +33,9 @@
       "Write"
     ]
   },
-  "claudeMdExcludes": [],
+  "claudeMdExcludes": [
+    "**/.claude/rules/business-standards.md"
+  ],
   "hooks": {
     "SessionStart": [
       {

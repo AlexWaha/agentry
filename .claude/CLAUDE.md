@@ -349,7 +349,6 @@ dispatch its size.
 | `self-learning.md` | Mandated by FR-30; the distill-and-stamp loop after every task and lesson capture from agent reports are the orchestrator's and cannot be delegated. |
 | `pipeline.md` | The stage map the orchestrator drives with `advance.py`, and the context-absorption order it must write into every dispatch prompt; every agent's workflow step 1 cites it too, so core is its cheapest home. |
 | `orchestration.md` | The orchestrator's operating loop itself (hooks, busy marker, force majeure, steering, checkpoint advice); no agent needs it, and no other channel reaches the main thread. |
-| `business-standards.md` | Not core: the main thread never uses it; moves to 9 agents in commit 1. |
 
 @rules/quality-standard.md
 @rules/communication.md
@@ -370,4 +369,3 @@ dispatch its size.
 @rules/self-learning.md
 @rules/pipeline.md
 @rules/orchestration.md
-@rules/business-standards.md
