@@ -112,32 +112,98 @@ Get it right the first time.
 
 > Apply these rules when the development machine runs Windows with Git Bash. They are harmless no-ops on *nix systems and can be ignored on pure Linux/macOS setups.
 
-### FORBIDDEN: Unix-Style Redirects in Git Bash on Windows
+### FORBIDDEN: Redirecting Output Away in Git Bash on Windows
 
-Unix redirects do not work correctly in Git Bash on Windows. They create a literal file named `nul` instead of discarding output. **NEVER** use any of these on a Windows/Git Bash setup:
+**The reason, stated correctly, because getting it wrong is what produced three
+broken versions of this rule.** The shell here is bash, not `cmd.exe`, and the
+two spellings behave differently. Both were finally measured on 2026-09-14
+(git-bash MINGW64 on Windows 11), each in its own empty directory.
+
+`2>NUL` is the spelling that actually breaks. Bash has no device named `NUL`, so
+the redirect opens a file of that name and the output lands in it:
+
+```
+$ ls -a                            # only . and ..
+. ..
+$ ls nonexistent_xyz 2>NUL
+exit=2
+$ ls -la
+-rw-r--r-- 1 AlexWaha 197121 63 Sep 14 03:04 NUL
+$ cat NUL
+ls: cannot access 'nonexistent_xyz': No such file or directory
+```
+
+Nothing was discarded: the 63 bytes are the error text. Worse, the entry is hard
+to remove, because bash and Windows disagree about what it is. To bash it is a
+regular file (`test -f` succeeds, `test -c` fails). To the Win32 layer the name
+`NUL` resolves to the reserved device, so Python reports `is_file()` as `False`
+and a character device, and `os.unlink` / `shutil.rmtree` fail with
+`PermissionError: [WinError 5] Access is denied`. A bash `rm -f` clears it;
+Python cannot.
+
+`2>/dev/null` does NOT do this, contrary to what this rule claimed for months.
+MSYS2 mounts a real character device at that path (`test -c /dev/null`
+succeeds), so the output is genuinely discarded and the directory is unchanged
+afterwards. It is still forbidden here, but by **policy, not physics**: it is
+the CEO's standing rule, `gates.forbid_dev_null` enforces it, and only the CEO
+relaxes it. Do not restate the old mechanism as the justification.
+
+**If you re-measure this, pin the shell first.** From Python a bare `bash` on
+this host resolves to WSL bash, a Linux kernel with a genuine null device, so
+it returns the result above for entirely the wrong reason - and this is the one
+claim it would get right by accident, which is exactly what makes the trap
+worth naming here. Use `C:/Program Files/Git/bin/bash.exe` explicitly and
+confirm `uname` reports `MINGW` or `MSYS` before believing any of it. The first
+attempt at this measurement did not, and WSL bash resolved the project path as
+`/mnt/e/...` and created a literal directory named `E:` in the project root.
+
+**So on git-bash, do not redirect output away.** One spelling leaves a file you
+cannot delete with Python; the other is denied by policy. Do not go looking for
+a third variant - the answer is to let the output through.
+
+**NEVER** use any of these:
 
 ```bash
-# ALL OF THESE ARE FORBIDDEN on Windows/Git Bash
+# FORBIDDEN by policy - the Unix spelling (denied by gates.forbid_dev_null).
+# Measured: it works here and creates nothing. Denied anyway, by CEO rule.
 command >/dev/null
 command 2>/dev/null
 command &>/dev/null
-command 2>&1 >/dev/null
 command > /dev/null 2>&1
+
+# FORBIDDEN because it is broken - the `cmd.exe` spelling. Measured: writes the
+# output into a file named NUL that Python then cannot delete.
+command >NUL
+command 2>NUL
+command >NUL 2>&1
 ```
 
 **What to do instead:**
-- Run the command without any redirects (preferred and simplest)
-- If you absolutely must suppress output, use Windows-native `2>NUL` or `>NUL`
+
+1. **Run the command with no redirect and let the output through.** This is the
+   answer almost every time. Noisy output costs a few tokens; a stray `NUL` file
+   in the tree costs a debugging session.
+2. If you genuinely need the output out of the way, **capture it instead of
+   discarding it**: `out=$(command 2>&1)`, then test `$?` or inspect `$out`.
+3. If it has to go to a file, put it **inside the project's `tmp/`** (gitignored)
+   and delete it when done: `command > tmp/build.log 2>&1`.
 
 ```bash
 # GOOD - just run it
 {{BUILD_CMD}}
 
-# GOOD - if you must suppress (Windows)
-{{BUILD_CMD}} 2>NUL
+# GOOD - capture, do not discard
+out=$({{BUILD_CMD}} 2>&1)
 
-# BAD on Windows/Git Bash - creates a literal "nul" file
+# GOOD - a real file, inside the project, cleaned up afterwards
+{{BUILD_CMD}} > tmp/build.log 2>&1
+
+# BAD - denied by gates.forbid_dev_null (policy; it does work on this host)
 {{BUILD_CMD}} 2>/dev/null
+
+# BAD - writes the output into a file named "NUL" that Python cannot delete,
+# which is why it is no longer recommended
+{{BUILD_CMD}} 2>NUL
 ```
 
 ### NUL File Cleanup
@@ -149,6 +215,11 @@ rm -f nul NUL
 ```
 
 This catches any accidental violations from previous sessions or tooling. No-op on *nix (files do not exist).
+
+Clean up with bash (`rm -f`, or `find -iname nul -delete`), never from Python:
+`os.unlink` on a `NUL` entry fails with `PermissionError: [WinError 5]`, and
+`pathlib.Path.is_file()` reports `False` for it, so a Python guard skips the
+entry entirely. Measured 2026-09-14.
 
 ### Path Separators
 

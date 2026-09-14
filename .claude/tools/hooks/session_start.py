@@ -2,7 +2,17 @@
 """SessionStart hook - one process instead of three.
 
 Does, in order, all fail-open:
-  1. Remove stray Windows `nul`/`NUL` files (created by accidental unix redirects).
+  1. Remove stray Windows `nul`/`NUL` files. The `2>NUL` spelling leaves them
+     (bash has no device named NUL, so it opens a file); `2>/dev/null` does
+     not, MSYS2 mounts a real device there. See rules/quality-standard.md.
+     KNOWN GAP, measured 2026-09-14: cleanup_nul() below cannot actually
+     remove one. Win32 resolves the name as the reserved device, so
+     `Path.is_file()` is False and the guard skips it, and `unlink()` would
+     raise WinError 5 anyway. Only bash (`rm -f`, `find -delete`) clears it -
+     which is what hooks/cleanup-nul.sh does. Needs its own task, and NOT an
+     `exists()`-based fix: that name always exists (the device does), so an
+     exists() guard would fire at the reserved device every session whether an
+     artifact is there or not. The fix has to shell out to bash.
   2. Print the pipeline resume summary (in-flight runs from state.py).
   3. Sync the codegraph index (one status line; silent skip if CLI absent).
   3.5 Module-map drift check (tools/memory/codebase_sync.py --check): silent

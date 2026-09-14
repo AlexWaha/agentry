@@ -151,7 +151,7 @@ Unused rules can stay imported - they're marked `[DEFERRED]` or `[OPTIONAL]` and
 - **Hook script paths are portable.** The `settings.json` and agent hooks invoke Python scripts via `$CLAUDE_PROJECT_DIR/.claude/tools/...` - the harness sets this variable for every hook run, on every machine. Do NOT replace it with an absolute path (leaks a machine-local path into the repo) and do NOT make paths relative (`python .claude/tools/...` breaks when the shell cwd drifts, and a missing-file exit bricks Bash/Edit/Write via the PreToolUse gate).
 - Per-agent gate hooks (`agents/*.md`, `hooks.PreToolUse` blocks) use `$CLAUDE_PROJECT_DIR` the same way - leave them untouched.
 - `tools/hooks/dangerous_patterns.py` - wired in dev-agent frontmatter (PostToolUse); scans edited files for debug/eval/exec patterns across PHP, JS/TS, Python, Ruby, Go. Extend the pattern table if your language is not covered.
-- `hooks/cleanup-nul.sh` - Windows-only cleanup for accidental `nul` files from `/dev/null` redirects. Harmless on *nix.
+- `hooks/cleanup-nul.sh` - Windows-only cleanup for accidental `nul`/`NUL` files left by the `2>NUL` redirect spelling (bash has no device named `NUL`, so it opens a file; `2>/dev/null` does not do this on MSYS2 and is denied by policy instead - measured 2026-09-14, see `rules/quality-standard.md`). Cleanup runs from bash because Python cannot unlink such an entry. Harmless on *nix.
 
 ## 5.1 Code knowledge graph (codegraph)
 

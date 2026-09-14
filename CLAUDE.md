@@ -190,9 +190,10 @@ Fuller version in `.agentry/project/project-context.md`.
 
 > Keep this section if the team develops on Windows. Harmless to drop on *nix.
 
-- **FORBIDDEN**: Unix-style redirects (`>/dev/null`, `2>/dev/null`, `&>/dev/null`) - they create literal `nul` files on Windows
-- Run commands without redirects, or use Windows-native `>NUL` / `2>NUL` if suppression is needed
-- At the end of each task, check for and delete accidental `nul`/`NUL` files: `rm -f nul NUL`
+- **FORBIDDEN**: Unix-style redirects (`>/dev/null`, `2>/dev/null`, `&>/dev/null`) - denied by `gates.forbid_dev_null`. This is a policy deny: measured on this host 2026-09-14, MSYS2 provides a real `/dev/null` device and the redirect creates nothing. The deny is the CEO's rule and only he relaxes it
+- **`>NUL` / `2>NUL` is NOT a safe alternative** and is the spelling that genuinely breaks. bash has no device named `NUL`, so it opens a file: measured, `ls missing 2>NUL` in an empty directory leaves a 63-byte entry named `NUL` holding the output, and Windows then refuses to let Python unlink it
+- Run commands with no redirect and let the output through. If you must suppress, capture instead (`out=$(cmd 2>&1)`) or write into the project's `tmp/`. Full measurement: `.claude/rules/quality-standard.md`
+- At the end of each task, check for and delete accidental `nul`/`NUL` files with bash: `rm -f nul NUL`
 
 ## Language Rules
 
