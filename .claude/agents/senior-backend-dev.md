@@ -16,6 +16,7 @@ skills:
   - bug-fix
 rules:
   - architecture.md
+  - testing.md
   - api-conventions.md
   - performance.md
   - i18n.md

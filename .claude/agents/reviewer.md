@@ -15,6 +15,7 @@ skills:
   - deep-review
 rules:
   - architecture.md
+  - testing.md
   - api-conventions.md
   - performance.md
   - documentation.md

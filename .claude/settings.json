@@ -42,7 +42,8 @@
     "**/.claude/rules/performance.md",
     "**/.claude/rules/human-voice.md",
     "**/.claude/rules/documentation.md",
-    "**/.claude/rules/architecture.md"
+    "**/.claude/rules/architecture.md",
+    "**/.claude/rules/testing.md"
   ],
   "hooks": {
     "SessionStart": [
