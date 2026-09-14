@@ -24,7 +24,9 @@ the distillation SOURCE for the rows below.
 text (the subagent prompt, falling back to the in-flight task file), turns it
 into an FTS5 query, and injects the top-ranked rows - never a file head. The
 injected block states its row count, so a thin result is visible instead of
-silent, and the whole block is capped at 3800 bytes (`inject.BUDGET_BYTES`).
+silent, and the whole block is capped by `memory.inject_budget_bytes` in
+`.agentry/pipeline.json` (default 3800), each row by `memory.inject_row_chars`
+(default 700). An unusable value falls back to the default and still injects.
 Zero matches inject nothing.
 
 A missing, empty or corrupt store injects nothing and exits 0. Retrieval never

@@ -85,7 +85,8 @@ Two hooks keep the loop honest (both fail-open, both quiet unless actionable):
 
 - **SubagentStart** (`tools/memory/inject.py`): queries the store with the
   dispatched task's text and injects the top-ranked rows, with their count, under
-  a 3800-byte ceiling. An absent or corrupt store injects nothing.
+  the `memory.inject_budget_bytes` ceiling in `.agentry/pipeline.json` (default
+  3800). An absent or corrupt store injects nothing.
 - **SubagentStop** (`tools/hooks/subagent_stop.py`): when a subagent finishes,
   the orchestrator gets a one-line reminder, with the exact command, to record any
   lesson from its report.

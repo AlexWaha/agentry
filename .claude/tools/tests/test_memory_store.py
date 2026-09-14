@@ -9,6 +9,7 @@ retrieval path that stays silent instead of blocking when the store is absent.
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
 import sys
@@ -24,6 +25,7 @@ sys.path.insert(0, str(TOOLS_DIR / "tests"))
 import codebase_sync
 import inject
 import memory
+import state
 import tmproot
 import update
 
@@ -287,7 +289,48 @@ class PostTaskGateTest(StoreTestCase):
         self.assertIsInstance(debt, list)       # shape contract used by stop_gate.py
 
 
-class InjectionTest(StoreTestCase):
+class InjectTestCase(StoreTestCase):
+    """Adds the stdin-driven call into inject.main(). No tests of its own, so
+    the classes below inherit the helper without re-running anything.
+
+    Every injection test reads a pipeline config this class WRITES, never the
+    shipped .agentry/pipeline.json. A test that passes because of how the
+    shipped config happens to be set proves nothing about the code: that is
+    exactly how gates.forbid_dev_null sat switched off for six days with five
+    tests reporting green (task-0070). Absent keys are the default state here,
+    so the default-value tests are genuinely testing the fallback.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.pipeline_path = self.tmp / "pipeline.json"
+        self._real_pipeline = state.PIPELINE_PATH
+        state.PIPELINE_PATH = self.pipeline_path
+        self.addCleanup(setattr, state, "PIPELINE_PATH", self._real_pipeline)
+        self.write_cfg({})
+
+    def write_cfg(self, memory_block) -> None:
+        self.pipeline_path.write_text(json.dumps({"memory": memory_block}),
+                                      encoding="utf-8")
+
+    def fill_store(self, count: int = 40) -> None:
+        """A corpus fat enough that the block budget has to drop rows and the
+        row cap has to truncate. Every row matches the query below."""
+        filler = ("the gate hook branch push commit approval pipeline stage task memory "
+                  "store retrieval injection budget lesson pattern module ") * 6
+        for i in range(count):
+            memory.record_lesson(self.conn, signature=f"budget-lesson-{i:02d}",
+                                 trigger=f"dispatching any agent {filler}",
+                                 what=f"row {i} {filler}", why=f"cause {i} {filler}",
+                                 fix=f"rule {i} {filler}")
+
+    def inject_corpus(self):
+        return self.run_inject({"prompt": "gate hook branch push commit approval "
+                                          "pipeline stage task memory store"},
+                               ["--db", str(self.db), "--limit", "40"])
+
+    def body_rows(self, out: str) -> list:
+        return [ln for ln in out.splitlines() if ln.startswith("- [")]
 
     def run_inject(self, payload, argv):
         real_stdin, sys.stdin = sys.stdin, io.StringIO(json.dumps(payload))
@@ -298,6 +341,9 @@ class InjectionTest(StoreTestCase):
         finally:
             sys.stdin = real_stdin
         return code, out.getvalue()
+
+
+class InjectionTest(InjectTestCase):
 
     def test_matching_rows_are_injected_with_their_count(self):
         memory.record_lesson(self.conn, **LESSON)
@@ -340,21 +386,157 @@ class InjectionTest(StoreTestCase):
         self.assertEqual(out.getvalue(), "")
 
     def test_injection_stays_under_the_byte_budget(self):
-        filler = ("the gate hook branch push commit approval pipeline stage task memory "
-                  "store retrieval injection budget lesson pattern module ") * 6
-        for i in range(40):
-            memory.record_lesson(self.conn, signature=f"budget-lesson-{i:02d}",
-                                 trigger=f"dispatching any agent {filler}",
-                                 what=f"row {i} {filler}", why=f"cause {i} {filler}",
-                                 fix=f"rule {i} {filler}")
-        code, out = self.run_inject({"prompt": "gate hook branch push commit approval "
-                                               "pipeline stage task memory store"},
-                                    ["--db", str(self.db), "--limit", "40"])
+        self.fill_store()
+        code, out = self.inject_corpus()
         self.assertEqual(code, 0)
-        self.assertLessEqual(len(out.encode("utf-8")), inject.BUDGET_BYTES + 1)
+        self.assertLessEqual(len(out.encode("utf-8")), inject.DEFAULT_BUDGET_BYTES + 1)
         # Trimming is stated, not hidden: the head says how many of the matches
         # actually travelled.
         self.assertRegex(out, r"## Project memory: \d+ of 40 matching row\(s\) \(byte budget\)")
+
+
+class InjectionBudgetIsConfigTest(InjectTestCase):
+    """FR-23 / contract C-5: both caps live in .agentry/pipeline.json, and
+    turning either dial changes the emitted bytes with no code edit.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.fill_store()
+
+    def test_absent_keys_use_the_shipped_defaults(self):
+        _, out = self.inject_corpus()
+        size = len(out.encode("utf-8"))
+        self.assertLessEqual(size, inject.DEFAULT_BUDGET_BYTES + 1)
+        # Headroom check: the corpus must actually reach toward the default,
+        # or the lowered-budget test below would prove nothing.
+        self.assertGreater(size, 2000)
+
+    def test_lowering_the_block_budget_shortens_the_block(self):
+        _, before = self.inject_corpus()
+        self.write_cfg({"inject_budget_bytes": 2000})
+        _, after = self.inject_corpus()
+        self.assertLessEqual(len(after.encode("utf-8")), 2000 + 1)
+        self.assertLess(len(after.encode("utf-8")), len(before.encode("utf-8")))
+        self.assertLess(len(self.body_rows(after)), len(self.body_rows(before)))
+        self.assertRegex(after, r"\d+ of 40 matching row\(s\) \(byte budget\)")
+
+    def test_lowering_the_row_cap_shortens_the_longest_row(self):
+        _, before = self.inject_corpus()
+        self.assertGreater(max(len(r) for r in self.body_rows(before)), 200)
+        self.write_cfg({"inject_row_chars": 200})
+        _, after = self.inject_corpus()
+        rows = self.body_rows(after)
+        self.assertTrue(rows)
+        # The cap applies to the row TEXT; the prefix (kind and title) and the
+        # truncation marker sit outside it.
+        for row in rows:
+            text = row.split(": ", 1)[1]
+            self.assertLessEqual(len(text.removesuffix(" ...")), 200)
+        self.assertLess(max(len(r) for r in rows),
+                        max(len(r) for r in self.body_rows(before)))
+        # A shorter row means more rows fit the unchanged block budget.
+        self.assertGreater(len(rows), len(self.body_rows(before)))
+
+    def test_raising_the_block_budget_lets_more_rows_through(self):
+        _, before = self.inject_corpus()
+        self.write_cfg({"inject_budget_bytes": 12000})
+        _, after = self.inject_corpus()
+        self.assertGreater(len(self.body_rows(after)), len(self.body_rows(before)))
+        self.assertLessEqual(len(after.encode("utf-8")), 12000 + 1)
+
+    def test_unusable_values_fall_back_to_the_default_and_still_emit(self):
+        _, default_out = self.inject_corpus()
+        default_size = len(default_out.encode("utf-8"))
+        for bad in (None, "2000", 0, -5, True, False, 1.5, [2000], {"bytes": 2000}, ""):
+            with self.subTest(value=bad):
+                self.write_cfg({"inject_budget_bytes": bad, "inject_row_chars": bad})
+                _, out = self.inject_corpus()
+                self.assertTrue(out.strip(), f"{bad!r} emitted nothing")
+                self.assertEqual(len(out.encode("utf-8")), default_size)
+
+    def test_a_non_dict_memory_block_falls_back(self):
+        self.pipeline_path.write_text(json.dumps({"memory": "on"}), encoding="utf-8")
+        _, out = self.inject_corpus()
+        self.assertTrue(out.strip())
+        self.assertEqual(inject.cfg_int("inject_budget_bytes", 4242), 4242)
+
+    def test_an_unparseable_config_falls_back(self):
+        self.pipeline_path.write_text("{ not json", encoding="utf-8")
+        _, out = self.inject_corpus()
+        self.assertTrue(out.strip())
+        self.assertEqual(inject.cfg_int("inject_row_chars", 4242), 4242)
+
+    def test_a_config_whose_top_level_is_not_an_object_falls_back(self):
+        # load_pipeline() returns whatever the file parsed to, so a top-level
+        # array reaches .get() and raises AttributeError. This is the ONLY
+        # path into cfg_int's except clause: without this case that clause is
+        # dead in the suite - replacing its `return default` with `raise`
+        # leaves every other injection test green (measured during the test
+        # stage of task-0011), which means nothing would notice if the
+        # fail-open half of NFR-4 were deleted.
+        self.pipeline_path.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+        _, out = self.inject_corpus()
+        self.assertTrue(out.strip())
+        self.assertEqual(inject.cfg_int("inject_budget_bytes", 4242), 4242)
+
+    def test_a_missing_config_file_falls_back(self):
+        state.PIPELINE_PATH = self.tmp / "absent.json"
+        _, out = self.inject_corpus()
+        self.assertTrue(out.strip())
+        self.assertEqual(inject.cfg_int("inject_budget_bytes", 4242), 4242)
+
+    def test_a_tiny_but_valid_budget_is_honoured_and_still_emits_one_row(self):
+        # The deliberate choice: 10 is absurdly small but it is a legal byte
+        # count, so it is obeyed rather than replaced by the default. render()
+        # never drops the last row, so the floor is the head line plus one
+        # row - the block cannot be emptied by this key.
+        self.write_cfg({"inject_budget_bytes": 10, "inject_row_chars": 40})
+        _, out = self.inject_corpus()
+        rows = self.body_rows(out)
+        self.assertEqual(len(rows), 1)
+        self.assertIn("## Project memory:", out)
+        self.assertRegex(out, r"1 of 40 matching row\(s\) \(byte budget\)")
+        self.assertGreater(len(out.encode("utf-8")), 10)  # the floor, not the cap
+
+    def test_the_count_line_says_matched_when_nothing_was_dropped(self):
+        # Criterion 5, the regression check: the two spellings of the count
+        # line still follow whether the budget trimmed anything.
+        self.write_cfg({"inject_budget_bytes": 200000})
+        _, out = self.inject_corpus()
+        self.assertEqual(len(self.body_rows(out)), 40)
+        self.assertIn("40 row(s) matched this dispatch", out)
+        self.assertNotIn("byte budget", out)
+
+
+class InjectSysPathOrderTest(unittest.TestCase):
+    """inject.py's own dir must land ahead of tools/pipeline/ in sys.path.
+
+    The inserts are LIFO, so the SECOND one wins index 0. update.py and
+    codebase_sync.py both insert pipeline first and their own dir second;
+    inject.py once had them reversed, which would let a future
+    pipeline/memory.py shadow tools/memory/memory.py - and the resulting
+    AttributeError is swallowed by main()'s blanket except, so injection would
+    die silently with exit code 0. The module is re-executed here because the
+    live sys.path is shared with every other test module.
+    """
+
+    def test_own_directory_precedes_the_pipeline_directory(self) -> None:
+        memory_dir = str(TOOLS_DIR / "memory")
+        pipeline_dir = str(TOOLS_DIR / "pipeline")
+        saved = list(sys.path)
+        self.addCleanup(sys.path.__setitem__, slice(None), saved)
+        sys.path[:] = [p for p in sys.path if p not in (memory_dir, pipeline_dir)]
+
+        spec = importlib.util.spec_from_file_location(
+            "inject_syspath_order", TOOLS_DIR / "memory" / "inject.py")
+        spec.loader.exec_module(importlib.util.module_from_spec(spec))
+
+        self.assertLess(
+            sys.path.index(memory_dir), sys.path.index(pipeline_dir),
+            "inject.py must insert tools/pipeline FIRST and its own tools/memory "
+            "SECOND, so its own dir ends up ahead of pipeline in sys.path; the "
+            "two inserts are LIFO and look inverted.")
 
 
 class ModuleMapSyncTest(StoreTestCase):
