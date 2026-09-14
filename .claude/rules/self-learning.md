@@ -56,7 +56,7 @@ There is no per-agent `MEMORY.md` and no `memory: project` frontmatter any
 more. Claude Code auto-injected the first ~200 lines of that file, which is the
 same blind window the layer files had - it delivers the head of a file, not what
 the task needs. Retrieval we control replaced it: a `SubagentStart` hook queries
-the store with the dispatch text and injects the ranked matches.
+the store with the active task file's text and injects the ranked matches.
 
 Pick the tier when recording a lesson:
 
@@ -83,10 +83,18 @@ self-improvement.
 
 Two hooks keep the loop honest (both fail-open, both quiet unless actionable):
 
-- **SubagentStart** (`tools/memory/inject.py`): queries the store with the
-  dispatched task's text and injects the top-ranked rows, with their count, under
-  the `memory.inject_budget_bytes` ceiling in `.agentry/pipeline.json` (default
-  3800). An absent or corrupt store injects nothing.
+- **SubagentStart** (`tools/memory/inject.py`): queries the store with the text
+  of the task file(s) in `.agentry/tasks/active/` - not the dispatch prompt,
+  which this event's payload does not carry - and injects the top-ranked rows,
+  with their count, under the `memory.inject_budget_bytes` ceiling in
+  `.agentry/pipeline.json` (default 3800, measured on the block inside the
+  hook's JSON envelope rather than on the whole emitted object). An absent or
+  corrupt store injects nothing. Delivery needs that envelope:
+  `{"hookSpecificOutput": {"hookEventName": "SubagentStart",
+  "additionalContext": "..."}}`. Plain stdout is DISCARDED on this event, which
+  is how this hook delivered nothing at all for as long as it printed raw text
+  (task-0081) - so any hook added here injects through the envelope or it does
+  not inject.
 - **SubagentStop** (`tools/hooks/subagent_stop.py`): when a subagent finishes,
   the orchestrator gets a one-line reminder, with the exact command, to record any
   lesson from its report.

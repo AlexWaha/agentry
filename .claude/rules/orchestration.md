@@ -23,11 +23,21 @@ dispatch the owning agent.
 
 Project memory is one queried store, `.agentry/memory/memory.db` (SQLite + FTS5,
 see `memory/README.md`), holding `lesson`, `pattern` and `module` rows.
-SubagentStart hooks query it with the dispatch text and inject the ranked
-matches per agent type automatically - nothing to name in the prompt. When a
-dispatch needs more than the injected rows, the agent queries the store itself
-(`python .claude/tools/memory/memory.py --query "<topic>"`), in addition to the
-context-absorption chain from `pipeline.md`.
+SubagentStart hooks query it with the text of the ACTIVE TASK FILE(S) and
+inject the ranked matches per agent type automatically - nothing to name in the
+prompt, and nothing you write in the prompt changes what comes back. The query
+is not the dispatch text and cannot be: the `SubagentStart` payload carries
+only the session fields plus `hook_event_name`, `agent_id` and `agent_type`,
+with no prompt, description or task field anywhere in it (measured in the
+2.1.269 binary, task-0081). Until that task the hook also printed its block as
+plain stdout, which this event discards, so every dispatch received zero rows
+silently at exit 0 while these paragraphs said otherwise - so if an agent
+reports that no memory block reached it, treat that as a live defect, not as an
+empty store. The practical consequence for a dispatch: what reaches the agent
+follows from what the task file says, so a thin task file retrieves thin. When
+a dispatch needs more than the injected rows, the agent queries the store
+itself (`python .claude/tools/memory/memory.py --query "<topic>"`), in addition
+to the context-absorption chain from `pipeline.md`.
 
 ## The autonomy contract
 

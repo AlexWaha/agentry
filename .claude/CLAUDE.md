@@ -159,11 +159,17 @@ One store, `.agentry/memory/memory.db` (SQLite + FTS5, gitignored; contract:
 rows (reusable code shapes) and `module` rows (the module map).
 
 - **Retrieval is automatic** (SubagentStart hooks): `tools/memory/inject.py`
-  queries the store with the dispatch text and injects the ranked matches with
-  their count, capped by `memory.inject_budget_bytes` in `.agentry/pipeline.json`
-  (default 3800) - not the head of a file. Planning agents get
-  module+pattern+lesson rows, spec-developer module+lesson, dev/review agents
-  lesson+pattern.
+  queries the store with **the text of the task file(s) in
+  `.agentry/tasks/active/`** and injects the ranked matches with their count,
+  capped by `memory.inject_budget_bytes` in `.agentry/pipeline.json` (default
+  3800, applied to the block inside the hook's JSON envelope) - not the head of
+  a file. Planning agents get module+pattern+lesson rows, spec-developer
+  module+lesson, dev/review agents lesson+pattern. The query is NOT the
+  dispatch prompt: the `SubagentStart` payload carries only session fields plus
+  `hook_event_name`, `agent_id` and `agent_type`, with no prompt text in it at
+  all (task-0081 - which also found that the hook had been printing its block
+  as plain stdout, which this event discards, so retrieval delivered nothing to
+  anybody until then).
 - **Record / query by hand:** `python .claude/tools/memory/memory.py --record
   --kind lesson --signature <tag> --trigger <when> --what <mistake> --why <cause>
   --fix <rule>`; `--query "<topic>"`, `--export`, `--stats`.

@@ -289,6 +289,24 @@ class PostTaskGateTest(StoreTestCase):
         self.assertIsInstance(debt, list)       # shape contract used by stop_gate.py
 
 
+# What the live SubagentStart payload actually holds: the session fields plus
+# hook_event_name, agent_id and agent_type. Read out of the 2.1.269 binary
+# (`{...session, hook_event_name:"SubagentStart", agent_id:n, agent_type:r}`)
+# and confirmed against inject.payload_text() before it was deleted, which
+# returned "" for every dispatch this project has ever made. No prompt, no
+# description, no task field - so the payload is NOT the query, and these tests
+# feed a realistic one rather than the invented {"prompt": ...} they used to.
+LIVE_PAYLOAD = {
+    "session_id": "0198f2c4-0000-7000-8000-000000000001",
+    "transcript_path": "C:/Users/dev/.claude/projects/x/session.jsonl",
+    "cwd": "E:/Personal/AI-team-universal",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "SubagentStart",
+    "agent_id": "agent_01",
+    "agent_type": "senior-backend-dev",
+}
+
+
 class InjectTestCase(StoreTestCase):
     """Adds the stdin-driven call into inject.main(). No tests of its own, so
     the classes below inherit the helper without re-running anything.
@@ -299,6 +317,11 @@ class InjectTestCase(StoreTestCase):
     exactly how gates.forbid_dev_null sat switched off for six days with five
     tests reporting green (task-0070). Absent keys are the default state here,
     so the default-value tests are genuinely testing the fallback.
+
+    inject.ACTIVE_DIR is redirected into the sandbox for the same reason: the
+    query source is the active task file(s), so a test left pointing at the
+    real .agentry/tasks/active/ would query whatever the repo happens to be
+    working on that day.
     """
 
     def setUp(self):
@@ -307,6 +330,11 @@ class InjectTestCase(StoreTestCase):
         self._real_pipeline = state.PIPELINE_PATH
         state.PIPELINE_PATH = self.pipeline_path
         self.addCleanup(setattr, state, "PIPELINE_PATH", self._real_pipeline)
+        self.active = self.tmp / "active"
+        self.active.mkdir()
+        self._real_active = inject.ACTIVE_DIR
+        inject.ACTIVE_DIR = self.active
+        self.addCleanup(setattr, inject, "ACTIVE_DIR", self._real_active)
         self.write_cfg({})
 
     def write_cfg(self, memory_block) -> None:
@@ -325,15 +353,27 @@ class InjectTestCase(StoreTestCase):
                                  fix=f"rule {i} {filler}")
 
     def inject_corpus(self):
-        return self.run_inject({"prompt": "gate hook branch push commit approval "
-                                          "pipeline stage task memory store"},
+        return self.run_inject("gate hook branch push commit approval "
+                               "pipeline stage task memory store",
                                ["--db", str(self.db), "--limit", "40"])
 
     def body_rows(self, out: str) -> list:
-        return [ln for ln in out.splitlines() if ln.startswith("- [")]
+        return [ln for ln in self.delivered(out).splitlines() if ln.startswith("- [")]
 
-    def run_inject(self, payload, argv):
-        real_stdin, sys.stdin = sys.stdin, io.StringIO(json.dumps(payload))
+    def delivered(self, out: str) -> str:
+        """The text that actually reaches the agent: the block inside the
+        envelope. Nothing emitted means nothing delivered."""
+        if not out.strip():
+            return ""
+        return json.loads(out)["hookSpecificOutput"]["additionalContext"]
+
+    def run_inject(self, query, argv, payload=None, stdin=None):
+        """`query` is written to the active task file, because that is where
+        the query comes from. `payload` only travels down stdin and is expected
+        to change nothing."""
+        (self.active / "task-9999.md").write_text(query, encoding="utf-8")
+        text = stdin if stdin is not None else json.dumps(payload or LIVE_PAYLOAD)
+        real_stdin, sys.stdin = sys.stdin, io.StringIO(text)
         out = io.StringIO()
         try:
             with redirect_stdout(out):
@@ -343,25 +383,81 @@ class InjectTestCase(StoreTestCase):
         return code, out.getvalue()
 
 
-class InjectionTest(InjectTestCase):
+class InjectionDeliveryTest(InjectTestCase):
+    """task-0081. Claude Code DISCARDS plain stdout on SubagentStart; only
+    hookSpecificOutput.additionalContext reaches the agent. inject.py printed
+    the block raw from the day it was written, so 100 lessons, 2 patterns and 9
+    module rows were delivered to nobody, silently, at exit 0 - and every
+    static test in this file passed throughout, because they all read stdout
+    directly. THIS is the test that would have caught it. Reverting the
+    json.dumps envelope in inject.main() must fail the first test below with
+    "stdout is not JSON, so SubagentStart discards it".
+    """
 
-    def test_matching_rows_are_injected_with_their_count(self):
+    def test_a_non_empty_result_is_emitted_as_a_subagentstart_envelope(self):
         memory.record_lesson(self.conn, **LESSON)
-        code, out = self.run_inject({"prompt": "the task parked on a merge and stop_gate "
-                                               "offered the next backlog task"},
+        code, out = self.run_inject("the task parked on a merge and stop_gate "
+                                    "offered the next backlog task",
                                     ["--db", str(self.db)])
         self.assertEqual(code, 0)
-        self.assertIn("1 row(s) matched this dispatch", out)
-        self.assertIn(LESSON["signature"], out)
+        self.assertTrue(out.strip(), "nothing was emitted at all")
+        try:
+            obj = json.loads(out)
+        except ValueError as exc:
+            self.fail(f"stdout is not JSON, so SubagentStart discards it: {exc}\n"
+                      f"stdout began: {out[:120]!r}")
+        self.assertEqual(list(obj), ["hookSpecificOutput"])  # exactly one object, one key
+        self.assertEqual(obj["hookSpecificOutput"]["hookEventName"], "SubagentStart")
+        self.assertIn(LESSON["signature"], obj["hookSpecificOutput"]["additionalContext"])
 
-    def test_empty_store_injects_nothing(self):
-        code, out = self.run_inject({"prompt": "implement the memory store"},
+    def test_zero_matches_emit_nothing_rather_than_an_empty_envelope(self):
+        memory.record_lesson(self.conn, **LESSON)
+        code, out = self.run_inject("xylophone quokka zeppelin narwhal",
                                     ["--db", str(self.db)])
         self.assertEqual(code, 0)
         self.assertEqual(out, "")
 
+    def test_the_envelope_is_ascii_even_when_the_matched_row_is_not(self):
+        # The real store holds arrows and Cyrillic. On a cp1252 stdout an
+        # unescaped one raises UnicodeEncodeError into main()'s blanket
+        # handler, which is the same silent no-op this task is fixing, so
+        # ensure_ascii is load-bearing rather than cosmetic.
+        memory.record_lesson(self.conn, signature="a-row-with-non-ascii-text",
+                             trigger="a lesson recorded with an arrow in it",
+                             what="the park merge stop_gate backlog path \u2192 nothing",
+                             # Escaped, not literal: ruff RUF001 reads a bare
+                             # Cyrillic letter as an ambiguous look-alike, the
+                             # same reason memory.py escapes its dash class.
+                             why="\u041a\u0438\u0440\u0438\u043b\u043b\u0438\u0446\u0430"
+                                 " reached a cp1252 stdout",
+                             fix="emit via json.dumps with the default ensure_ascii")
+        code, out = self.run_inject("the task parked on a merge and stop_gate "
+                                    "offered the next backlog task",
+                                    ["--db", str(self.db)])
+        self.assertEqual(code, 0)
+        self.assertTrue(out.isascii(), "stdout carries raw non-ASCII")
+        self.assertIn("\\u2192", out)                     # escaped, not dropped
+        block = self.delivered(out)
+        self.assertIn("\u2192", block)                    # and it round-trips
+        self.assertIn("\u041a", block)
+
+    def test_matching_rows_are_injected_with_their_count(self):
+        memory.record_lesson(self.conn, **LESSON)
+        code, out = self.run_inject("the task parked on a merge and stop_gate "
+                                    "offered the next backlog task",
+                                    ["--db", str(self.db)])
+        self.assertEqual(code, 0)
+        block = self.delivered(out)
+        self.assertIn("1 row(s) matched the active task", block)
+        self.assertIn(LESSON["signature"], block)
+
+    def test_empty_store_injects_nothing(self):
+        code, out = self.run_inject("implement the memory store", ["--db", str(self.db)])
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "")
+
     def test_missing_store_injects_nothing_and_exits_zero(self):
-        code, out = self.run_inject({"prompt": "implement the memory store"},
+        code, out = self.run_inject("implement the memory store",
                                     ["--db", str(self.tmp / "absent.db")])
         self.assertEqual(code, 0)
         self.assertEqual(out, "")
@@ -369,13 +465,87 @@ class InjectionTest(InjectTestCase):
     def test_corrupt_store_injects_nothing_and_exits_zero(self):
         corrupt = self.tmp / "corrupt.db"
         corrupt.write_bytes(b"this is not a database")
-        code, out = self.run_inject({"prompt": "implement the memory store"},
-                                    ["--db", str(corrupt)])
+        code, out = self.run_inject("implement the memory store", ["--db", str(corrupt)])
         self.assertEqual(code, 0)
         self.assertEqual(out, "")
 
-    def test_unparseable_payload_injects_nothing(self):
-        real_stdin, sys.stdin = sys.stdin, io.StringIO("not json at all")
+    def test_injection_stays_under_the_byte_budget(self):
+        self.fill_store()
+        code, out = self.inject_corpus()
+        self.assertEqual(code, 0)
+        self.assertLessEqual(len(self.delivered(out).encode("utf-8")),
+                             inject.DEFAULT_BUDGET_BYTES + 1)
+        # Trimming is stated, not hidden: the head says how many of the matches
+        # actually travelled.
+        self.assertRegex(self.delivered(out),
+                         r"## Project memory: \d+ of 40 matching row\(s\) \(byte budget\)")
+
+
+class InjectionQuerySourceTest(InjectTestCase):
+    """task-0081, second half. The query is the active task file, and the
+    payload steers nothing - it cannot, it carries no text. These tests pin
+    that so nobody re-adds a payload scavenger whose silent "" return is what
+    hid the delivery defect for as long as it lasted.
+    """
+
+    def setUp(self):
+        super().setUp()
+        memory.record_lesson(self.conn, **LESSON)
+
+    def test_the_active_task_file_is_the_query(self):
+        _, out = self.run_inject("the task parked on a merge and stop_gate "
+                                 "offered the next backlog task",
+                                 ["--db", str(self.db)])
+        self.assertIn(LESSON["signature"], self.delivered(out))
+        self.assertIn("against the active task file(s)", self.delivered(out))
+
+    def test_a_prompt_in_the_payload_does_not_steer_the_query(self):
+        # A payload spelling that the deleted QUERY_KEYS would have preferred.
+        # It names words no row holds, while the task file names the match: if
+        # the payload were consulted, nothing would be injected.
+        _, out = self.run_inject("the task parked on a merge and stop_gate "
+                                 "offered the next backlog task",
+                                 ["--db", str(self.db)],
+                                 payload={**LIVE_PAYLOAD,
+                                          "prompt": "xylophone quokka zeppelin"})
+        self.assertIn(LESSON["signature"], self.delivered(out))
+
+    def test_an_unparseable_payload_no_longer_silences_injection(self):
+        # It used to: the payload was parsed for a query, so garbage stdin
+        # meant an empty query. Now stdin is drained and discarded.
+        code, out = self.run_inject("the task parked on a merge and stop_gate "
+                                    "offered the next backlog task",
+                                    ["--db", str(self.db)], stdin="not json at all")
+        self.assertEqual(code, 0)
+        self.assertIn(LESSON["signature"], self.delivered(out))
+
+    def test_a_stdin_that_raises_on_read_still_injects(self):
+        # The concrete input for main()'s stdin handler: a hook spawned with a
+        # closed stdin. Without that try/except this raises past everything.
+        class ClosedStdin(io.StringIO):
+            def isatty(self) -> bool:
+                return False
+
+            def read(self, *args) -> str:
+                raise OSError("stdin is closed")
+
+        (self.active / "task-9999.md").write_text(
+            "the task parked on a merge and stop_gate offered the next backlog task",
+            encoding="utf-8")
+        real_stdin, sys.stdin = sys.stdin, ClosedStdin()
+        out = io.StringIO()
+        try:
+            with redirect_stdout(out):
+                code = inject.main(["--db", str(self.db)])
+        finally:
+            sys.stdin = real_stdin
+        self.assertEqual(code, 0)
+        self.assertIn(LESSON["signature"], self.delivered(out.getvalue()))
+
+    def test_no_active_task_file_injects_nothing(self):
+        for path in self.active.glob("*"):
+            path.unlink()
+        real_stdin, sys.stdin = sys.stdin, io.StringIO(json.dumps(LIVE_PAYLOAD))
         out = io.StringIO()
         try:
             with redirect_stdout(out):
@@ -385,19 +555,26 @@ class InjectionTest(InjectTestCase):
         self.assertEqual(code, 0)
         self.assertEqual(out.getvalue(), "")
 
-    def test_injection_stays_under_the_byte_budget(self):
-        self.fill_store()
-        code, out = self.inject_corpus()
+    def test_a_db_path_that_cannot_even_be_stat_ed_exits_zero_emitting_nothing(self):
+        # The concrete input for main()'s blanket handler, named per NFR-4
+        # rather than asserted from reading: connect_readonly() calls
+        # Path.is_file() OUTSIDE its own try, and an embedded null byte makes
+        # that raise ValueError, which nothing below main() catches.
+        code, out = self.run_inject("the task parked on a merge and stop_gate "
+                                    "offered the next backlog task",
+                                    ["--db", "bad\x00path.db"])
         self.assertEqual(code, 0)
-        self.assertLessEqual(len(out.encode("utf-8")), inject.DEFAULT_BUDGET_BYTES + 1)
-        # Trimming is stated, not hidden: the head says how many of the matches
-        # actually travelled.
-        self.assertRegex(out, r"## Project memory: \d+ of 40 matching row\(s\) \(byte budget\)")
+        self.assertEqual(out, "")
 
 
 class InjectionBudgetIsConfigTest(InjectTestCase):
     """FR-23 / contract C-5: both caps live in .agentry/pipeline.json, and
     turning either dial changes the emitted bytes with no code edit.
+
+    Every measurement here is of the BLOCK INSIDE the envelope, which is what
+    inject_budget_bytes caps (task-0081). See
+    test_the_budget_caps_the_block_and_not_the_whole_emitted_object below for
+    why that boundary was drawn there and not around the JSON.
     """
 
     def setUp(self):
@@ -406,20 +583,44 @@ class InjectionBudgetIsConfigTest(InjectTestCase):
 
     def test_absent_keys_use_the_shipped_defaults(self):
         _, out = self.inject_corpus()
-        size = len(out.encode("utf-8"))
+        size = len(self.delivered(out).encode("utf-8"))
         self.assertLessEqual(size, inject.DEFAULT_BUDGET_BYTES + 1)
         # Headroom check: the corpus must actually reach toward the default,
         # or the lowered-budget test below would prove nothing.
         self.assertGreater(size, 2000)
 
+    def test_the_budget_caps_the_block_and_not_the_whole_emitted_object(self):
+        # The envelope adds its scaffolding plus two bytes for every newline it
+        # escapes, so the object is always larger than the block. Capping the
+        # object instead would shrink the delivered text by an amount that
+        # depends on how many newlines and non-ASCII characters the matched
+        # rows happen to hold, and would quietly invalidate task-0011's
+        # measurement of 3565 against this same 3800.
+        # row_chars 120 packs the block tight against a 2000-byte budget:
+        # measured at 1998 bytes in 11 rows, with the object at 2093. Two bytes
+        # of headroom is what makes the two readings distinguishable - on the
+        # rejected reading at least one of those rows would be dropped.
+        self.write_cfg({"inject_budget_bytes": 2000, "inject_row_chars": 120})
+        _, out = self.inject_corpus()
+        block = len(self.delivered(out).encode("utf-8"))
+        whole = len(out.strip().encode("utf-8"))
+        self.assertLessEqual(block, 2000 + 1)
+        self.assertGreater(whole, 2000,
+                           f"the object fits the budget too ({whole} bytes), so this "
+                           f"test cannot tell the two readings apart - pack the block "
+                           f"tighter against the cap")
+        self.assertGreater(whole, block)
+
     def test_lowering_the_block_budget_shortens_the_block(self):
         _, before = self.inject_corpus()
         self.write_cfg({"inject_budget_bytes": 2000})
         _, after = self.inject_corpus()
-        self.assertLessEqual(len(after.encode("utf-8")), 2000 + 1)
-        self.assertLess(len(after.encode("utf-8")), len(before.encode("utf-8")))
+        self.assertLessEqual(len(self.delivered(after).encode("utf-8")), 2000 + 1)
+        self.assertLess(len(self.delivered(after).encode("utf-8")),
+                        len(self.delivered(before).encode("utf-8")))
         self.assertLess(len(self.body_rows(after)), len(self.body_rows(before)))
-        self.assertRegex(after, r"\d+ of 40 matching row\(s\) \(byte budget\)")
+        self.assertRegex(self.delivered(after),
+                         r"\d+ of 40 matching row\(s\) \(byte budget\)")
 
     def test_lowering_the_row_cap_shortens_the_longest_row(self):
         _, before = self.inject_corpus()
@@ -443,17 +644,17 @@ class InjectionBudgetIsConfigTest(InjectTestCase):
         self.write_cfg({"inject_budget_bytes": 12000})
         _, after = self.inject_corpus()
         self.assertGreater(len(self.body_rows(after)), len(self.body_rows(before)))
-        self.assertLessEqual(len(after.encode("utf-8")), 12000 + 1)
+        self.assertLessEqual(len(self.delivered(after).encode("utf-8")), 12000 + 1)
 
     def test_unusable_values_fall_back_to_the_default_and_still_emit(self):
         _, default_out = self.inject_corpus()
-        default_size = len(default_out.encode("utf-8"))
+        default_size = len(self.delivered(default_out).encode("utf-8"))
         for bad in (None, "2000", 0, -5, True, False, 1.5, [2000], {"bytes": 2000}, ""):
             with self.subTest(value=bad):
                 self.write_cfg({"inject_budget_bytes": bad, "inject_row_chars": bad})
                 _, out = self.inject_corpus()
                 self.assertTrue(out.strip(), f"{bad!r} emitted nothing")
-                self.assertEqual(len(out.encode("utf-8")), default_size)
+                self.assertEqual(len(self.delivered(out).encode("utf-8")), default_size)
 
     def test_a_non_dict_memory_block_falls_back(self):
         self.pipeline_path.write_text(json.dumps({"memory": "on"}), encoding="utf-8")
@@ -493,11 +694,11 @@ class InjectionBudgetIsConfigTest(InjectTestCase):
         # row - the block cannot be emptied by this key.
         self.write_cfg({"inject_budget_bytes": 10, "inject_row_chars": 40})
         _, out = self.inject_corpus()
-        rows = self.body_rows(out)
-        self.assertEqual(len(rows), 1)
-        self.assertIn("## Project memory:", out)
-        self.assertRegex(out, r"1 of 40 matching row\(s\) \(byte budget\)")
-        self.assertGreater(len(out.encode("utf-8")), 10)  # the floor, not the cap
+        block = self.delivered(out)
+        self.assertEqual(len(self.body_rows(out)), 1)
+        self.assertIn("## Project memory:", block)
+        self.assertRegex(block, r"1 of 40 matching row\(s\) \(byte budget\)")
+        self.assertGreater(len(block.encode("utf-8")), 10)  # the floor, not the cap
 
     def test_the_count_line_says_matched_when_nothing_was_dropped(self):
         # Criterion 5, the regression check: the two spellings of the count
@@ -505,8 +706,8 @@ class InjectionBudgetIsConfigTest(InjectTestCase):
         self.write_cfg({"inject_budget_bytes": 200000})
         _, out = self.inject_corpus()
         self.assertEqual(len(self.body_rows(out)), 40)
-        self.assertIn("40 row(s) matched this dispatch", out)
-        self.assertNotIn("byte budget", out)
+        self.assertIn("40 row(s) matched the active task", self.delivered(out))
+        self.assertNotIn("byte budget", self.delivered(out))
 
 
 class InjectSysPathOrderTest(unittest.TestCase):
