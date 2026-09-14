@@ -26,11 +26,10 @@ import ctypes
 import io
 import json
 import os
-import shutil
+import re
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import unittest
@@ -39,12 +38,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 PIPELINE_DIR = Path(__file__).resolve().parents[1] / "pipeline"
+TESTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(PIPELINE_DIR))
+sys.path.insert(0, str(TESTS_DIR))
 
 import approvals
 import pretool_gate
 import state
 import supervisor
+
+# tmproot resolves the sandbox root AT IMPORT TIME, which makes this module's
+# import depend on the environment rather than only on sys.path. Anything that
+# spawns this suite as a subprocess must therefore pass the REAL environment
+# (`env={**os.environ, ...}`), not a hand-built minimal one: a PATH-only env
+# made the import die with
+#     PermissionError: [WinError 5] Access is denied: 'C:\\Windows\\Temp'
+# because TMP and TEMP were missing and the fallback is not readable. It costs
+# an hour to diagnose from a collection error, so it is written down here at the
+# import that causes it.
+import tmproot
 
 # Dash characters are built from code points so that this file, which is itself
 # scanned by DashTest below, cannot contain the characters it forbids.
@@ -75,6 +87,18 @@ def row(task="task-0001", stage="implement", status=state.ST_IN_PROGRESS,
     return out
 
 
+def looping_row(task="task-0001", **extra) -> dict:
+    """A run that is LOOPING by the only reading that still produces the label
+    from live evidence: `continuations` at the pipeline's continuation_ceiling
+    (30 in cfg()).
+
+    Several tests below need A looping run rather than a particular route to one,
+    and they used to build it from `loop_ticks`, which task-0067 retired after
+    measuring it park ordinary work. Routing them through one helper means the
+    next change of reading touches one line instead of eight."""
+    return row(task=task, continuations=30, **extra)
+
+
 def stamp(ts: float) -> str:
     """An epoch value in run.db's `updated` format."""
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -101,8 +125,13 @@ class Sandbox(unittest.TestCase):
     rather than silenced, because several tests assert on what was surfaced."""
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="sup-test-"))
-        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        # Project-local, and that is the whole of task-0069 in one line: the lock
+        # path is state.STATE_DIR / supervisor*.lock, so patching STATE_DIR at a
+        # host-temp path is how twelve supervisor locks and six `sup-test-*`
+        # directories ended up in the user profile. sandbox() also deletes for
+        # real - the old ignore_errors=True silently gave up when a detached
+        # grandchild still held its inherited log handle open.
+        self.tmp = tmproot.sandbox(self, "sup-test-")
         for attr, value in (("STATE_DIR", self.tmp), ("DB_PATH", self.tmp / "run.db")):
             patcher = unittest.mock.patch.object(state, attr, value)
             patcher.start()
@@ -169,13 +198,46 @@ class ClassificationTest(Sandbox):
             row(updated=aged(1100)), {}, cfg(stall_seconds=1200), time.time())
         self.assertEqual(supervisor.HEALTHY, label)
 
-    def test_looping_from_continuations_climbing_on_an_unchanged_stage(self):
-        # Fresh row, so no timeout is involved: the fact is the climb itself.
-        entry = {"loop_ticks": 2, "stage": "implement", "continuations": 7}
-        label, why = supervisor.classify(row(continuations=7), entry, cfg(loop_ticks=2),
-                                         time.time())
+    def test_climbs_on_adjacent_polls_are_not_a_loop(self):
+        """FREQUENCY WAS RETIRED (task-0067), and this is the case that retired
+        it: a nag every 60s against a 60s poll, which is an ordinary orchestrator
+        turn cycle, not a loop. It used to reach the threshold and park at poll 2.
+
+        Driven through the real observe()/classify() rather than a hand-built
+        entry, because the defect was about what a cadence PRODUCES."""
+        entry = {}
+        base = time.time()
+        labels = []
+        for i in range(6):
+            now_ts = base + i * 60
+            r = row(continuations=i, updated=stamp(now_ts))
+            supervisor.observe(entry, r, now_ts)
+            labels.append(supervisor.classify(r, entry, cfg(), now_ts)[0])
+
+        self.assertEqual([supervisor.HEALTHY] * 6, labels)
+        # The adjacency was really observed - it is recorded, just never read for
+        # a verdict. Without this the assertion above could pass for the wrong
+        # reason (no climbs at all).
+        self.assertEqual(5, entry["loop_ticks"])
+
+    def test_a_ninety_second_nag_cadence_is_not_a_loop_either(self):
+        # The second row of the measured table: a climb on alternate polls used
+        # to park at poll 3. Same poll interval, a slower turn cycle.
+        entry = {}
+        base = time.time()
+        labels = []
+        for i in range(8):
+            now_ts = base + i * 60
+            r = row(continuations=int(i * 60 // 90), updated=stamp(now_ts))
+            supervisor.observe(entry, r, now_ts)
+            labels.append(supervisor.classify(r, entry, cfg(), now_ts)[0])
+        self.assertEqual([supervisor.HEALTHY] * 8, labels)
+        self.assertGreater(entry["stage_climbs"], 0, "no climb was observed at all")
+
+    def test_looping_from_the_continuation_budget_being_spent(self):
+        label, why = supervisor.classify(looping_row(), {}, cfg(), time.time())
         self.assertEqual(supervisor.LOOPING, label)
-        self.assertIn("consecutive polls", why)
+        self.assertIn("continuation_ceiling", why)
 
     def test_looping_from_the_pipelines_own_continuation_ceiling(self):
         label, why = supervisor.classify(row(continuations=30), {}, cfg(continuation_ceiling=30),
@@ -184,8 +246,8 @@ class ClassificationTest(Sandbox):
         self.assertIn("continuation_ceiling", why)
 
     def test_looping_wins_over_stalled(self):
-        entry = {"loop_ticks": 5, "stage": "implement", "continuations": 9}
-        label, _ = supervisor.classify(row(continuations=9, updated=aged(99999)), entry,
+        entry = {"stage": "implement", "continuations": 30}
+        label, _ = supervisor.classify(looping_row(updated=aged(99999)), entry,
                                        cfg(), time.time())
         self.assertEqual(supervisor.LOOPING, label)
 
@@ -196,9 +258,9 @@ class ClassificationTest(Sandbox):
         proc = spawn_child()
         proc.terminate()
         proc.wait(timeout=30)
-        entry = {"loop_ticks": 3, "stage": "implement", "continuations": 9,
+        entry = {"stage": "implement", "continuations": 30,
                  "pid": proc.pid, "spawn_stage": "implement"}
-        label, _ = supervisor.classify(row(continuations=9), entry, cfg(), time.time())
+        label, _ = supervisor.classify(looping_row(), entry, cfg(), time.time())
         self.assertEqual(supervisor.LOOPING, label)
 
     def test_a_run_with_no_recorded_owner_pid_is_never_dead(self):
@@ -313,7 +375,10 @@ class DeadSessionTest(Sandbox):
 
 
 class ObserveTest(Sandbox):
-    """loop_ticks is the only derived fact, so it gets its own tests."""
+    """What a poll folds into the entry. `loop_ticks` keeps its tests even though
+    task-0067 retired the verdict that read it: the observation is still recorded
+    and still has to be correct, and a recorded number nobody tests is how the
+    next reader ends up trusting a stale one."""
 
     def test_tick_increments_when_continuations_climb_on_the_same_stage(self):
         entry = {}
@@ -372,7 +437,10 @@ class ObserveTest(Sandbox):
             now_ts = base + i * 60
             r = row(continuations=cont, updated=stamp(now_ts))
             supervisor.observe(entry, r, now_ts)
-            label, why = supervisor.classify(r, entry, cfg(loop_ticks=2), now_ts)
+            label, why = supervisor.classify(r, entry, cfg(), now_ts)
+        # The label is no longer the load-bearing half: with the adjacency
+        # verdict retired this series would read HEALTHY however the counter
+        # behaved, so the counter is what is asserted.
         self.assertEqual(supervisor.HEALTHY, label, why)
         self.assertEqual(1, entry["loop_ticks"])
 
@@ -411,15 +479,11 @@ class LoopingIsNeverRelaunchedTest(Sandbox):
         popen.assert_called_once()
 
     def test_handle_run_parks_a_looping_run_and_spawns_nothing(self):
-        self.make_row("task-0001", continuations=9)
+        self.make_row("task-0001", continuations=30)
         reg = supervisor.empty_registry()
         entry = supervisor.entry_for(reg, "task-0001")
-        # The entry's `continuations` is one BELOW the row's, so the poll
-        # handle_run is about to make observes a real climb. loop_ticks counts
-        # consecutive polls, so a fixture where nothing climbs is a fixture
-        # where the count correctly resets - see ObserveTest.
-        entry.update({"loop_ticks": 3, "stage": "implement", "continuations": 8})
-        r = row(continuations=9)
+        entry.update({"stage": "implement", "continuations": 29})
+        r = looping_row()
 
         with unittest.mock.patch.object(supervisor.subprocess, "Popen") as popen, \
                 unittest.mock.patch.object(state, "task_dir", return_value="active"):
@@ -847,9 +911,9 @@ class CheckOrderTest(Sandbox):
         proc = spawn_child()
         proc.terminate()
         proc.wait(timeout=30)
-        entry = {"loop_ticks": 4, "stage": "implement", "continuations": 11,
+        entry = {"stage": "implement", "continuations": 30,
                  "pid": proc.pid, "spawn_stage": "implement"}
-        label, why = supervisor.classify(row(continuations=11, updated=aged(99999)),
+        label, why = supervisor.classify(looping_row(updated=aged(99999)),
                                          entry, cfg(), time.time())
         self.assertEqual(supervisor.LOOPING, label, why)
         self.assertIn(label, supervisor.CLASSIFICATIONS)
@@ -927,7 +991,7 @@ class StallClockSemanticsTest(Sandbox):
         return label, why, entry
 
     def test_a_stage_unchanged_for_stall_seconds_is_stalled_even_when_the_row_is_touched(self):
-        conf = cfg(stall_seconds=1200, loop_ticks=2)
+        conf = cfg(stall_seconds=1200)
         # Twelve polls at five-minute intervals: an hour at one stage, with the
         # row touched a minute before every poll and nothing else changing.
         label, why, _ = self.poll_series(conf, [60] * 12)
@@ -939,7 +1003,7 @@ class StallClockSemanticsTest(Sandbox):
         self.assertIn("unchanged for", why)
 
     def test_a_stage_change_is_the_only_thing_that_resets_the_clock(self):
-        conf = cfg(stall_seconds=1200, loop_ticks=2)
+        conf = cfg(stall_seconds=1200)
         entry = {}
         base = time.time()
         # An hour at 'implement', then the stage moves: the clock restarts from
@@ -1009,20 +1073,22 @@ class StallClockSemanticsTest(Sandbox):
         Measured gap: adding `entry["stage_since"] = now_ts` to observe()'s
         continuations branch left this whole suite green.
 
-        `loop_ticks` is set out of reach rather than the climb being slowed,
-        because the question here is only whether a continuations bump moves
-        stage_since. The LOOPING label for this series is correct behaviour and
-        is covered by LoopDetectionEndToEndTest.
+        The question here is only whether a continuations bump moves
+        stage_since, so the label is incidental.
 
-        The LABEL assertion moved from STALLED to LOOPING in the fourth round,
-        when classify()'s stall branch started consulting `stage_climbs`: an hour
-        of climbing continuations at one stage is a slow loop by the new
-        boundary, and calling it STALLED is what got such a run relaunched (see
-        SlowLoopBoundaryTest). Nothing was weakened - this test's own guard is
-        the stage_since pair below, which fails if observe() ever moves the clock
-        from the continuations branch, whatever the label says.
+        The LABEL assertion has moved twice, and neither move weakened the test:
+        its own guard is the stage_since pair below, which fails if observe()
+        ever moves the clock from the continuations branch, whatever the label
+        says. STALLED to LOOPING in the fourth round, when the stall branch
+        started consulting `stage_climbs`, because calling this STALLED got such
+        a run relaunched. LOOPING to HEALTHY in task-0067, because this exact
+        series is also what ORDINARY work looks like: `continuations` is
+        stop_gate.py's nag counter, so an hour at one stage with a nag every five
+        minutes is a live session being driven, and parking it `blocked` is the
+        false positive that nearly took task-0067 itself out mid-implement. What
+        must still never happen here is a RELAUNCH, and that is asserted.
         """
-        conf = cfg(stall_seconds=1200, loop_ticks=10**6)
+        conf = cfg(stall_seconds=1200)
         entry = {}
         base = time.time()
         seeded = None
@@ -1037,8 +1103,10 @@ class StallClockSemanticsTest(Sandbox):
             label, why = supervisor.classify(r, entry, conf, now_ts)
             if i == 0:
                 seeded = entry["stage_since"]
-        self.assertEqual(supervisor.LOOPING, label,
+        self.assertEqual(supervisor.HEALTHY, label,
                          f"an hour of climbing continuations at one stage read as {label}: {why}")
+        self.assertNotIn(label, supervisor.RELAUNCHABLE, why)
+        self.assertIn("still driving this run", why)
         # The clock never moved off the value seeded at first sight, an hour ago.
         self.assertEqual(seeded, entry["stage_since"])
         self.assertFalse(entry["stage_since_observed"])
@@ -1386,13 +1454,11 @@ class CapBoundaryTest(Sandbox):
         # The cap is checked before the action, so a LOOPING run at its budget is
         # left exactly as it was rather than written to. Parking is the gentlest
         # thing the supervisor does, and it is still an action.
-        before = self.make_row("task-0001", continuations=9)
+        before = self.make_row("task-0001", continuations=30)
         reg = supervisor.empty_registry()
         supervisor.entry_for(reg, "task-0001").update(
-            # continuations one below the row's: this poll observes a climb, so
-            # the consecutive count carries rather than resetting.
-            {"loop_ticks": 3, "stage": "implement", "continuations": 8, "actions": 3})
-        event = supervisor.handle_run(row(continuations=9), reg, cfg(max_actions_per_task=3),
+            {"stage": "implement", "continuations": 30, "actions": 3})
+        event = supervisor.handle_run(looping_row(), reg, cfg(max_actions_per_task=3),
                                       time.time(), act=True)
         self.assertEqual(supervisor.LOOPING, event["classification"])
         self.assertIn("per-task action cap", event["stop"])
@@ -1638,7 +1704,11 @@ class PollLoopTest(Sandbox):
 class LoopDetectionEndToEndTest(Sandbox):
     """The detector through poll_once, with a real run row and a real registry
     file, because that is the wiring the other LOOPING tests hand-assemble: the
-    tick has to survive being written to disk and read back next poll."""
+    evidence has to survive being written to disk and read back next poll.
+
+    The route is the continuation budget, since task-0067 retired the adjacency
+    reading. The climb count is still asserted on the way, because it is still
+    recorded - it just no longer decides anything."""
 
     def poll(self, continuations):
         conn = state.connect()
@@ -1648,25 +1718,31 @@ class LoopDetectionEndToEndTest(Sandbox):
             conn.close()
         with unittest.mock.patch.object(supervisor.subprocess, "Popen") as popen, \
                 unittest.mock.patch.object(state, "task_dir", return_value="active"):
-            result = supervisor.poll_once(cfg(loop_ticks=2), act=True)
+            result = supervisor.poll_once(cfg(), act=True)
             popen.assert_not_called()
         return result["events"][0]
 
-    def test_climbing_continuations_park_the_run_on_the_third_poll(self):
+    def test_the_run_parks_when_the_continuation_budget_is_spent(self):
         self.make_row("task-0001")
-        self.assertEqual(supervisor.HEALTHY, self.poll(1)["classification"])
-        self.assertEqual(supervisor.HEALTHY, self.poll(2)["classification"],
-                         "one climb is not yet a loop")
-        third = self.poll(3)
-        self.assertEqual(supervisor.LOOPING, third["classification"])
-        self.assertEqual(supervisor.ACTION_PARK, third["action"])
-        self.assertEqual(state.ST_BLOCKED, self.read_row()["stage_status"])
-        self.assertEqual("implement", self.read_row()["stage"])
+        # Three adjacent climbs, nowhere near the budget: nothing happens. Under
+        # the retired reading this parked on the third poll.
+        for cont in (1, 2, 3):
+            event = self.poll(cont)
+            self.assertEqual(supervisor.HEALTHY, event["classification"], event["why"])
         self.assertEqual(2, supervisor.load_registry()["tasks"]["task-0001"]["loop_ticks"])
 
+        # At the ceiling it parks, and the registry round-trip is what this class
+        # exists for: the count came back off disk each poll.
+        spent = self.poll(30)
+        self.assertEqual(supervisor.LOOPING, spent["classification"])
+        self.assertEqual(supervisor.ACTION_PARK, spent["action"])
+        self.assertIn("continuation_ceiling", spent["why"])
+        self.assertEqual(state.ST_BLOCKED, self.read_row()["stage_status"])
+        self.assertEqual("implement", self.read_row()["stage"])
+
         # And once parked it is left alone: a blocked run was surfaced to a human
-        # on purpose, so the fourth poll spends no further budget on it.
-        fourth = self.poll(4)
+        # on purpose, so the next poll spends no further budget on it.
+        fourth = self.poll(31)
         self.assertEqual(supervisor.HEALTHY, fourth["classification"])
         self.assertIn("already parked", fourth["why"])
         self.assertEqual(1, supervisor.load_registry()["tasks"]["task-0001"]["actions"])
@@ -1718,7 +1794,29 @@ class SlowLoopBoundaryTest(Sandbox):
                 events.append(supervisor.handle_run(r, reg, cfg(), now_ts, act=True))
         return popen, events, reg
 
-    def test_a_loop_climbing_on_alternate_polls_is_parked_and_never_relaunched(self):
+    def test_a_run_climbing_on_alternate_polls_is_never_relaunched(self):
+        """Zero sessions spawned, which is the regression this class exists for.
+
+        The ACTION assertion at poll 20 changed in task-0067, and the reason is
+        the whole of that task's first half: this series is indistinguishable
+        from an ordinary long stage. `continuations` is written by stop_gate.py
+        to count its own NAGS, so "climbing every other poll on a frozen stage"
+        describes a nagged healthy session exactly as well as a slow loop -
+        measured on task-0067 itself, which reached stage_climbs=1 ninety seconds
+        after its busy marker was dropped and was ~18 minutes from being parked
+        `blocked` by the code it was fixing.
+
+        So the park became no action at all. Nothing was weakened: the three
+        assertions that carry this class - no spawn, no relaunch action, never
+        STALLED - are unchanged and still fail if the boundary is removed.
+
+        What this series is NOT evidence of: that loop detection is sound
+        afterwards. It is not. The reading that fires on two ADJACENT nags is
+        still nag-contaminated, measurably - a 60s turn cycle against a 60s poll
+        parks live work in three minutes. The measurement and the decision not to
+        change it in this task are recorded in supervisor.py under NOTHING HERE
+        DISTINGUISHES A LOOP FROM A NAGGED LIVE STAGE. This test covers one
+        cadence (alternate polls), and one cadence is not the property."""
         popen, events, reg = self.drive(climb_every=2)
         labels = [e["classification"] for e in events]
         actions = [e["action"] for e in events]
@@ -1736,43 +1834,88 @@ class SlowLoopBoundaryTest(Sandbox):
         self.assertEqual(1, reg["tasks"]["task-0001"]["loop_ticks"],
                          "the consecutive count must still be oscillating, not accumulating")
 
-        # Poll 20, where the trace relaunched: LOOPING, and parked.
-        self.assertEqual(supervisor.LOOPING, labels[20], events[20]["why"])
-        self.assertEqual(supervisor.ACTION_PARK, events[20]["action"])
-        self.assertIn("slow loop", events[20]["why"])
-        self.assertEqual(state.ST_BLOCKED, self.read_row()["stage_status"])
+        # Poll 20, where the trace relaunched and the fourth round parked: no
+        # action either way, and the reason says which number is which.
+        self.assertEqual(supervisor.HEALTHY, labels[20], events[20]["why"])
+        self.assertEqual("", events[20]["action"])
+        self.assertIn("still driving this run", events[20]["why"])
+        # Pipeline state untouched: not relaunched AND not parked.
+        self.assertEqual(state.ST_IN_PROGRESS, self.read_row()["stage_status"])
         self.assertEqual("implement", self.read_row()["stage"])
 
-    def test_a_loop_whose_owning_session_has_exited_is_parked_not_relaunched(self):
-        # THE FOURTH PATH ONTO A LOOP, found in the fifth round's review. DEAD
-        # is in RELAUNCHABLE, and the pid branch used to answer before
-        # `stage_climbs` was read - so a loop whose spawned session had exited
-        # was relabelled DEAD and relaunched, up to the per-task cap.
-        #
-        # MEASURED entry, from the reviewer: {loop_ticks:1, stage_climbs:5,
-        # pid:<dead>, spawn_stage=='implement'} gave ('DEAD', ...) with
-        # `in RELAUNCHABLE == True`. No clock is involved here at all: the row is
-        # young and stall_seconds is set out of reach, so the dead owner is the
-        # ONLY relaunchable evidence and the climbs must still outrank it.
+    def dead_owner_entry(self, **over) -> tuple[dict, dict]:
+        """(entry, cfg) for a run whose supervisor-spawned session really has
+        exited. A real killed child, because the whole point of DEAD is that
+        liveness is observed from the operating system.
+
+        `stall_seconds` is the SHIPPED value here, not a number put out of reach.
+        The version of this fixture that preceded task-0067 set 99999 to keep
+        the clock out of the way, which was right when the branch read `climbs
+        and dead` - and wrong the moment it read `driven`, because that window IS
+        stall_seconds: a climb 1500s old counts as recent against 99999 and the
+        'stale climb' case silently tested the recent one. The caller keeps the
+        ROW young instead, so `stalled` stays false and the dead owner remains
+        the only relaunchable evidence."""
         proc = spawn_child()
         self.addCleanup(lambda: proc.poll() is None and proc.kill())
         proc.terminate()
         proc.wait(timeout=30)
-
-        conf = cfg(stall_seconds=99999)
-        r = row(continuations=11)
         entry = {"pid": proc.pid, "spawn_stage": "implement", "stage": "implement",
                  "continuations": 11, "loop_ticks": 1, "stage_climbs": 5}
-        label, why = supervisor.classify(r, entry, conf, time.time())
+        entry.update(over)
+        return entry, cfg()
+
+    def test_a_dead_owner_with_a_RECENT_climb_is_parked_not_relaunched(self):
+        """THE FOURTH PATH ONTO A LOOP, found in task-0058's fifth-round review:
+        DEAD is in RELAUNCHABLE and the pid branch used to answer before the
+        climbs were read, so a loop whose spawned session had exited was
+        relabelled DEAD and relaunched up to the per-task cap.
+
+        The evidence that keeps it out of the relaunch path is a climb that
+        happened AFTER we spawned the session that has since died - something is
+        writing `continuations` now, so a session is turning over and a second
+        one would amplify it. The recency is the whole of it; see the sibling
+        test for what a stale climb means, and supervisor.py's boundary comment
+        for why 'any climb' was wrong (task-0067, review H1)."""
+        entry, conf = self.dead_owner_entry(last_climb=time.time() - 30)
+        label, why = supervisor.classify(row(continuations=11), entry, conf, time.time())
         self.assertEqual(supervisor.LOOPING, label, why)
         self.assertNotIn(label, supervisor.RELAUNCHABLE)
-        self.assertIn("slow loop", why)
+        self.assertIn("still turning over", why)
         self.assertIn("exited", why)
 
-        # And with nothing having climbed inside the stage, the same dead owner
-        # is still DEAD: the fix must not switch relaunching off.
-        entry["stage_climbs"] = 0
-        label, why = supervisor.classify(r, entry, conf, time.time())
+    def test_a_dead_owner_with_a_STALE_climb_is_relaunched_as_dead(self):
+        """The case the old condition got wrong, and it was the common one.
+
+        `climbs and dead` read ANY recorded climb as a loop. The Stop hook nags
+        every turn a task lacks a busy marker, so nearly every spawned session
+        that dies mid-stage carries at least one climb - which SHADOWED most of
+        the DEAD relaunch path and asserted 'a slow loop' about it. MEASURED
+        read-only by the reviewer: a dead pid with one nag 1500s old and
+        stage_climbs=1 returned LOOPING, while the identical entry with
+        stage_climbs=0 returned DEAD. A label decided by whether an hour-old nag
+        happens to be recorded is not a label.
+
+        Nothing has emitted a Stop for longer than we call a stall, so the climb
+        describes a moment that has passed: DEAD, and relaunched."""
+        entry, conf = self.dead_owner_entry(last_climb=time.time() - 1500)
+        label, why = supervisor.classify(row(continuations=11), entry, conf, time.time())
+        self.assertEqual(supervisor.DEAD, label, why)
+        self.assertIn(label, supervisor.RELAUNCHABLE)
+
+        # An entry with NO recorded climb time at all is the same situation -
+        # a registry written before last_climb existed, or a lost one.
+        entry.pop("last_climb")
+        label, why = supervisor.classify(row(continuations=11), entry, conf, time.time())
+        self.assertEqual(supervisor.DEAD, label, why)
+
+    def test_a_dead_owner_with_no_climbs_is_still_dead(self):
+        # The control that stops the pair above from being "never relaunch a
+        # dead owner": with nothing having climbed inside the stage the answer
+        # was always DEAD, and the fix must not have changed it.
+        entry, conf = self.dead_owner_entry(stage_climbs=0, loop_ticks=0,
+                                            last_climb=time.time() - 30)
+        label, why = supervisor.classify(row(continuations=11), entry, conf, time.time())
         self.assertEqual(supervisor.DEAD, label, why)
 
     def test_a_stall_with_no_loop_evidence_is_still_relaunched(self):
@@ -1789,6 +1932,335 @@ class SlowLoopBoundaryTest(Sandbox):
         self.assertNotIn(supervisor.LOOPING, labels)
         # Not parked: a stalled run is restarted, not surfaced to the CEO.
         self.assertEqual(state.ST_IN_PROGRESS, self.read_row()["stage_status"])
+
+
+class DocstringIntegrityTest(unittest.TestCase):
+    """The module docstring is load-bearing documentation, so it gets tests.
+
+    This is not style policing. supervisor.py's comments carry the measurements
+    that justify each classification, and the code points at them by section
+    name ("see FREQUENCY WAS RETIRED"). Two ways that rots, both of which
+    happened in task-0067 and both of which review caught by reading rather than
+    by running:
+
+    1. a section was renamed and a `see` reference kept the old name, so the
+       comment pointed at nothing;
+    2. a reading was retired and prose elsewhere kept describing it as live -
+       four places said `loop_ticks` produced a verdict after it had stopped
+       producing one.
+
+    A reader who trusts a stale comment during an incident is exactly the defect
+    this task existed to fix, so the checks are mechanical from here on."""
+
+    SOURCE = (PIPELINE_DIR / "supervisor.py").read_text(encoding="utf-8")
+
+    # Claims that were true once and are not any more, each paired with the
+    # VERBATIM pre-fix text it was deleted from. Both halves are load-bearing:
+    #
+    # 1. the claim must stay absent from the current source (the guard), and
+    # 2. the claim must be FINDABLE in its excerpt (the guard on the guard).
+    #
+    # Part 2 exists because two of the first four entries could not fail, which
+    # is the exact defect this class was written to prevent. `"a slow loop, not a
+    # stall"` was never a contiguous substring of the pre-fix file - it sat
+    # across an f-string seam (`...: a " f"slow loop...`), so a plain `in` test
+    # reported absent whatever the file said. And a fourth entry,
+    # `"loop_ticks and continuation_ceiling own that"`, was decoration: it never
+    # existed in the pre-fix file at all, because it was a string this same diff
+    # introduced and then removed. It is gone from the list.
+    #
+    # The excerpts are pasted from `git show HEAD:.claude/tools/pipeline/
+    # supervisor.py` while HEAD was still the pre-fix commit, and baked in
+    # DELIBERATELY rather than fetched at run time: a test that resolves the
+    # pre-fix text through `HEAD` starts failing for every entry the moment this
+    # work merges, because HEAD then holds the fixed file. A frozen excerpt has
+    # no such clock in it.
+    RETIRED_CLAIMS = (
+        ("which is a live loop",
+         ('#     turning over without the stage moving, which is a live loop. Two\n'
+          '        #     adjacent polls cannot be one slow turn,')),
+        ("The real backstop is `stage_climbs`",
+         ('# The real backstop is `stage_climbs` above, consulted by classify()\'s\n'
+          '        # stall branch: a frozen stage with any climb behind it is LOOPING')),
+        ("a slow loop, not a stall",
+         ('f"continuations climbed on {climbs} polls within it (now {cont}): a "\n'
+          '                         f"slow loop, not a stall, so it is parked rather '
+          'than relaunched")')),
+    )
+
+    @staticmethod
+    def normalise(text: str) -> str:
+        """Collapse whitespace and close f-string seams, so a claim is matched as
+        the reader reads it rather than as the lexer stores it.
+
+        Without the seam rule, any claim that happens to straddle two adjacent
+        string literals is undetectable, and whether it straddles one is an
+        accident of line width."""
+        return re.sub(r'"\s*f?"', "", re.sub(r"\s+", " ", text))
+
+    def headings(self) -> list[str]:
+        """Docstring section titles: a line followed by a rule of dashes."""
+        lines = self.SOURCE.splitlines()
+        return [lines[i] for i in range(len(lines) - 1)
+                if lines[i].strip() and set(lines[i + 1].strip()) == {"-"}
+                and len(lines[i + 1].strip()) > 5]
+
+    def test_the_sections_the_comments_point_at_all_exist(self):
+        heads = self.headings()
+        self.assertTrue(heads, "no docstring sections found - the parser is wrong, not the file")
+        # Comment continuations are joined first. A reference wrapped as
+        # `see FREQUENCY` / `# WAS RETIRED` would otherwise be read as the single
+        # word `FREQUENCY`, filtered as a constant, and silently not checked -
+        # and where a reference wraps is an accident of line width.
+        joined = re.sub(r"\n\s*#\s*", " ", self.SOURCE)
+        refs = set(re.findall(r"see ([A-Z][A-Z ]{8,})", joined))
+        # Only cross-references to SECTIONS are checked. A reference to a
+        # constant (DEFAULTS, HEARTBEAT_STALE) is resolved by the reader with
+        # grep, and demanding a heading for it would fail for the wrong reason.
+        section_refs = {r.strip().rstrip(".") for r in refs if " " in r.strip()}
+        self.assertTrue(section_refs, "no section cross-references found to check")
+        for ref in sorted(section_refs):
+            with self.subTest(reference=ref):
+                self.assertTrue(any(h.startswith(ref) for h in heads),
+                                f"the comments say 'see {ref}' but no section starts with it. "
+                                f"Sections present: {heads}")
+
+    def test_the_retired_claims_stay_retired(self):
+        current = self.normalise(self.SOURCE)
+        for claim, _excerpt in self.RETIRED_CLAIMS:
+            with self.subTest(claim=claim):
+                self.assertNotIn(claim, current,
+                                 f"a claim retired in task-0067 is back in supervisor.py: "
+                                 f"{claim!r}")
+
+    def test_every_retired_claim_was_really_there_to_retire(self):
+        """The guard on the guard: an entry that never existed, or that the
+        scanner cannot see, is decoration - it can never fail, and a test that
+        cannot fail is worse than no test. Each claim is matched against the
+        pre-fix text it came from, through the same normalisation the scan uses,
+        so both the entry and the matcher are proven at once."""
+        for claim, excerpt in self.RETIRED_CLAIMS:
+            with self.subTest(claim=claim):
+                self.assertIn(claim, self.normalise(excerpt),
+                              f"{claim!r} is not findable in the pre-fix text recorded for "
+                              f"it, so the retirement guard for it can never fail")
+
+
+class StaleClimbEvidenceTest(Sandbox):
+    """task-0067: a climb count that outlives the counter it was derived from.
+
+    `stage_climbs` used to be reset by one event, a stage change. A CEO rejection
+    sends a task back to the FIRST stage - which for a task already sitting at
+    `implement` is no stage change at all - and zeroes `continuations` on the way.
+    So the count survived a reset of the very thing it counted, and nothing could
+    ever clear it: the only reset needed a stage change the task could not make
+    while parked on it.
+
+    MEASURED live on task-0010, and the log line it produced contradicted itself
+    on its face, which is the only reason any of this was findable:
+
+        run.db   : stage=implement, stage_status=blocked, continuations=0
+        registry : stage=implement, continuations=0, loop_ticks=0, stage_climbs=2
+        log      : "continuations climbed on 2 polls within it (now 0)"
+    """
+
+    def stranded_entry(self, now_ts: float, climbs: int = 2) -> dict:
+        """The registry entry as measured: climbs recorded, `continuations`
+        already zero IN THE ENTRY TOO. That last part is what makes it stranded
+        rather than merely wrong - a later poll sees no decrease, so an
+        edge-triggered reset never fires."""
+        return {"stage": "implement", "continuations": 0, "loop_ticks": 0,
+                "stage_climbs": climbs, "last_climb": now_ts - 30000,
+                "stage_since": now_ts - 30098, "stage_since_observed": True}
+
+    def test_a_stranded_entry_is_healed_on_the_first_poll_not_re_parked(self):
+        now_ts = time.time()
+        entry = self.stranded_entry(now_ts)
+        r = row(continuations=0, updated=stamp(now_ts - 60))
+        supervisor.observe(entry, r, now_ts)
+        label, why = supervisor.classify(r, entry, cfg(stall_seconds=1200), now_ts)
+
+        self.assertNotEqual(supervisor.LOOPING, label, why)
+        # Healed in the registry, so nobody has to clear a file by hand.
+        self.assertEqual(0, entry["stage_climbs"])
+        self.assertIsNone(entry.get("last_climb"))
+        # An eight-hour-old stage with nothing nagging is a plain stall, which is
+        # what the relaunch exists for: the heal must not switch that off.
+        self.assertEqual(supervisor.STALLED, label, why)
+
+    def test_the_heal_needs_no_visible_decrease(self):
+        # The distinction between the two directions, held explicitly: with the
+        # entry ALREADY recording continuations=0, no poll can observe a
+        # decrease, so a reset-on-decrease rule alone leaves this entry wrong
+        # forever. This asserts the coherence reading, not the edge.
+        now_ts = time.time()
+        entry = self.stranded_entry(now_ts)
+        r = row(continuations=0, updated=stamp(now_ts - 60))
+        self.assertEqual(entry["continuations"], int(r["continuations"]))  # no decrease
+        supervisor.observe(entry, r, now_ts)
+        self.assertEqual(0, entry["stage_climbs"])
+
+    def test_a_decrease_resets_both_counts_and_the_heartbeat(self):
+        # The edge, which stops fresh corruption: the twin count and the
+        # timestamp go with it, so neither can outlive the other.
+        now_ts = time.time()
+        entry = {"stage": "implement", "continuations": 5, "loop_ticks": 2,
+                 "stage_climbs": 3, "last_climb": now_ts - 10,
+                 "stage_since": now_ts - 900, "stage_since_observed": True}
+        supervisor.observe(entry, row(continuations=0), now_ts)
+        self.assertEqual(0, entry["stage_climbs"])
+        self.assertEqual(0, entry["loop_ticks"])
+        self.assertIsNone(entry.get("last_climb"))
+
+    def test_a_decrease_to_a_value_the_counts_still_fit_under_is_caught_too(self):
+        """The case ONLY the edge catches, and the reason the two rules are both
+        here rather than one of them being redundant.
+
+        Measured while breaking them: with the coherence test in place, deleting
+        the decrease branch left the test above green, because a drop to zero is
+        incoherent anyway. A drop to a NON-zero value is not: a CEO rejection
+        zeroes `continuations`, and if the Stop hook then nags five times before
+        the next poll, the poll sees 9 -> 5 while `stage_climbs` is 3 - coherent
+        on its face (3 <= 5), and entirely about a previous incarnation of the
+        stage. Only the decrease says so."""
+        now_ts = time.time()
+        entry = {"stage": "implement", "continuations": 9, "loop_ticks": 1,
+                 "stage_climbs": 3, "last_climb": now_ts - 10,
+                 "stage_since": now_ts - 900, "stage_since_observed": True}
+        supervisor.observe(entry, row(continuations=5), now_ts)
+        self.assertEqual(0, entry["stage_climbs"])
+        self.assertEqual(0, entry["loop_ticks"])
+        self.assertIsNone(entry.get("last_climb"))
+
+    def test_a_genuine_slow_loop_survives_both_resets(self):
+        """The other direction, and the constraint on the fix: a real loop climbs
+        and never decreases, so neither the edge nor the coherence test may clear
+        its evidence. Driven to the reading that now carries the verdict - the
+        continuation budget - because that is what a loop must still reach with
+        the counts intact.
+
+        The climbs accumulate all the way, which is the assertion that would fail
+        if either reset overshot into a blanket clear."""
+        entry = {}
+        base = time.time()
+        label, why = supervisor.HEALTHY, ""
+        for i in range(31):
+            now_ts = base + i * 60
+            r = row(continuations=i, updated=stamp(now_ts))
+            supervisor.observe(entry, r, now_ts)
+            label, why = supervisor.classify(r, entry, cfg(), now_ts)
+        self.assertEqual(30, entry["stage_climbs"])
+        self.assertEqual(30, entry["loop_ticks"])
+        self.assertEqual(supervisor.LOOPING, label, why)
+        self.assertNotIn(label, supervisor.RELAUNCHABLE)
+
+    def test_no_verdict_or_reason_string_rests_on_an_impossible_climb_count(self):
+        """The second half of the criterion, and not cosmetic: the contradiction
+        ("climbed on 2 polls ... now 0") is what made this defect findable, and
+        the next one will not be so obliging.
+
+        It is asserted two ways over a grid of INCOHERENT entries - counts the
+        `continuations` value cannot support - because after H1 no reason string
+        states a climb count at all, so a string scan alone would now pass
+        vacuously:
+
+        1. the LABEL: an impossible count must not produce LOOPING. The count
+           still gates the dead-owner branch, so the clamp matters to the verdict
+           even when no number is printed.
+        2. the STRING, kept as a guard rather than as today's evidence: if any
+           future reason line does print a climb count, it must not exceed the
+           `continuations` printed beside it.
+
+        The branch is counted, not assumed. An earlier version of this grid set
+        no `pid`, so the dead-owner branch was never visited while the docstring
+        claimed to cover every reason the classifier can produce."""
+        now_ts = time.time()
+        claim = re.compile(r"climbed on (\d+) (?:consecutive )?polls")
+        printed = re.compile(r"(?:now |stands at )(\d+)")
+        # A real dead pid, so the dead-owner branch is entered through the same
+        # liveness probe production uses.
+        proc = spawn_child()
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        proc.terminate()
+        proc.wait(timeout=30)
+
+        dead_owner_cases = 0
+        for cont in (0, 1, 2):
+            for climbs in (1, 3, 7):
+                for ticks in (0, 1, 3):
+                    for stall, aged_by in ((1200, 30000), (99999, 60)):
+                        for owner in (None, proc.pid):
+                            entry = {"stage": "implement", "continuations": cont,
+                                     "loop_ticks": ticks, "stage_climbs": climbs,
+                                     "last_climb": now_ts - 30,
+                                     "stage_since": now_ts - aged_by,
+                                     "stage_since_observed": True}
+                            if owner:
+                                entry["pid"] = owner
+                                entry["spawn_stage"] = "implement"
+                                dead_owner_cases += 1
+                            label, why = supervisor.classify(
+                                row(continuations=cont, updated=stamp(now_ts - 60)),
+                                entry, cfg(stall_seconds=stall), now_ts)
+                            # THE LABEL CLAIM, and it took two wrong drafts to
+                            # state it correctly - worth recording, because both
+                            # drafts were the test lying rather than the code.
+                            # `coherent_climbs` CLAMPS, it does not zero: with
+                            # continuations at 2 and stage_climbs at 7 the
+                            # justifiable reading is 2 climbs, and a climb-based
+                            # LOOPING is then legitimate. What is impossible is a
+                            # climb when the counter stands at ZERO - nothing can
+                            # have climbed to nothing - and that is exactly the
+                            # live case (registry stage_climbs=2 against
+                            # continuations=0, parked as a slow loop).
+                            if cont == 0:
+                                self.assertNotEqual(
+                                    supervisor.LOOPING, label,
+                                    f"LOOPING with continuations at 0 and a "
+                                    f"recorded stage_climbs={climbs}: {why}")
+                            m = claim.search(why)
+                            if not m:
+                                continue
+                            n = printed.search(why)
+                            self.assertIsNotNone(
+                                n, f"a climb claim with no counter beside it: {why}")
+                            self.assertLessEqual(
+                                int(m.group(1)), int(n.group(1)),
+                                f"claimed more climbs than continuations: {why}")
+        self.assertTrue(dead_owner_cases,
+                        "the grid never built a dead-owner case, so the branch that "
+                        "consumes stage_climbs was not covered")
+
+    def test_the_liveness_reading_expires(self):
+        """`continuations` growth is the Stop hook's nag, so it witnesses that a
+        session is ALIVE and not that it loops. A heartbeat has to be recent to
+        mean anything - otherwise it is the same defect in a new coat: state that
+        said something about a moment, still saying it afterwards."""
+        now_ts = time.time()
+        base = {"stage": "implement", "continuations": 9, "loop_ticks": 0,
+                "stage_climbs": 4, "stage_since": now_ts - 3600,
+                "stage_since_observed": True}
+        r = row(continuations=9, updated=stamp(now_ts - 60))
+
+        recent = {**base, "last_climb": now_ts - 120}
+        label, why = supervisor.classify(r, recent, cfg(stall_seconds=1200), now_ts)
+        self.assertEqual(supervisor.HEALTHY, label, why)
+        self.assertIn("still driving this run", why)
+
+        expired = {**base, "last_climb": now_ts - 2400}
+        label, why = supervisor.classify(r, expired, cfg(stall_seconds=1200), now_ts)
+        self.assertEqual(supervisor.STALLED, label, why)
+
+    def test_a_blocked_run_says_who_surfaces_it(self):
+        # D-2, this side of it: the supervisor takes no action on a blocked run
+        # and must not pretend that is the same as the run being fine. The Stop
+        # hook owns surfacing it (see stop_gate.decide) - this pins that the
+        # decision is recorded where the next reader looks.
+        label, why = supervisor.classify(
+            row(status=state.ST_BLOCKED, updated=aged(99999)), {}, cfg(), time.time())
+        self.assertEqual(supervisor.HEALTHY, label)
+        self.assertIn("Stop hook", why)
+        self.assertIn("awaiting_human=blocked", why)
 
 
 class FailSafeInjectionTest(Sandbox):
@@ -1843,15 +2315,14 @@ class FailSafeInjectionTest(Sandbox):
         self.assertIn("untouched", result["events"][0]["action"])
 
     def test_a_park_that_fails_records_no_action_and_leaves_the_row(self):
-        before = self.make_row("task-0001", continuations=9)
+        before = self.make_row("task-0001", continuations=30)
         reg = supervisor.empty_registry()
         supervisor.entry_for(reg, "task-0001").update(
-            # continuations one below the row's: this poll observes a climb.
-            {"loop_ticks": 3, "stage": "implement", "continuations": 8})
+            {"stage": "implement", "continuations": 29})
         with unittest.mock.patch.object(state, "set_fields",
                                         side_effect=OSError("database is locked")), \
                 unittest.mock.patch.object(supervisor.subprocess, "Popen") as popen:
-            event = supervisor.handle_run(row(continuations=9), reg, cfg(),
+            event = supervisor.handle_run(looping_row(), reg, cfg(),
                                           time.time(), act=True)
         popen.assert_not_called()
         self.assertIn("park failed", event["action"])
@@ -2667,13 +3138,20 @@ class DaemonLifecycleTest(Sandbox):
 
 
 class DashTest(unittest.TestCase):
-    """NFR-5: no em dash and no en dash in anything this task wrote."""
+    """NFR-5: no em dash and no en dash in anything this task wrote.
+
+    The python half is DERIVED from the directory rather than listed, because
+    the hardcoded list this replaces named the four files task-0067 happened to
+    touch and therefore covered neither file task-0069 added. A list that has to
+    be remembered is a list that will be wrong; a glob covers the next new file
+    without anyone thinking about it.
+    """
 
     def test_no_forbidden_dash_in_the_files_this_task_added(self):
         files = [PIPELINE_DIR / "supervisor.py",
-                 Path(__file__),
                  state.ROOT / ".agentry" / "pipeline.json",
                  state.ROOT / ".claude" / "settings.json"]
+        files.extend(sorted(TESTS_DIR.glob("*.py")))
         for path in files:
             text = path.read_text(encoding="utf-8")
             for name, dash in (("em dash", EM_DASH), ("en dash", EN_DASH)):

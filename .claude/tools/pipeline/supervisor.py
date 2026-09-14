@@ -27,13 +27,14 @@ in tools/tests/test_supervisor.py, which pins that by reading this file.
 
 CLASSIFICATION (exactly one label per run, checked in this order)
 -----------------------------------------------------------------
-LOOPING  any of three readings of the same evidence, `continuations` growing
-         while `stage` does not: climbing on consecutive polls (one quiet poll
-         resets that count), reaching the pipeline's own continuation_ceiling,
-         or having climbed at all within a stage that then became relaunchable -
-         the slow loop. Why it takes three readings rather than one, with the
-         measured trace: observe()'s else branch, which is the single copy of
-         it; do not restate it here. Parked `blocked` and surfaced. NEVER
+LOOPING  two readings, both of `continuations` growing while `stage` does not:
+         reaching the pipeline's own continuation_ceiling (VOLUME), or having
+         climbed within a stage whose supervisor-spawned session has since
+         exited. Two things were REMOVED from that list in task-0067 and must not
+         come back without the evidence the first list lacked: climbing on
+         consecutive polls (FREQUENCY), and climbing within a stage the clock
+         calls stalled. Both fired on ordinary work - see FREQUENCY WAS RETIRED.
+         Parked `blocked` and surfaced. NEVER
          relaunched: relaunching a looping session amplifies the exact failure
          this process exists to catch. Enforced three ways and by construction -
          classify() decides the label before EITHER relaunchable answer, LOOPING
@@ -48,8 +49,9 @@ DEAD     a session THIS supervisor spawned has exited while its run still sits
          which has already exited by the time the marker is read, so the
          marker's pid is dead for every healthy run. Hence our own registry.
 STALLED  in flight, nothing above applies, the STAGE has not changed for
-         `stall_seconds`, and NOTHING moved within it - a stage frozen with
-         continuations growth behind it is the slow loop above, not this.
+         `stall_seconds`, and nothing has written `continuations` for that long
+         either - a stage frozen with a RECENT nag behind it is a live session,
+         answered HEALTHY with no action.
          This is the one label with a clock in it, which is
          why it is one of four rather than the whole detector. The clock reads
          the supervisor's own record of when the stage changed, NOT the run
@@ -57,6 +59,92 @@ STALLED  in flight, nothing above applies, the STAGE has not changed for
          distinction fixes.
 HEALTHY  anything else, including a run parked on a human by design (a task
          waiting for the CEO's commit approval is not stalled, it is correct).
+
+FREQUENCY WAS RETIRED: WHAT `continuations` CAN AND CANNOT SAY
+-------------------------------------------------------------
+`continuations` has ONE writer, stop_gate.py, which bumps it every time it nags a
+task sitting in an editing stage without a fresh busy marker. A nag means "a
+session emitted a Stop and the stage had not moved". That is equally true of a
+model going round in circles and of a model doing excellent work that takes
+longer than one turn. The column cannot separate them, and no arithmetic over it
+can either.
+
+Three earlier rounds of this file each claimed one reading of it was clean, about
+a different reading each time. The measurement below is why the adjacency reading
+(`loop_ticks` reaching a threshold on consecutive polls) was deleted in
+task-0067.
+
+MEASURED with the real observe()/classify(), 60s polls, stall_seconds=1200, a
+frozen `implement` stage, varying only how often a nag lands:
+
+    nag every    0s : STALLED at poll  19 (t+0.32h)             correct
+    nag every   60s : LOOPING at poll   2 (t+0.03h) ticks=2     park
+    nag every   90s : LOOPING at poll   3 (t+0.05h) ticks=2     park
+    nag every  120s : LOOPING at poll  60 (t+1.00h) cont=30     park (ceiling)
+    nag every  300s : LOOPING at poll 150 (t+2.50h) cont=30     park (ceiling)
+    nag every 1140s : LOOPING at poll 570 (t+9.50h) cont=30     park (ceiling)
+    nag every 1199s : STALLED at poll  19 (t+0.32h) cont= 0     relaunch
+
+The first two rows are the reason the reading is gone. A session whose turns take
+a minute was parked `blocked` after three minutes of ordinary work, and a turn
+cycle shorter than the poll interval is the NORMAL condition of a working
+orchestrator, not an edge case. The live instance was this file's own task:
+task-0067's registry entry sat at loop_ticks=1, stage_climbs=2, continuations=7
+while it was being written, one adjacent-poll nag from being parked by the code
+that was fixing it, and only a hand-stopped daemon prevented it.
+
+Deleting it costs no loop protection. Rows three to six are the same genuine loop
+caught by VOLUME instead: an infinite loop keeps nagging, so it reaches
+`continuation_ceiling` and parks. Later, and bounded by a number the pipeline
+already owns - stop_gate.py parks at `cont > ceiling` on its own account one nag
+further on, so the budget is enforced twice over and neither enforcement has to
+guess a cause.
+
+WHAT THIS DETECTOR NOW CLAIMS, AND NOTHING MORE
+-----------------------------------------------
+Three facts, none of which is "this session is looping rather than working":
+
+1. LIVENESS of a session this process spawned itself, from the operating system
+   (DEAD). It knows no other session's pid, and says so rather than guessing.
+2. AGE of the current stage, from its own record of the last observed transition
+   (STALLED), plus whether anything wrote `continuations` recently - a heartbeat
+   for a session it did not spawn, which suppresses a relaunch but proves nothing
+   about progress.
+3. The pipeline's own CONTINUATION BUDGET being spent (LOOPING). This says the
+   stage has consumed every continuation the pipeline allows it, which the
+   pipeline itself already treats as stuck. It is not a claim about looping, and
+   parking there is right whatever the cause - which is exactly why it never
+   names one.
+
+No loop-versus-slow-worker distinction is claimed anywhere, because none is
+available from `continuations`. What would provide one is progress evidence from
+outside that column - the gate log, the working tree, the task file - and none of
+it is consulted here. That gap is filed as its own task rather than folded into
+this one; task-0057 is its other half, since a busy marker that suppressed the
+nag would remove the contamination at the source.
+
+SURFACING A BLOCKED RUN: THE STOP HOOK OWNS IT, NOT THIS PROCESS
+----------------------------------------------------------------
+A run parked `blocked` is not advanceable, so stop_gate.py used to skip it, and
+classify() answers HEALTHY for it, so this process takes no action - two
+watchdogs, both individually right, and between them a task nobody was driving
+produced silence from both. Ninety minutes of it, measured (task-0067).
+
+The decision, and the reason it went that way: stop_gate.py surfaces it, once,
+by setting `awaiting_human=blocked` and blocking the stop with an instruction to
+raise it with the CEO. It owns this because its output is the only one of the two
+that lands in the live session the CEO reads; this process is detached, and
+notify() writes to a log file nobody has open, so it cannot reach a human on its
+own however loudly it repeats itself. The single `awaiting_human` write also
+makes the run show up in `state.py --resume` at SessionStart, so a session that
+STARTS with a blocked run sees it too - one write, both surfaces, and it is
+cleared by a CEO rejection, which is the only exit from `blocked`. (Named that
+way rather than by script, here and below: the forbidden-token test in
+tools/tests/test_supervisor.py reads this file for the name of the approval tool,
+and it is right to - this process must not so much as know how to call it.)
+
+What this process does instead is say so in its reason string rather than
+claiming a blocked run is simply fine.
 
 Config: the `supervisor` block in .agentry/pipeline.json (see DEFAULTS).
 Lane: resolved through state.py, the single place PIPELINE_LANE is read. The
@@ -205,12 +293,12 @@ DEFAULTS = {
     # longer than a slow exit gate (advance.py's own GATE_TIMEOUT is 900) so a
     # legitimately long test run is not mistaken for a dead session.
     "stall_seconds": 1200,
-    # How many CONSECUTIVE polls must show `continuations` climbing on an
-    # unchanged stage before it counts as a loop. Two is the smallest number
-    # that cannot be one slow turn. Consecutive, not cumulative - observe()'s
-    # else branch explains why, and why this stays at 2 rather than being scaled
-    # up towards continuation_ceiling.
-    "loop_ticks": 2,
+    # NO `loop_ticks` KEY, deliberately, and it is gone from pipeline.json too.
+    # It set the threshold for a verdict that no longer exists (see FREQUENCY WAS
+    # RETIRED). A knob that quietly does nothing is worse than no knob: config()
+    # only copies keys present here, so a project that still sets it gets
+    # silence, which is why the key was removed from the shipped config rather
+    # than left to be ignored.
     "max_actions_per_task": 3,
     "max_actions_per_hour": 6,
     # Consecutive polls with nothing in flight after which the daemon exits and
@@ -536,6 +624,64 @@ def stage_age(run: dict, entry: dict, now_ts: float) -> tuple[float | None, str]
     return idle, "at least, from the row's last write (no prior observation)"
 
 
+def coherent_climbs(entry: dict, cont: int) -> tuple[int, int]:
+    """(loop_ticks, stage_climbs) with any count the current `continuations`
+    value cannot justify discarded.
+
+    THE INVARIANT: every recorded climb is a poll that observed `continuations`
+    strictly increase within one stage, and a stage begins at a `continuations`
+    value of zero or more. So N climbs within a stage imply the value now stands
+    at N or above, and a count ABOVE it describes a sequence that cannot have
+    happened. `loop_ticks` counts a subset of the same polls, so the same bound
+    holds for it - the twin is not left behind.
+
+    WHY THIS IS COHERENCE ON EVERY POLL AND NOT AN EDGE. observe() also resets
+    both counts when `continuations` decreases, which is correct and stops fresh
+    corruption; it heals nothing that is already broken. MEASURED live on
+    task-0010, after a CEO rejection zeroed the counter without a stage change:
+
+        run.db   : stage=implement, stage_status=blocked, continuations=0
+        registry : continuations=0, loop_ticks=0, stage_climbs=2
+
+    The registry had already recorded `continuations: 0`, so no decrease was ever
+    visible to a later poll, and the stale count could not clear: only a stage
+    change clears it, and the task cannot change stage while parked on it. The
+    entry was stranded, and the log line it produced contradicted itself on its
+    face ("climbed on 2 polls ... now 0"). Testing coherence heals that entry on
+    the first poll, with no migration and nothing for anybody to clean up by
+    hand. It also makes the contradiction unsayable: after this, no reason string
+    can assert a climb count above the `continuations` printed beside it.
+
+    The difference between task-0010 and a task that heals itself is only that
+    one of them changed stage afterwards. Do not rely on the stage change."""
+    try:
+        ticks = int(entry.get("loop_ticks", 0) or 0)
+    except (TypeError, ValueError):
+        ticks = 0
+    try:
+        climbs = int(entry.get("stage_climbs", 0) or 0)
+    except (TypeError, ValueError):
+        climbs = 0
+    return max(0, min(ticks, cont)), max(0, min(climbs, cont))
+
+
+def climb_seconds(entry: dict, now_ts: float) -> float | None:
+    """Seconds since `continuations` was last seen to climb, or None when it has
+    not climbed within this stage (or the stamp is unusable). A future stamp is
+    discarded for the same reason stage_since_of discards one: it would read as
+    zero age forever."""
+    raw = entry.get("last_climb")
+    if raw is None:
+        return None
+    try:
+        at = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if at != at or at > now_ts:  # NaN, or a stamp from the future
+        return None
+    return max(0.0, now_ts - at)
+
+
 def observe(entry: dict, run: dict, now_ts: float) -> dict:
     """Fold this poll's facts into the task's registry entry, in place.
 
@@ -543,17 +689,39 @@ def observe(entry: dict, run: dict, now_ts: float) -> dict:
     that the evidence accumulates in exactly one place:
 
     `loop_ticks` - the number of consecutive polls in which `continuations`
-    climbed while `stage` stayed put. Two things reset it, and both are
-    load-bearing: a stage change, because that is real progress, and a poll that
-    saw no climb, because the count claims adjacency and has to measure it (see
-    the else branch).
+    climbed while `stage` stayed put. RECORDED HERE AND READ BY NOTHING: no
+    verdict consults it since task-0067 retired the adjacency reading, and
+    classify() unpacks it into `_ticks` purely to keep the two counts coherent
+    together. It is kept rather than deleted because the observation itself is
+    sound and a future detector with real progress evidence will want it; it is
+    named in the module docstring under FREQUENCY WAS RETIRED so that nobody
+    reaches for it as a verdict again. Two things reset it: a stage change,
+    because that is real progress, and a poll that saw no climb, because the
+    count claims adjacency and has to measure it (see the else branch).
 
     `stage_climbs` - the number of polls in which `continuations` climbed since
-    the stage last changed, adjacent or not. Only a stage change resets it. It is
-    the CUMULATIVE reading of the same evidence, and it exists for one decision:
-    classify()'s stall branch consults it before calling a frozen stage STALLED,
-    because STALLED is relaunchable and "something is turning over" must never be
-    relaunched however slowly it turns. See classify().
+    the stage last changed, adjacent or not. It is the CUMULATIVE reading of the
+    same evidence, and what it actually witnesses is LIVENESS rather than a loop:
+    only a live session makes the Stop hook write `continuations`, so a recent
+    climb is the heartbeat of a session this supervisor never spawned and could
+    otherwise not observe. `last_climb` records WHEN, because a heartbeat from an
+    hour ago says nothing about now. classify()'s stall branch reads both.
+
+    `last_climb` - the poll time of the most recent climb, or absent. Cleared
+    wherever the counts are cleared, so it can never outlive them.
+
+    THREE things reset the counts, and the third one was missing (task-0067):
+    a stage change, because that is real progress; a poll that saw no climb,
+    which resets `loop_ticks` only, because that count claims adjacency and has
+    to measure it; and `continuations` DECREASING, which resets both, because the
+    counter these counts were derived from was reset underneath them. Only
+    a CEO rejection and a stage transition zero `continuations`, and a
+    genuine slow loop climbs or stands still - it never decreases - so this
+    branch cannot fire on one.
+
+    A decrease is an EDGE, though, and an edge only prevents fresh corruption.
+    The heal below is what clears an entry that is already wrong, on every poll;
+    see coherent_climbs() for the measured case it exists for.
 
     `stage_since` - when the stage last changed. This is the stall clock, and it
     is kept here, in the supervisor's own registry, precisely because nothing
@@ -566,12 +734,20 @@ def observe(entry: dict, run: dict, now_ts: float) -> dict:
     if prev_stage is not None and prev_stage != stage:
         entry["loop_ticks"] = 0
         entry["stage_climbs"] = 0
+        entry.pop("last_climb", None)
         # Observed transition: the one event allowed to move the clock.
         entry["stage_since"] = now_ts
         entry["stage_since_observed"] = True
+    elif prev_cont is not None and cont < int(prev_cont):
+        # The counter these counts were about was reset underneath them, so the
+        # evidence is about a moment that has passed. Drop it whole.
+        entry["loop_ticks"] = 0
+        entry["stage_climbs"] = 0
+        entry.pop("last_climb", None)
     elif prev_cont is not None and cont > int(prev_cont):
         entry["loop_ticks"] = int(entry.get("loop_ticks", 0)) + 1
         entry["stage_climbs"] = int(entry.get("stage_climbs", 0)) + 1
+        entry["last_climb"] = now_ts
     else:
         # A poll that saw no climb BREAKS the run. This branch is the whole
         # difference between consecutive and cumulative, and it was missing:
@@ -580,37 +756,42 @@ def observe(entry: dict, run: dict, now_ts: float) -> dict:
         # consecutive polls", which nothing had observed - the same defect class
         # as the old stall clock's reason string.
         #
-        # CONSECUTIVE with a threshold of 2 was chosen over cumulative with a
-        # threshold near continuation_ceiling, deliberately, because the two
-        # signals answer different questions and the ceiling branch below
-        # already owns the cumulative one:
-        #   - here: `continuations` climbing on adjacent polls is a session
-        #     turning over without the stage moving, which is a live loop. Two
-        #     adjacent polls cannot be one slow turn, and at a 60s interval this
-        #     catches a repeating branch within about two minutes.
-        #   - the `cont >= ceiling` branch: total continuations regardless of
-        #     when they happened, which is the cumulative reading, already
-        #     tuned to the pipeline's own budget.
-        # What escapes this branch: a loop slow enough to climb on alternate
-        # polls keeps loop_ticks oscillating 0/1, so it is never caught HERE.
+        # WHAT THIS RESET IS FOR NOW, since task-0067 retired the verdict that
+        # used to depend on it: `loop_ticks` is a recorded observation and
+        # nothing reads it for a label, so this branch has one job - keep the
+        # number honest. It counts CONSECUTIVE polls, so a poll without a climb
+        # has to end the run, or the field would claim an adjacency nobody
+        # observed. The reason the accuracy still matters with no verdict
+        # attached: a future detector with real progress evidence is the obvious
+        # consumer, and a stale counter waiting for it is how this file got its
+        # last three defects.
         #
-        # MEASURED (task-0058, fourth round) - the backstop this comment used to
-        # name was the ceiling, and the ceiling does not get the chance. With the
-        # defaults, a frozen stage and continuations climbing every other poll:
-        #     poll 16 cont= 9 ticks=1 -> HEALTHY
-        #     poll 20 cont=11 ticks=1 -> STALLED  action=relaunch
-        # The ceiling needs 60 polls to reach 30; STALLED fires at poll 20,
-        # because a frozen stage is exactly what a slow loop looks like, and
-        # STALLED is relaunchable. So the slow loop got RELAUNCHED - the one
-        # outcome this module exists to prevent.
-        # The real backstop is `stage_climbs` above, consulted by classify()'s
-        # stall branch: a frozen stage with any climb behind it is LOOPING and
-        # parks. This branch therefore costs latency only (a slow loop is caught
-        # at stall_seconds instead of at two polls), never an escape.
-        # The risk refused is still the other one: cumulative-at-2 parked a
-        # HEALTHY task for two Stop-hook nags anywhere inside one stage, and
-        # LOOPING parks `blocked`, which costs a CEO intervention.
+        # Do not restore the old argument that used to sit here. It read
+        # "adjacent climbs are a live loop, caught within about two minutes",
+        # and that is the claim the measurement under FREQUENCY WAS RETIRED
+        # disproved: at a 60s poll it parked a session whose turns took a minute
+        # after three minutes of ordinary work.
+        #
+        # The backstop for a genuine loop is no longer here or in the stall
+        # branch (which answers HEALTHY - see classify()). It is the pipeline's
+        # own budget: `cont >= continuation_ceiling`, about an hour at a 120s nag
+        # cadence, and stop_gate.py parks at `cont > ceiling` one nag later on
+        # its own account.
         entry["loop_ticks"] = 0
+
+    # Heal an entry whose counts the current `continuations` cannot justify -
+    # every poll, not only on the edge that broke them. Logged like a discarded
+    # stage_since, because a count silently rewritten is a count nobody can
+    # explain later.
+    ticks, climbs = coherent_climbs(entry, cont)
+    if (ticks, climbs) != (int(entry.get("loop_ticks", 0)), int(entry.get("stage_climbs", 0))):
+        log(f"discarded incoherent climb counts for {run.get('task')}: loop_ticks="
+            f"{entry.get('loop_ticks')!r} stage_climbs={entry.get('stage_climbs')!r} against "
+            f"continuations={cont}, kept ({ticks}, {climbs})")
+        entry["loop_ticks"] = ticks
+        entry["stage_climbs"] = climbs
+        if not climbs:
+            entry.pop("last_climb", None)
 
     if stage_since_of(entry, now_ts) is None:
         # First sight of this task, a registry that was lost, or a recorded value
@@ -636,8 +817,8 @@ def observe(entry: dict, run: dict, now_ts: float) -> dict:
 def classify(run: dict, entry: dict, cfg: dict, now_ts: float) -> tuple[str, str]:
     """Exactly one of the four labels, plus the fact it was derived from.
 
-    Call observe() first: this reads `loop_ticks` off the entry rather than
-    recomputing it, so the loop evidence is accumulated in one place."""
+    Call observe() first: this reads the climb counts off the entry rather than
+    recomputing them, so the evidence is accumulated in one place."""
     stage = run.get("stage")
     status = run.get("stage_status")
     ceiling = int(cfg.get("continuation_ceiling", 30))
@@ -649,17 +830,26 @@ def classify(run: dict, entry: dict, cfg: dict, now_ts: float) -> tuple[str, str
     if stage == "done":
         return HEALTHY, "run finished (stage 'done')"
     if status == state.ST_BLOCKED:
-        return HEALTHY, "already parked blocked for the CEO"
+        # No action, and deliberately not silence: surfacing a blocked run is
+        # stop_gate.py's job, because its output is the only one of the two that
+        # lands in the live session where the CEO reads. This process is
+        # detached and writes to a log file nobody has open. See the SURFACING A
+        # BLOCKED RUN note in the module docstring.
+        return HEALTHY, ("already parked blocked for the CEO (surfaced by the Stop hook, "
+                         "which sets awaiting_human=blocked; not this supervisor's to poke)")
     if run.get("awaiting_human"):
         return HEALTHY, f"parked on a human by design (awaiting_human={run['awaiting_human']})"
 
     # LOOPING is checked BEFORE anything relaunchable, so no loop can ever be
     # relabelled into something a relaunch would act on. This ordering is the
     # first of the two guards; relaunch()'s RELAUNCHABLE check is the second.
-    ticks = int(entry.get("loop_ticks", 0))
-    if ticks >= int(cfg.get("loop_ticks", 2)):
-        return LOOPING, (f"continuations climbed on {ticks} consecutive polls while stage "
-                         f"stayed '{stage}' (now {cont})")
+    # Both counts come through coherent_climbs(), which is what makes a reason
+    # string below unable to assert a climb count that the `continuations` value
+    # printed next to it cannot support. `_ticks` is deliberately unread: the
+    # adjacency verdict was retired (see FREQUENCY WAS RETIRED), the observation
+    # is still recorded, and unpacking it here keeps the two counts coherent in
+    # one place.
+    _ticks, climbs = coherent_climbs(entry, cont)
     if cont >= ceiling:
         return LOOPING, (f"continuations {cont} reached the pipeline's continuation_ceiling "
                          f"({ceiling}) at stage '{stage}'")
@@ -684,37 +874,109 @@ def classify(run: dict, entry: dict, cfg: dict, now_ts: float) -> tuple[str, str
     # `age` is the clock, and the ONLY clock. It measures time since the stage
     # changed, not since the row was touched - `source` says which of the two
     # ways that was established, so the reason string can never overclaim.
-    climbs = int(entry.get("stage_climbs", 0))
     pid = int(entry.get("pid") or 0)
     alive = pid_alive(pid) if pid else False
     dead = bool(pid) and not alive and stage == entry.get("spawn_stage")
     age, source = stage_age(run, entry, now_ts)
     stall = float(cfg.get("stall_seconds", 1200))
     stalled = age is not None and age >= stall
+    # Whether anything wrote `continuations` RECENTLY, which is a different
+    # question from whether it ever did. See the stall branch below.
+    climb_age = climb_seconds(entry, now_ts)
+    driven = climb_age is not None and climb_age < stall
 
     # THE BOUNDARY between a loop and a plain stall, and the third guard on
     # LOOPING (RELAUNCHABLE and handle_run's park branch are the other two; all
     # three agree because this one answers with the LABEL rather than with an
-    # action of its own). It sits above BOTH relaunchable answers, so whichever
-    # evidence arrives first - a dead owner or the stall clock - any climb
-    # within the current stage wins. Nothing moving at all is a plain stall,
-    # which stays relaunchable: this must not become a switch that turns
-    # relaunching off. Why `stage_climbs` is the distinction, and the measured
-    # trace of getting it wrong: observe()'s else branch.
-    if climbs and (dead or stalled):
-        evidence = (f"its supervisor-spawned session pid {pid} exited" if dead
-                    else f"it has not changed for {int(age)}s")
-        return LOOPING, (f"stage '{stage}' would otherwise be relaunched ({evidence}), but "
-                         f"continuations climbed on {climbs} polls within it (now {cont}): a "
-                         f"slow loop, not a stall, so it is parked rather than relaunched")
+    # action of its own). It sits above BOTH relaunchable answers, so a dead
+    # owner cannot be relabelled into something a relaunch would act on.
+    #
+    # THE CLIMB MUST BE RECENT, not merely present (task-0067, review H1). The
+    # condition was `climbs and dead`, and that is the same nag contamination
+    # FREQUENCY had: the Stop hook nags every turn a task lacks a busy marker, so
+    # nearly every spawned session that dies mid-stage carries at least one
+    # climb, and the branch SHADOWED most of the DEAD relaunch path. Measured
+    # read-only: a dead pid with one nag 1500s old and stage_climbs=1 returned
+    # LOOPING and asserted "a slow loop", while the identical entry with
+    # stage_climbs=0 returned DEAD. A label decided by whether an hour-old nag
+    # happens to be recorded is not a label.
+    #
+    # With `driven` the two cases separate on their own evidence:
+    #   - recent climb: something wrote `continuations` AFTER the session we
+    #     spawned ended, so a session is turning over now. Parking is right and
+    #     a second session onto it would be the amplification this file exists
+    #     to prevent.
+    #   - stale climb: nothing has emitted a Stop for longer than we call a
+    #     stall, so the climb describes a moment that has passed. It falls
+    #     through to DEAD and is relaunched, which is what DEAD is for.
+    # Nothing moving at all is still a plain stall, still relaunchable: this
+    # must not become a switch that turns relaunching off.
+    if climbs and driven and dead:
+        return LOOPING, (f"stage '{stage}' would otherwise be relaunched (its "
+                         f"supervisor-spawned session pid {pid} exited), but continuations "
+                         f"was written {int(climb_age)}s ago and now stands at {cont}: "
+                         f"something is still turning over after the session we spawned "
+                         f"ended, so it is parked rather than relaunched")
     if alive:
         return HEALTHY, f"supervisor-spawned session pid {pid} is alive"
     if dead:
         return DEAD, (f"supervisor-spawned session pid {pid} exited with the run still at "
                       f"stage '{stage}' (spawned for that stage)")
+    if stalled and driven:
+        # A FROZEN STAGE WITH A RECENT NAG IS NEITHER RELAUNCHED NOR PARKED, and
+        # this is the second half of task-0067. `continuations` belongs to two
+        # watchdogs with opposite meanings: stop_gate.py writes it to count how
+        # often it has NAGGED about a task, while this process read growth as
+        # evidence that a session is turning over. Nagging an ordinary long stage
+        # therefore produced loop evidence by construction, with nobody making a
+        # mistake. MEASURED on task-0067 itself, while it was being implemented:
+        # stage_climbs reached 1 within ninety seconds of the busy marker being
+        # dropped, and the old branch parked on ANY climb once the stall clock
+        # elapsed - so the fix was about eighteen minutes from being parked
+        # `blocked` by the defect it exists to fix.
+        #
+        # The honest reading of the shared counter is the narrow one: only a live
+        # session makes the Stop hook write it, so a recent climb is a HEARTBEAT
+        # for a session this supervisor never spawned - the liveness it otherwise
+        # cannot observe at all (see DEAD). It says nothing about whether that
+        # session is making progress, so the answer is to do nothing and say why:
+        #   - not STALLED, because a relaunch would put a second session on a
+        #     tree that already has one (the fourth-round regression, and it
+        #     stays fixed: a loop climbing every other poll lands here);
+        #   - not LOOPING, because parking a live run `blocked` costs a CEO
+        #     intervention and a nag is not proof of a loop.
+        #
+        # WHAT ACTUALLY ENDS A RUN THAT SITS HERE, corrected: not this branch,
+        # and NOT `last_climb` recency, which only decides how stale a nag may be
+        # before the run leaves this branch for STALLED. Every nag also increments
+        # `continuations`, so the VOLUME reading closes it - `cont >= ceiling`,
+        # measured at 1.0h for a nag every 120s and 10.0h at the worst cadence
+        # that stays in this branch (a nag just under stall_seconds) - and
+        # stop_gate.py independently sets ST_BLOCKED at `cont > ceiling`, one nag
+        # later, which now surfaces itself (see its decide(), step 1).
+        #
+        # Ten hours is the MACHINE cover, and it is the only guarantee here. The
+        # near-term cover is human: the same nag that lands in `continuations`
+        # also lands in the session the CEO reads, telling the model to finish the
+        # stage. A person noticing is not a machine bound, and this comment must
+        # not be read as one.
+        #
+        # And do not read this branch as making loop detection sound. It is not:
+        # `continuations` cannot tell a loop from a slow worker at all, which is
+        # measured under FREQUENCY WAS RETIRED. This branch removes the false
+        # positive that fired on ANY climb once the clock elapsed; the adjacency
+        # reading that fired on two nags was deleted in the same change.
+        return HEALTHY, (f"stage '{stage}' has not changed for {int(age)}s ({source}), but "
+                         f"continuations was written {int(climb_age)}s ago and now stands at "
+                         f"{cont}: only a live session makes the Stop hook write it, so "
+                         f"something is still driving this run. Not relaunched (that would be "
+                         f"a second session on a live tree) and not parked (a nag is not proof "
+                         f"of a loop; the continuation_ceiling at {ceiling} is what parks this, "
+                         f"and the Stop hook parks it one nag later)")
     if stalled:
         return STALLED, (f"stage '{stage}' unchanged for {int(age)}s with no continuations "
-                         f"growth within it ({source}; stall_seconds={int(stall)})")
+                         f"growth within it for at least that long "
+                         f"({source}; stall_seconds={int(stall)})")
 
     return HEALTHY, (f"stage '{stage}' unchanged for {int(age)}s ({source})"
                      if age is not None else f"stage '{stage}', age unknown")

@@ -322,6 +322,17 @@ def _resume_text(conn: sqlite3.Connection) -> str:
         tail = f" awaiting_human={r['awaiting_human']}" if r["awaiting_human"] else ""
         lines.append(f"  - {r['task']}: stage={r['stage']} status={r['stage_status']}{tail}")
     lines.append("Drive these through the pipeline via tools/pipeline/advance.py without asking the user.")
+    # A blocked run is the one exception to the line above, and it needs saying
+    # out loud: advance.py refuses to move it, so the instruction to drive it is
+    # wrong advice for exactly the run that most needs attention. The Stop hook
+    # owns surfacing a blocked run mid-session (see stop_gate.decide); this is
+    # the same fact reaching a session that STARTS with one already parked.
+    stuck = [r["task"] for r in live if r["stage_status"] == ST_BLOCKED]
+    if stuck:
+        lines.append(f"BLOCKED, needs the CEO before anything else: {', '.join(stuck)}. "
+                     f"advance.py will not move a blocked run - raise it with the CEO "
+                     f"(AskUserQuestion), then either fix the blocker or run approve.py "
+                     f"--reject to send the task back.")
     return "\n".join(lines)
 
 

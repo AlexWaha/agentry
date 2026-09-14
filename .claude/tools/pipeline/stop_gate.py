@@ -8,6 +8,9 @@ state and either:
   - allows the stop when every task is parked at a human checkpoint, blocked, or
     done and no ready backlog remains.
 
+A blocked run is surfaced once before it is left alone (it is the CEO's to
+unblock, and nothing else in the harness tells him it exists) - see decide().
+
 Work is serialized on the working tree. A new backlog task is offered only when
 nothing holds it: no run in an editing stage (blocked included - a blocked task
 still owns its dirty tree) and no run awaiting a human, because the CEO may be
@@ -46,6 +49,11 @@ SUPERSEDED_RE = re.compile(r"^superseded_by:[ \t]*(task-\d+)", re.MULTILINE)
 # unattended run never settles. The negative lookahead is what keeps the blank
 # `blocked_on:` the template ships on every task from meaning "blocked".
 BLOCKED_RE = re.compile(r"^blocked_on:[ \t]*(?!\s*$)\S", re.MULTILINE)
+
+# What `awaiting_human` is set to when a blocked run is surfaced to the CEO. It
+# doubles as the surfaced-once marker, so a blocked run is raised on one stop
+# rather than on every one. See decide(), step 1.
+AWAITING_BLOCKED = "blocked"
 
 BACKLOG_DIR = state.BACKLOG_DIR
 ACTIVE_DIR = state.ACTIVE_DIR
@@ -306,7 +314,36 @@ def decide() -> int:
         # 1. Continue an in-flight, actionable run.
         for r in runs:
             stage, status, aw = r["stage"], r["stage_status"], r["awaiting_human"]
-            if stage == "done" or status == state.ST_BLOCKED:
+            if stage == "done":
+                continue
+            if status == state.ST_BLOCKED:
+                # A BLOCKED RUN IS SURFACED HERE, EXACTLY ONCE (task-0067).
+                # It is not autonomously advanceable, so this hook used to skip
+                # it silently; the supervisor answers HEALTHY ("already parked
+                # blocked") and takes no action, so it is silent too. Neither was
+                # wrong on its own, and between them a task nobody was driving
+                # produced no signal at all for ninety minutes.
+                #
+                # This hook owns the surfacing because its output is the only one
+                # of the two that lands in the live session the CEO reads - the
+                # supervisor is detached and logs to a file nobody has open.
+                #
+                # ONCE, not every stop: `awaiting_human` is the marker, which is
+                # not new state but the harness's existing "a human must act on
+                # this" flag - true of a blocked run by definition. An unbounded
+                # nag would be a stop loop, which is the opposite failure. The
+                # only exit from `blocked` is approve.py --reject, and it clears
+                # `awaiting_human`, so the surfacing re-arms itself.
+                if not aw:
+                    state.set_fields(conn, r["task"], awaiting_human=AWAITING_BLOCKED)
+                    return block(
+                        f"{r['task']} is parked BLOCKED at stage '{stage}' and nothing is "
+                        f"driving it: the pipeline will not advance it and the supervisor "
+                        f"will not touch it. Raise it with the CEO now (AskUserQuestion): "
+                        f"what the blocker is, and the options - fix it and re-run "
+                        f"advance.py, or send the task back with python "
+                        f".claude/tools/pipeline/approve.py --task {r['task']} --reject. "
+                        f"Do not silently move on to other work.")
                 continue
             # Approved checkpoint action still pending (commit/push the agent must do).
             if stage == "ready" and ((aw == "commit" and r["commit_approved"])

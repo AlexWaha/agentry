@@ -216,6 +216,49 @@ step 1 is skipped, and that is the only case where it may be. Say so explicitly
 in the record, because "nothing to commit" and "forgot to commit" look identical
 in git a week later.
 
+### The busy marker is a choice between two failures, not a discipline problem
+
+Until `task-0057` and `task-0064` land, both options are broken and you should
+know which failure you are buying. `task-0067` has landed and shortened the
+second one - see below:
+
+- **Set `advance.py --busy` and the Stop hook goes quiet.** If the marker
+  outlives the reason it was written for - the dispatch returned, the preemption
+  resolved, the task closed - the conveyor halts in total silence. Nothing
+  reports it, because the marker's whole job is to suppress the report. This
+  happened twice in one session, and the CEO noticed both times before the
+  harness did.
+- **Leave it unset and the Stop hook nags every turn.** Each nag writes
+  `continuations` (`stop_gate.decide()`, the editing-stage branch - cited by
+  symbol because the line number has already moved once), and the supervisor
+  reads a climb as evidence of a session turning over on a frozen stage.
+  Before `task-0067` the stall branch parked on ANY climb: measured,
+  `stage_climbs` reached 1 inside ninety seconds, eighteen minutes short of the
+  park. That park is gone - a frozen stage with a recent nag is now HEALTHY with
+  no action, and the adjacency reading that parked after two nags was deleted.
+  What remains is the pipeline's own budget: `continuations` reaching
+  `continuation_ceiling` still parks the task `blocked`, about an hour at a nag
+  every two minutes. So the cost of leaving the marker unset is an hour of
+  nagging and then a park, not three minutes of it.
+
+The root is that two watchdogs share one counter with opposite meanings.
+`continuations` is "how often I nagged" to the Stop hook and "the session is
+looping" to the supervisor, and nagging about an idle task is indistinguishable
+from the task looping. `task-0067` did not fix that root - it cannot be fixed
+from that column - it removed the readings that claimed to see a loop in it and
+left the budget reading, which claims only that the budget is spent. Separating a
+loop from a slow worker needs progress evidence from outside `continuations`
+(the gate log, the working tree, the task file) and has its own task.
+
+**What to do meanwhile:** prefer the nagging. It is noise; the other is a halt,
+and a halt that reports nothing is the only failure mode this pipeline cannot
+recover from on its own. Clear a marker with `--idle` in the same command
+sequence as whatever ended its reason, never later. Never hand-write the JSON -
+the tool exists and a file written by hand has no owner. And if a running daemon
+carries code whose defect you are fixing, stop it for the duration
+(`supervisor.py --stop`) and say so: a watchdog on known-buggy code can park the
+task that fixes it.
+
 **Known gap, do not paper over it:** `run.db` has no paused state. `blocked` is
 reachable only by exhausting the retry budget, editing `run.db` by hand is
 forbidden, `approve.py --reject` moves a task the wrong way (to `implement`), and
