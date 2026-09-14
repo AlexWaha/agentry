@@ -14,6 +14,7 @@ mcpServers:
 skills:
   - deep-review
 rules:
+  - architecture.md
   - api-conventions.md
   - performance.md
   - documentation.md

@@ -15,6 +15,7 @@ skills:
   - feature-scaffold
   - bug-fix
 rules:
+  - architecture.md
   - api-conventions.md
   - performance.md
   - i18n.md

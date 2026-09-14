@@ -13,6 +13,7 @@ skills:
   - api-design
   - db-design
 rules:
+  - architecture.md
   - api-conventions.md
   - performance.md
   - documentation.md

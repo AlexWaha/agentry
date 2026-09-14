@@ -333,7 +333,6 @@ dispatch its size.
 | `quality-standard.md` | The orchestrator runs the exit gates, records approvals, commits and merges; the verification discipline, the em-dash ban, the NUL cleanup and the AI-authorship ban bind it directly. |
 | `communication.md` | The checkpoint-must-be-a-card rule, the response-language rule and the subagent report format govern the orchestrator's own turns and what it pays for in every dispatch. |
 | `coding-style.md` | Not core: the main thread never uses it; moves to 6 agents in commit 12. |
-| `architecture.md` | Not core: the main thread never uses it; moves to 8 agents in commit 9. |
 | `testing.md` | Not core: the main thread never uses it; moves to 4 agents in commit 10. |
 | `security.md` | Not core: the main thread never uses it; moves to 8 agents in commit 11. |
 | `git-workflow.md` | The orchestrator is the only thread that branches, commits, merges (solo mode) and pushes; the pre-commit gate order, the branch-base check, the push-approval rule and the deploy-actions report are its procedure. |
@@ -346,7 +345,6 @@ dispatch its size.
 @rules/quality-standard.md
 @rules/communication.md
 @rules/coding-style.md
-@rules/architecture.md
 @rules/testing.md
 @rules/security.md
 @rules/git-workflow.md

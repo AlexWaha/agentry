@@ -8,6 +8,7 @@ effort: medium
 maxTurns: 30
 tools: Read, Write, Edit, Glob, Grep
 rules:
+  - architecture.md
   - documentation.md
   - human-voice.md
   - i18n.md
