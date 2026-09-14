@@ -11,6 +11,7 @@ skills:
   - market-research
   - business-plan
 rules:
+  - human-voice.md
   - business-standards.md
 hooks:
   PreToolUse:

@@ -7,6 +7,8 @@ permissionMode: bypassPermissions
 effort: low
 maxTurns: 40
 tools: Read, Grep, Bash
+rules:
+  - human-voice.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

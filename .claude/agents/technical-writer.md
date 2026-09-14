@@ -10,6 +10,7 @@ tools: Read, Write, Edit, Glob, Grep
 skills:
   - update-docs
 rules:
+  - human-voice.md
   - business-standards.md
 hooks:
   PreToolUse:

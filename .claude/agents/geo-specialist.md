@@ -8,6 +8,7 @@ effort: low
 maxTurns: 30
 tools: Read, Write, Edit, Glob, Grep, Bash
 rules:
+  - human-voice.md
   - i18n.md
 hooks:
   PreToolUse:

@@ -10,6 +10,7 @@ tools: Read, Write, Glob, Grep, Bash, WebSearch, WebFetch
 skills:
   - financial-model
 rules:
+  - human-voice.md
   - business-standards.md
 hooks:
   PreToolUse:

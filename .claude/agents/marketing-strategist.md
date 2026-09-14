@@ -11,6 +11,7 @@ skills:
   - gtm-strategy
   - market-research
 rules:
+  - human-voice.md
   - business-standards.md
 hooks:
   PreToolUse:

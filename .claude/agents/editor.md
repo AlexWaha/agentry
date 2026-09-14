@@ -8,6 +8,7 @@ effort: medium
 maxTurns: 30
 tools: Read, Edit, Glob, Grep
 rules:
+  - human-voice.md
   - i18n.md
 hooks:
   PreToolUse:
