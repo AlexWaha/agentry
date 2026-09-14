@@ -160,7 +160,8 @@ rows (reusable code shapes) and `module` rows (the module map).
 
 - **Retrieval is automatic** (SubagentStart hooks): `tools/memory/inject.py`
   queries the store with the dispatch text and injects the ranked matches with
-  their count, capped at 3800 bytes - not the head of a file. Planning agents get
+  their count, capped by `memory.inject_budget_bytes` in `.agentry/pipeline.json`
+  (default 3800) - not the head of a file. Planning agents get
   module+pattern+lesson rows, spec-developer module+lesson, dev/review agents
   lesson+pattern.
 - **Record / query by hand:** `python .claude/tools/memory/memory.py --record

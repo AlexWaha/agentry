@@ -14,7 +14,10 @@
   "memory": {
     "_comment": "Post-task memory review gate (tools/memory/update.py): every done task above baseline must be distilled into .agentry/memory/ (lessons/patterns/codebase rows) and stamped before the next task starts. Enforced by advance.py (registration refusal, beside the handoff gate - task-0066 added it, before which this line named an enforcer that did not exist) and stop_gate.py (blocks the stop while the debt stands, whatever is in flight). baseline semantics match handoff.baseline; '' = every done task covered. enabled=false disables the gate.",
     "enabled": true,
-    "baseline": ""
+    "baseline": "",
+    "_comment_inject": "Retrieval caps read by tools/memory/inject.py (contract C-5, task-0011), separate from the gate keys above. inject_budget_bytes caps the WHOLE injected block in UTF-8 bytes; rows are dropped from the tail until it fits, and the head line then reports 'N of M matching row(s) (byte budget)'. inject_row_chars caps each single row in characters before that trimming starts, appending ' ...'. Both fall back to their defaults (3800 / 700) when the key is missing, is not an integer, or is below 1 - the block is still emitted, per NFR-4. A small positive value is honoured as written; the last row is never dropped, so no setting here can silence injection. The third knob, how many rows are queried, is per-matcher: inject.py --limit in .claude/settings.json.",
+    "inject_budget_bytes": 3800,
+    "inject_row_chars": 700
   },
   "orchestrator_gate": {
     "_comment": "Hard gate on the MAIN THREAD (orchestrator): Edit/Write and shell file-writes are denied outside .claude/, .agentry/, docs/, README*, root CLAUDE.md. The orchestrator only formalizes tasks, delegates, verifies and synthesizes - it never authors code. Subagent tool calls are exempt (agent_gate.py profiles govern them). extra_allow: repo-relative globs to whitelist per project (e.g. \"CHANGELOG.md\"). enabled=false disables the gate.",

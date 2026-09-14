@@ -18,8 +18,15 @@ under a hard byte budget.
 The injected block states its row count: a thin result must be visible, not
 silent. Zero matches print nothing at all.
 
+Both size caps are configuration, not literals: `memory.inject_budget_bytes`
+and `memory.inject_row_chars` in .agentry/pipeline.json (contract C-5). The
+values below are the defaults used when a key is absent or unusable - the dial
+FR-35's measurement turns must be turnable without a code edit.
+
 Fail-open by contract: a missing, empty or corrupt store injects nothing and
-exits 0. Memory retrieval must never block a dispatch.
+exits 0. A missing, non-integer or absurd budget value falls back to the
+default and STILL emits the block (NFR-4). Memory retrieval must never block a
+dispatch.
 """
 
 from __future__ import annotations
@@ -32,18 +39,48 @@ from pathlib import Path
 HERE = Path(__file__).resolve()
 ROOT = HERE.parents[3]
 ACTIVE_DIR = ROOT / ".agentry" / "tasks" / "active"
+sys.path.insert(0, str(HERE.parents[2] / "tools" / "pipeline"))
 sys.path.insert(0, str(HERE.parent))
 
-# Sibling module; the dir is not on sys.path by default, hence the insert above.
+# Siblings; neither dir is on sys.path by default, hence the inserts above.
+# The inserts are LIFO, so the pipeline dir goes first and this file's OWN dir
+# lands at index 0 - matching update.py and codebase_sync.py. Reversed, a future
+# pipeline/memory.py would shadow the sibling below and `memory.connect_readonly`
+# would fail inside main()'s blanket except, silently killing injection.
 import memory
+import state
 
-BUDGET_BYTES = 3800          # the whole injected block, hard ceiling
-ROW_CHARS = 700              # per-row cap before the budget trims rows
+DEFAULT_BUDGET_BYTES = 3800  # the whole injected block, hard ceiling
+DEFAULT_ROW_CHARS = 700      # per-row cap before the budget trims rows
 QUERY_KEYS = ("prompt", "description", "task", "message", "input", "instructions",
               "agent_prompt", "subagent_prompt")
 TASK_TEXT_CHARS = 4000
 
 KIND_LABEL = {"lesson": "lesson", "pattern": "pattern", "module": "module"}
+
+
+def cfg_int(key: str, default: int) -> int:
+    """One `memory.<key>` integer from .agentry/pipeline.json, or `default`.
+
+    Fail-open per NFR-4, and the three refusals are deliberate. A bool is
+    rejected before the int check because `True` is an int in Python and would
+    silently mean a one-byte budget. A string is rejected rather than coerced:
+    the spec says non-integer falls back. Zero and negative are absurd (they
+    describe no block at all) and fall back too.
+
+    A small-but-positive value is HONOURED rather than overridden. render()
+    never drops the last row, so the floor is the head line plus one capped
+    row: no budget can silence memory injection, which is what NFR-4 protects,
+    so there is nothing left for a minimum to defend against.
+    """
+    try:
+        block = state.load_pipeline().get("memory")
+        raw = block.get(key) if isinstance(block, dict) else None
+    except Exception:
+        return default
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        return default
+    return raw
 
 
 def payload_text(payload: dict) -> str:
@@ -83,15 +120,17 @@ def head_line(shown: int, matched: int, terms: list) -> str:
 
 
 def render(hits: list, terms: list) -> str:
+    budget_bytes = cfg_int("inject_budget_bytes", DEFAULT_BUDGET_BYTES)
+    row_chars = cfg_int("inject_row_chars", DEFAULT_ROW_CHARS)
     rows = []
     for h in hits:
         text = h["text"].strip()
-        if len(text) > ROW_CHARS:
-            text = text[:ROW_CHARS].rstrip() + " ..."
+        if len(text) > row_chars:
+            text = text[:row_chars].rstrip() + " ..."
         rows.append(f"- [{KIND_LABEL.get(h['kind'], h['kind'])}] {h['title']}: {text}")
     while True:
         block = "\n".join([head_line(len(rows), len(hits), terms), *rows])
-        if len(block.encode("utf-8")) <= BUDGET_BYTES or len(rows) <= 1:
+        if len(block.encode("utf-8")) <= budget_bytes or len(rows) <= 1:
             return block
         rows.pop()
 
