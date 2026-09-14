@@ -16,6 +16,7 @@ skills:
   - migration
 rules:
   - architecture.md
+  - security.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

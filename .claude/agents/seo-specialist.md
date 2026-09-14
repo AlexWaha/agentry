@@ -9,6 +9,7 @@ maxTurns: 30
 tools: Read, Write, Edit, Glob, Grep, Bash
 rules:
   - architecture.md
+  - security.md
   - performance.md
   - human-voice.md
   - i18n.md

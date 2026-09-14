@@ -14,6 +14,7 @@ mcpServers:
 skills:
   - risk-assessment
 rules:
+  - security.md
   - performance.md
 hooks:
   PreToolUse:

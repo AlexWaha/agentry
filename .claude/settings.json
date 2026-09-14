@@ -43,7 +43,8 @@
     "**/.claude/rules/human-voice.md",
     "**/.claude/rules/documentation.md",
     "**/.claude/rules/architecture.md",
-    "**/.claude/rules/testing.md"
+    "**/.claude/rules/testing.md",
+    "**/.claude/rules/security.md"
   ],
   "hooks": {
     "SessionStart": [

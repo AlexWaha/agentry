@@ -15,6 +15,7 @@ skills:
 rules:
   - architecture.md
   - api-conventions.md
+  - security.md
   - performance.md
   - documentation.md
   - mobile.md

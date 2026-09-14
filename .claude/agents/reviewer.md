@@ -17,6 +17,7 @@ rules:
   - architecture.md
   - testing.md
   - api-conventions.md
+  - security.md
   - performance.md
   - documentation.md
   - human-voice.md

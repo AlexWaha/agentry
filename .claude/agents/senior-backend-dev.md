@@ -18,6 +18,7 @@ rules:
   - architecture.md
   - testing.md
   - api-conventions.md
+  - security.md
   - performance.md
   - i18n.md
 hooks:

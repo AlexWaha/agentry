@@ -14,6 +14,7 @@ mcpServers:
 skills:
   - infrastructure
 rules:
+  - security.md
   - infrastructure.md
 hooks:
   PreToolUse:
