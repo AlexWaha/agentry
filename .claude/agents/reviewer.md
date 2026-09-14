@@ -14,6 +14,7 @@ mcpServers:
 skills:
   - deep-review
 rules:
+  - coding-style.md
   - architecture.md
   - testing.md
   - api-conventions.md

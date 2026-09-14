@@ -15,6 +15,7 @@ skills:
   - feature-scaffold
   - bug-fix
 rules:
+  - coding-style.md
   - architecture.md
   - testing.md
   - api-conventions.md

@@ -13,6 +13,8 @@ mcpServers:
   - codegraph
 skills:
   - feature-scaffold
+rules:
+  - coding-style.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

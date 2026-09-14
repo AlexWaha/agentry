@@ -15,6 +15,7 @@ skills:
   - write-tests
   - bug-fix
 rules:
+  - coding-style.md
   - testing.md
 hooks:
   PreToolUse:
