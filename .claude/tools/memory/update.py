@@ -14,8 +14,12 @@ refused unless the store gained at least one row since the previous stamp. So
 
 Stamps live in .agentry/state/memory/<task>.json (gitignored with state/).
 Config: pipeline.json "memory": {"enabled": bool, "baseline": "task-NNNN"}.
-Missing block = feature OFF. Enforced by stop_gate.py (blocks starting the
-next task while memory debt exists).
+Missing block = feature OFF. Enforced by advance.py (refuses to register the
+next task while memory debt exists, beside the handoff gate) and stop_gate.py
+(blocks the stop while it stands, regardless of what is in flight). Until
+task-0066 this docstring claimed the first of those and neither was true: the
+stop-hook check sat inside a branch that only ran when nothing was in flight,
+and advance.py contained the word `memory` zero times.
 
 CLI:
     python update.py --check                       JSON debt report, exit 1 on debt

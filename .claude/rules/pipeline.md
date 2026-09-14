@@ -45,7 +45,7 @@ refused until that spec is approved.
 | test | `qa-engineer` | `{{TEST_CMD}}` green; required cases per `testing.md` | - |
 | review | `reviewer` (+ `security-engineer`) | `{{LINT_CMD}}` clean; all Critical/High findings resolved; read-only (no code edits) | - |
 | ready | Orchestrator | gates green; diff prepared | **CEO reads the diff (`/diff`) and approves the commit**; rejecting sends the task back to `implement` |
-| done | CEO | merged into `main` (confirmed by `git_state.py`, not just pushed) | **CEO approves push**; task file moved to `done/` once the merge is confirmed; next registration is blocked until this task's handoff doc exists AND its memory review is stamped (`tools/memory/update.py`) |
+| done | CEO | merged into `main` (confirmed by `git_state.py`, not just pushed) | **CEO approves push**; task file moved to `done/` once the merge is confirmed; next registration is blocked until this task's handoff doc exists AND its memory review is stamped - both refused by `advance.py` at registration, both blocking the Stop hook before it lets the session end (`tools/pipeline/handoff.py`, `tools/memory/update.py`) |
 
 UI-bearing tasks add a `senior-frontend-dev` implement pass and an
 `evidence-collector` screenshot check inside review. Performance-sensitive work
@@ -94,6 +94,18 @@ A pasted task description fails validation (`handoff.py --check`).
   NEW task's assignee in its own words - forced context absorption. Enforced by
   `advance.py`, `stop_gate.py` and (hard_edit_gate) `pretool_gate.py`; details in
   `orchestration.md` step 0.
+- **Memory-gated pickup.** The same registration is refused again while any
+  completed task above `memory.baseline` lacks its stamp (`tools/memory/
+  update.py --check`), and the Stop hook will not let the session end while
+  either debt stands. Neither debt check reads what is in flight: a finished
+  task's documentation is owed whether or not a neighbour is parked, which is
+  precisely the conflation that switched both of them off (task-0072). Two
+  behaviours to know rather than infer, stated as behaviour because no decision
+  record explains either: the `pretool_gate.py` edit freeze does not engage
+  while a run sits in an editing stage that is not `blocked`, so a blocked run
+  does not suppress it; and the Stop hook reports the debt only after it has
+  declined to drive an in-flight run, then repeats up to three stops before
+  handing it to the CEO and going quiet.
 - **Gate failure.** The owning agent fixes and re-runs; after the retry budget
   (`pipeline.json`), the task is parked `blocked` and surfaced to the CEO.
 - **Self-learning.** At each stage/session end, capture lessons per
