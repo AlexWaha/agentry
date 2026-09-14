@@ -343,7 +343,6 @@ dispatch its size.
 | `documentation.md` | Not core: the main thread never uses it; moves to 16 agents in commit 8. |
 | `human-voice.md` | Not core: the main thread never uses it; moves to 13 agents in commit 7. |
 | `i18n.md` | Not core: the main thread never uses it; moves to 8 agents in commit 3. |
-| `mobile.md` | Not core: the main thread never uses it; moves to 3 agents in commit 2. |
 | `task-creation.md` | Mandated by FR-30; the orchestrator formalizes the CEO's ask into task files and runs the cross-layer impact check itself. |
 | `code-retrieval.md` | 2,114 bytes; the orchestrator answers codebase questions between dispatches, and rule 2 (N-of-N reading of the `.claude` tree) governs how it reads the roster and the task folders. |
 | `self-learning.md` | Mandated by FR-30; the distill-and-stamp loop after every task and lesson capture from agent reports are the orchestrator's and cannot be delegated. |
@@ -363,7 +362,6 @@ dispatch its size.
 @rules/documentation.md
 @rules/human-voice.md
 @rules/i18n.md
-@rules/mobile.md
 @rules/task-creation.md
 @rules/code-retrieval.md
 @rules/self-learning.md

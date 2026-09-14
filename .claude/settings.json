@@ -34,7 +34,8 @@
     ]
   },
   "claudeMdExcludes": [
-    "**/.claude/rules/business-standards.md"
+    "**/.claude/rules/business-standards.md",
+    "**/.claude/rules/mobile.md"
   ],
   "hooks": {
     "SessionStart": [

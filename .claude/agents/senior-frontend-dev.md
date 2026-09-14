@@ -15,6 +15,8 @@ skills:
   - feature-scaffold
   - frontend-standards
   - bug-fix
+rules:
+  - mobile.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"
