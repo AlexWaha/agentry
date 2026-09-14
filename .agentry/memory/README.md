@@ -20,14 +20,27 @@ the distillation SOURCE for the rows below.
 ## Retrieval (what an agent actually receives)
 
 `SubagentStart` hooks in `.claude/settings.json` run
-`tools/memory/inject.py --kinds <kinds> --limit <n>`. The hook takes the dispatch
-text (the subagent prompt, falling back to the in-flight task file), turns it
-into an FTS5 query, and injects the top-ranked rows - never a file head. The
-injected block states its row count, so a thin result is visible instead of
-silent, and the whole block is capped by `memory.inject_budget_bytes` in
-`.agentry/pipeline.json` (default 3800), each row by `memory.inject_row_chars`
-(default 700). An unusable value falls back to the default and still injects.
-Zero matches inject nothing.
+`tools/memory/inject.py --kinds <kinds> --limit <n>`. The hook takes the text of
+the in-flight task file(s) under `.agentry/tasks/active/`, turns it into an FTS5
+query, and injects the top-ranked rows - never a file head. The injected block
+states its row count, so a thin result is visible instead of silent, and the
+block is capped by `memory.inject_budget_bytes` in `.agentry/pipeline.json`
+(default 3800), each row by `memory.inject_row_chars` (default 700). An unusable
+value falls back to the default and still injects. Zero matches inject nothing
+at all - not an empty envelope.
+
+The task file is the query because it is the only text available: the
+`SubagentStart` payload is the session fields plus `hook_event_name`,
+`agent_id` and `agent_type`, and carries no prompt (task-0081; before it this
+paragraph claimed the subagent prompt with a task-file fallback, and the
+fallback was the only branch that ever ran).
+
+Delivery is the documented envelope, `{"hookSpecificOutput": {"hookEventName":
+"SubagentStart", "additionalContext": "<block>"}}`, emitted with
+`json.dumps`'s default `ensure_ascii=True` so a cp1252 stdout cannot choke on
+the arrows and Cyrillic in the store. Plain stdout is DISCARDED on this event.
+The budget above measures the BLOCK inside that envelope; the JSON scaffolding
+and escaping sit outside it, so the emitted object runs a little larger.
 
 A missing, empty or corrupt store injects nothing and exits 0. Retrieval never
 blocks a dispatch.

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""SubagentStart retrieval - queries the memory store with the dispatched task.
+"""SubagentStart retrieval - queries the memory store with the active task text.
 
-Wired in .claude/settings.json (SubagentStart hooks, matcher per agent type).
-Whatever this prints lands in the dispatched subagent's context:
+Wired in .claude/settings.json (SubagentStart hooks, matcher per agent type):
 
   --kinds lesson,pattern,module   planning agents (map + patterns + lessons)
   --kinds lesson,pattern          spec-writing agents
@@ -10,18 +9,49 @@ Whatever this prints lands in the dispatched subagent's context:
 
 This used to print the HEAD of a markdown layer file under a line cap, so an
 agent received whatever sat at the top of the file - on a real project 37k
-tokens of lessons before it read a line of code. Now the dispatch text (the
-subagent prompt, plus the active task file as a fallback) is the query, the
-store ranks rows against it with FTS5/bm25, and only the top matches go in,
-under a hard byte budget.
+tokens of lessons before it read a line of code. Now the store ranks rows
+against the task text with FTS5/bm25 and only the top matches go in, under a
+hard byte budget. The injected block states its row count: a thin result must
+be visible, not silent. Zero matches print nothing at all.
 
-The injected block states its row count: a thin result must be visible, not
-silent. Zero matches print nothing at all.
+Delivery is the JSON envelope, not plain stdout (task-0081):
+
+  {"hookSpecificOutput": {"hookEventName": "SubagentStart",
+                          "additionalContext": "<block>"}}
+
+Claude Code DISCARDS plain stdout on SubagentStart - only
+`hookSpecificOutput.additionalContext` reaches the dispatched agent (binary
+2.1.269 declares exactly that key for this event, and the ponytail plugin's
+own hook carries the same comment). This file printed the block raw from the
+day it was written, so retrieval delivered nothing to anybody: measured by a
+probe agent that reported `## Project memory:` absent from its own context
+while a sibling hook using the envelope was present. `json.dumps` runs with
+its default ensure_ascii=True on purpose - the store holds arrows and
+Cyrillic, and a cp1252 stdout on Windows would raise UnicodeEncodeError into
+main()'s blanket handler, recreating exactly this silent no-op.
+
+The QUERY IS THE ACTIVE TASK FILE(S), never the dispatch prompt. The live
+SubagentStart payload is {session_id, transcript_path, cwd, prompt_id?,
+permission_mode?, hook_event_name, agent_id, agent_type} - the binary builds
+it from the session fields plus those three, and there is no prompt,
+description or task field in it at all. A previous `payload_text()` scanned
+eight candidate key spellings and therefore always returned "", falling
+through to the task file silently; it is gone rather than kept as
+forward-compatible decoration, because that fallback is what hid the missing
+envelope. The parent transcript at transcript_path does hold the dispatch
+text, but parsing an undocumented internal JSONL inside a 10s hook to
+paraphrase the task file was rejected as cost without a measured gain.
 
 Both size caps are configuration, not literals: `memory.inject_budget_bytes`
 and `memory.inject_row_chars` in .agentry/pipeline.json (contract C-5). The
 values below are the defaults used when a key is absent or unusable - the dial
 FR-35's measurement turns must be turnable without a code edit.
+`inject_budget_bytes` caps the BLOCK INSIDE the envelope; the JSON scaffolding
+and escaping sit outside it, so the emitted object is always somewhat larger
+than the budget. The alternative (capping the whole object) would make the
+delivered context shrink by an amount that depends on how many newlines and
+non-ASCII characters the matched rows happen to hold, and would silently
+invalidate task-0011's measurement of 3565 against the 3800-byte ceiling.
 
 Fail-open by contract: a missing, empty or corrupt store injects nothing and
 exits 0. A missing, non-integer or absurd budget value falls back to the
@@ -50,11 +80,10 @@ sys.path.insert(0, str(HERE.parent))
 import memory
 import state
 
-DEFAULT_BUDGET_BYTES = 3800  # the whole injected block, hard ceiling
+DEFAULT_BUDGET_BYTES = 3800  # the block INSIDE the envelope, hard ceiling
 DEFAULT_ROW_CHARS = 700      # per-row cap before the budget trims rows
-QUERY_KEYS = ("prompt", "description", "task", "message", "input", "instructions",
-              "agent_prompt", "subagent_prompt")
 TASK_TEXT_CHARS = 4000
+HOOK_EVENT = "SubagentStart"
 
 KIND_LABEL = {"lesson": "lesson", "pattern": "pattern", "module": "module"}
 
@@ -83,24 +112,13 @@ def cfg_int(key: str, default: int) -> int:
     return raw
 
 
-def payload_text(payload: dict) -> str:
-    """Dispatch text from the hook payload. Field spelling differs across
-    harness versions, so try every known key rather than one."""
-    parts = []
-    for key in QUERY_KEYS:
-        val = payload.get(key)
-        if isinstance(val, str) and val.strip():
-            parts.append(val)
-        elif isinstance(val, dict):
-            for v in val.values():
-                if isinstance(v, str) and v.strip():
-                    parts.append(v)
-    return "\n".join(parts)
-
-
 def active_task_text() -> str:
-    """Fallback query source: the in-flight task file(s). A payload without the
-    prompt would otherwise query on nothing and inject nothing useful."""
+    """The query source: the in-flight task file(s) under .agentry/tasks/active/.
+
+    This is the ONLY query text available to this hook - see the module
+    docstring on what the SubagentStart payload actually carries. Each file is
+    read up to TASK_TEXT_CHARS, which is well past the point where fts_terms()
+    stops taking terms."""
     try:
         chunks = []
         for path in sorted(ACTIVE_DIR.glob("task-*.md")):
@@ -111,12 +129,13 @@ def active_task_text() -> str:
 
 
 def head_line(shown: int, matched: int, terms: list) -> str:
-    count = (f"{shown} row(s) matched this dispatch" if shown == matched
+    count = (f"{shown} row(s) matched the active task" if shown == matched
              else f"{shown} of {matched} matching row(s) (byte budget)")
     return (f"## Project memory: {count}\n"
-            f"Ranked from .agentry/memory/memory.db (query terms: "
-            f"{', '.join(terms[:8])}). Apply a matching FIX before acting; "
-            f"record new lessons with .claude/tools/memory/memory.py --record.")
+            f"Ranked from .agentry/memory/memory.db against the active task "
+            f"file(s) (query terms: {', '.join(terms[:8])}). Apply a matching "
+            f"FIX before acting; record new lessons with "
+            f".claude/tools/memory/memory.py --record.")
 
 
 def render(hits: list, terms: list) -> str:
@@ -142,19 +161,17 @@ def main(argv=None) -> int:
     parser.add_argument("--db", default="")
     args = parser.parse_args(argv)
 
+    # Drain the payload and discard it. It is read only so the parent's write
+    # completes; nothing in it is a query (module docstring), and parsing it
+    # would only re-create the fallback that hid the missing envelope.
     try:
-        raw = sys.stdin.read() if not sys.stdin.isatty() else ""
+        if not sys.stdin.isatty():
+            sys.stdin.read()
     except Exception:
-        raw = ""
-    try:
-        payload = json.loads(raw) if raw.strip() else {}
-        if not isinstance(payload, dict):
-            payload = {}
-    except ValueError:
-        payload = {}
+        pass
 
     try:
-        text = payload_text(payload) or active_task_text()
+        text = active_task_text()
         if not text.strip():
             return 0
         kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
@@ -166,7 +183,11 @@ def main(argv=None) -> int:
         finally:
             conn.close()
         if hits:
-            print(render(hits, memory.fts_terms(text)))
+            # The envelope, not raw stdout: plain text is discarded on this
+            # event. ensure_ascii stays at its default - see the docstring.
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": HOOK_EVENT,
+                "additionalContext": render(hits, memory.fts_terms(text))}}))
     except Exception:
         pass  # fail-open: retrieval never blocks a dispatch
     return 0
