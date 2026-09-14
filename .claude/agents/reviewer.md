@@ -14,6 +14,7 @@ mcpServers:
 skills:
   - deep-review
 rules:
+  - api-conventions.md
   - i18n.md
 hooks:
   PreToolUse:

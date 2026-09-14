@@ -13,6 +13,7 @@ skills:
   - api-design
   - db-design
 rules:
+  - api-conventions.md
   - mobile.md
 hooks:
   PreToolUse:

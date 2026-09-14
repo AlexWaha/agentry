@@ -335,7 +335,6 @@ dispatch its size.
 | `coding-style.md` | Not core: the main thread never uses it; moves to 6 agents in commit 12. |
 | `architecture.md` | Not core: the main thread never uses it; moves to 8 agents in commit 9. |
 | `testing.md` | Not core: the main thread never uses it; moves to 4 agents in commit 10. |
-| `api-conventions.md` | Not core: the main thread never uses it; moves to 3 agents in commit 5. |
 | `security.md` | Not core: the main thread never uses it; moves to 8 agents in commit 11. |
 | `performance.md` | Not core: the main thread never uses it; moves to 6 agents in commit 6. |
 | `git-workflow.md` | The orchestrator is the only thread that branches, commits, merges (solo mode) and pushes; the pre-commit gate order, the branch-base check, the push-approval rule and the deploy-actions report are its procedure. |
@@ -352,7 +351,6 @@ dispatch its size.
 @rules/coding-style.md
 @rules/architecture.md
 @rules/testing.md
-@rules/api-conventions.md
 @rules/security.md
 @rules/performance.md
 @rules/git-workflow.md

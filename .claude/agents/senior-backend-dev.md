@@ -15,6 +15,7 @@ skills:
   - feature-scaffold
   - bug-fix
 rules:
+  - api-conventions.md
   - i18n.md
 hooks:
   PreToolUse:
