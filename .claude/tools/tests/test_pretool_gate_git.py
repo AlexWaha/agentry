@@ -7,7 +7,9 @@ allowed" - a claim about handle_bash() driven by real git plumbing, not about
 matches_c2() or planning_only_commit() in isolation. This file drives
 handle_bash() against throwaway git repos created with the real `git` binary.
 
-Standard library only: subprocess + tempfile create and manipulate the repos.
+Standard library only: subprocess and the real `git` binary create and
+manipulate the repos. Where they are created is decided in tmproot.py, inside
+the project - never the host temp directory (task-0069).
 """
 
 from __future__ import annotations
@@ -17,16 +19,18 @@ import io
 import json
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
 PIPELINE_DIR = Path(__file__).resolve().parents[1] / "pipeline"
+TESTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(PIPELINE_DIR))
+sys.path.insert(0, str(TESTS_DIR))
 
 import agent_gate
 import pretool_gate
 import state
+import tmproot
 
 
 def run_git(args: list, cwd: str) -> subprocess.CompletedProcess:
@@ -52,25 +56,29 @@ def gate_state(mode: str | None = None, push_approval: bool | None = None,
     if push_approval is not None:
         workflow["push_needs_approval"] = push_approval
     cfg = {"workflow": workflow} if workflow else {}
-    with tempfile.TemporaryDirectory() as tmp:
-        state.STATE_DIR = Path(tmp)
-        state.DB_PATH = Path(tmp) / "run.db"
-        state.load_pipeline = lambda: cfg
-        try:
-            if db_is_dir:
-                state.DB_PATH.mkdir()
-            else:
-                conn = state.connect()
-                try:
-                    for task, fields in (runs or {}).items():
-                        state.create_run(conn, task, "feature", "ready")
-                        if fields:
-                            state.set_fields(conn, task, **fields)
-                finally:
-                    conn.close()
-            yield
-        finally:
-            state.load_pipeline, state.DB_PATH, state.STATE_DIR = original
+    # The state directory is project-local, which also means the supervisor's
+    # lock path (state.STATE_DIR / supervisor*.lock) can never be written into
+    # the user profile from here - the leak task-0069 was raised for.
+    tmp = tmproot.mkdtemp("gate_state_")
+    state.STATE_DIR = tmp
+    state.DB_PATH = tmp / "run.db"
+    state.load_pipeline = lambda: cfg
+    try:
+        if db_is_dir:
+            state.DB_PATH.mkdir()
+        else:
+            conn = state.connect()
+            try:
+                for task, fields in (runs or {}).items():
+                    state.create_run(conn, task, "feature", "ready")
+                    if fields:
+                        state.set_fields(conn, task, **fields)
+            finally:
+                conn.close()
+        yield
+    finally:
+        state.load_pipeline, state.DB_PATH, state.STATE_DIR = original
+        tmproot.rmtree(tmp)
 
 
 def denial_reason(command: str, cwd: str) -> tuple:
@@ -85,18 +93,25 @@ def denial_reason(command: str, cwd: str) -> tuple:
 class TempRepo:
     """A throwaway git repo, deleted on exit. The initial branch is always
     named 'main' regardless of the host's git config, so tests are
-    deterministic across machines."""
+    deterministic across machines.
+
+    A REAL repo, deliberately: this file drives the branch-base gate, and
+    `merge-base --is-ancestor`, the current branch name and the reachability of
+    a `[task-id]` commit are questions only git answers. It lives under
+    tmproot.TMP_ROOT, inside the project - `with` guarantees the delete, and
+    tmproot.rmtree raises instead of ignoring a failure.
+    """
 
     def __enter__(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self.path = self._tmp.name
+        self._dir = tmproot.mkdtemp("gate_repo_")
+        self.path = str(self._dir)
         run_git(["init", "-q", "-b", "main"], self.path)
         run_git(["config", "user.email", "qa@example.com"], self.path)
         run_git(["config", "user.name", "QA"], self.path)
         return self
 
     def __exit__(self, *exc) -> None:
-        self._tmp.cleanup()
+        tmproot.rmtree(self._dir)
 
     def write(self, *names: str) -> None:
         for name in names:
@@ -349,24 +364,24 @@ class BootstrapNonRepoFirstCandidateTest(unittest.TestCase):
     grants a bootstrap exemption, turning this exit 2 into exit 0."""
 
     def test_first_candidate_not_a_repo_falls_through_to_bootstrap_repo(self):
-        with tempfile.TemporaryDirectory() as not_a_repo:
-            with TempRepo() as repo:
-                repo.stage("README.md")
-                command = f'git -C "{not_a_repo}" commit -m init'
-                self.assertTrue(pretool_gate.repo_bootstrap(command, repo.path, "main"))
-                code = pretool_gate.handle_bash(command, cwd=repo.path)
-            self.assertEqual(code, 0)
+        not_a_repo = tmproot.sandbox(self, "not_a_repo_")
+        with TempRepo() as repo:
+            repo.stage("README.md")
+            command = f'git -C "{not_a_repo}" commit -m init'
+            self.assertTrue(pretool_gate.repo_bootstrap(command, repo.path, "main"))
+            code = pretool_gate.handle_bash(command, cwd=repo.path)
+        self.assertEqual(code, 0)
 
     def test_non_repo_candidate_does_not_grant_exemption_to_a_mature_repo(self):
-        with tempfile.TemporaryDirectory() as not_a_repo:
-            with TempRepo() as repo:
-                repo.commit()
-                repo.checkout_new("some-branch")
-                repo.stage("app.py")
-                command = f'git -C "{not_a_repo}" commit -m work'
-                self.assertFalse(pretool_gate.repo_bootstrap(command, repo.path, "main"))
-                code = pretool_gate.handle_bash(command, cwd=repo.path)
-            self.assertEqual(code, 2)
+        not_a_repo = tmproot.sandbox(self, "not_a_repo_")
+        with TempRepo() as repo:
+            repo.commit()
+            repo.checkout_new("some-branch")
+            repo.stage("app.py")
+            command = f'git -C "{not_a_repo}" commit -m work'
+            self.assertFalse(pretool_gate.repo_bootstrap(command, repo.path, "main"))
+            code = pretool_gate.handle_bash(command, cwd=repo.path)
+        self.assertEqual(code, 2)
 
 
 class GitGlobalOptionsTest(unittest.TestCase):
@@ -388,11 +403,11 @@ class GitGlobalOptionsTest(unittest.TestCase):
     def test_dash_c_push_to_protected_branch_is_denied_from_unrelated_cwd(self):
         # The repo is reachable only through `git -C`, so this also proves the
         # branch is read from the repo the command targets, not from cwd.
-        with tempfile.TemporaryDirectory() as elsewhere:
-            with TempRepo() as repo:
-                repo.commit()
-                command = f'git -C "{repo.path}" push origin main'
-                code = pretool_gate.handle_bash(command, cwd=elsewhere)
+        elsewhere = tmproot.sandbox(self, "elsewhere_")
+        with TempRepo() as repo:
+            repo.commit()
+            command = f'git -C "{repo.path}" push origin main'
+            code = pretool_gate.handle_bash(command, cwd=str(elsewhere))
         self.assertEqual(code, 2)
 
     def test_dash_lowercase_c_config_commit_hits_the_branch_gate(self):

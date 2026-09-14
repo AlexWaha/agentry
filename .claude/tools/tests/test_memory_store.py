@@ -12,7 +12,6 @@ from __future__ import annotations
 import io
 import json
 import sys
-import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -20,10 +19,12 @@ from pathlib import Path
 TOOLS_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS_DIR / "memory"))
 sys.path.insert(0, str(TOOLS_DIR / "pipeline"))
+sys.path.insert(0, str(TOOLS_DIR / "tests"))
 
 import codebase_sync
 import inject
 import memory
+import tmproot
 import update
 
 LESSON = {
@@ -39,12 +40,11 @@ class StoreTestCase(unittest.TestCase):
     """Each test gets its own store file; nothing touches the real memory.db."""
 
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.db = Path(self.tmp.name) / "memory.db"
+        self.tmp = tmproot.sandbox(self, "memory_store_")
+        self.db = self.tmp / "memory.db"
         self._real_db = memory.DB_PATH
         memory.DB_PATH = self.db
         self.conn = memory.connect(self.db)
-        self.addCleanup(self.tmp.cleanup)
         self.addCleanup(self.conn.close)
         self.addCleanup(setattr, memory, "DB_PATH", self._real_db)
 
@@ -109,7 +109,10 @@ class FreeFormProseIsRejectedTest(StoreTestCase):
             memory.record_lesson(self.conn, **payload)
 
     def test_em_dash_is_refused(self):
-        payload = dict(LESSON, why="two channels — only the row is state")
+        # Built from the code point, not typed: this file is scanned by
+        # DashTest in test_supervisor.py, which now derives its file list
+        # from this directory, so a literal here would fail that scan.
+        payload = dict(LESSON, why="two channels " + chr(0x2014) + " only the row is state")
         with self.assertRaises(memory.MemoryError_) as ctx:
             memory.record_lesson(self.conn, **payload)
         self.assertIn("dash", str(ctx.exception))
@@ -237,7 +240,7 @@ class PostTaskGateTest(StoreTestCase):
 
     def setUp(self):
         super().setUp()
-        self.stamps = Path(self.tmp.name) / "stamps"
+        self.stamps = self.tmp / "stamps"
         self._real_stamps = update.STAMP_DIR
         update.STAMP_DIR = self.stamps
         self.addCleanup(setattr, update, "STAMP_DIR", self._real_stamps)
@@ -275,7 +278,7 @@ class PostTaskGateTest(StoreTestCase):
         self.assertTrue((self.stamps / "task-0101.json").is_file())
 
     def test_a_missing_store_cannot_block_a_stamp(self):
-        memory.DB_PATH = Path(self.tmp.name) / "absent.db"
+        memory.DB_PATH = self.tmp / "absent.db"
         code, out = self.stamp("task-0102")
         self.assertEqual(code, 0, out)
 
@@ -313,12 +316,12 @@ class InjectionTest(StoreTestCase):
 
     def test_missing_store_injects_nothing_and_exits_zero(self):
         code, out = self.run_inject({"prompt": "implement the memory store"},
-                                    ["--db", str(Path(self.tmp.name) / "absent.db")])
+                                    ["--db", str(self.tmp / "absent.db")])
         self.assertEqual(code, 0)
         self.assertEqual(out, "")
 
     def test_corrupt_store_injects_nothing_and_exits_zero(self):
-        corrupt = Path(self.tmp.name) / "corrupt.db"
+        corrupt = self.tmp / "corrupt.db"
         corrupt.write_bytes(b"this is not a database")
         code, out = self.run_inject({"prompt": "implement the memory store"},
                                     ["--db", str(corrupt)])

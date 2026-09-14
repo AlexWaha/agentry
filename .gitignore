@@ -17,6 +17,16 @@ venv/
 env/
 
 # =============================================================================
+# Test temp root
+# Every throwaway git repository and lock sandbox the suite builds (see
+# .claude/tools/tests/tmproot.py). Anchored with a leading slash so it is the
+# project root's tmp/ and nothing else. Before task-0069 these artifacts were
+# written under the host temp directory, where no check this project runs could
+# see them - twelve supervisor locks and nineteen directories accumulated in
+# the user profile unreported.
+/tmp/
+
+# =============================================================================
 # Codegraph index
 # Per-machine code knowledge graph built by the codegraph CLI.
 # =============================================================================

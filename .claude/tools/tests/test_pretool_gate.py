@@ -277,6 +277,80 @@ class RepoBootstrapOrderingTest(unittest.TestCase):
         mocked.assert_called_once()
 
 
+class ForbidDevNullGateTest(unittest.TestCase):
+    """The Unix-redirect deny, driven rather than assumed (task-0067).
+
+    The gate has existed since onboarding and `gates.forbid_dev_null` shipped as
+    `false`, so the deny at check_destructive_and_repl() never ran: the rule was
+    stated in CLAUDE.md, in rules/quality-standard.md and in the user's global
+    instructions, and enforced nowhere. It rested on everyone remembering, and
+    during this very task the orchestrator used the redirect and was allowed.
+
+    Why it matters on this host: git-bash presents a Unix-looking shell over a
+    Windows filesystem, so the redirect does not discard output - it creates a
+    literal `nul` file in the working directory.
+
+    The forbidden token is assembled from pieces on purpose. This file is read by
+    humans grepping for the pattern, and a test that has to contain the thing it
+    forbids should at least not look like an example to copy."""
+
+    UNIX_NULL = "/" + "dev" + "/" + "null"
+
+    def drive(self, command: str, flag: bool = True) -> tuple[int, str]:
+        """handle_bash() with `forbid_dev_null` forced, and stderr captured. The
+        real entry point, not the helper underneath it, so this covers the wiring
+        as well as the pattern."""
+        cfg = dict(pretool_gate.gates_cfg())
+        cfg["forbid_dev_null"] = flag
+        err = io.StringIO()
+        with unittest.mock.patch.object(pretool_gate, "gates_cfg", return_value=cfg), \
+                unittest.mock.patch("sys.stderr", err):
+            code = pretool_gate.handle_bash(f"ls foo {command}", cwd=".")
+        return code, err.getvalue()
+
+    def test_the_shipped_config_has_the_gate_switched_on(self):
+        # The flag itself, read from the project's real pipeline.json. Every
+        # other assertion here forces the value, so without this one the suite
+        # would stay green with the gate disabled again - which is exactly how
+        # it went unnoticed.
+        self.assertTrue(pretool_gate.gates_cfg().get("forbid_dev_null"),
+                        "gates.forbid_dev_null is off in .agentry/pipeline.json")
+
+    def test_every_unix_redirect_spelling_is_denied_with_the_reason(self):
+        for form in (f">{self.UNIX_NULL} 2>&1", f"2>{self.UNIX_NULL}",
+                     f"&>{self.UNIX_NULL}", f"> {self.UNIX_NULL}"):
+            with self.subTest(redirect=form):
+                code, msg = self.drive(form)
+                self.assertEqual(2, code)
+                # The message has to say WHY, or the next person just works
+                # around it. It names the environment and the alternative.
+                self.assertIn("literal `nul` file", msg)
+                self.assertIn("NUL", msg)
+
+    def test_a_command_without_the_redirect_is_allowed(self):
+        # The control: without it every assertion above could pass because
+        # handle_bash denies `ls` for some unrelated reason.
+        for command in ("", "> out.txt 2>&1", "| head -5"):
+            with self.subTest(command=command):
+                self.assertEqual(0, self.drive(command)[0])
+
+    def test_the_windows_native_forms_the_rule_permits_still_pass(self):
+        # The rule says to use these instead, so the deny must not catch them.
+        # It does not: the check is a substring test for the Unix path, and
+        # `NUL` is a device name with no slash in it.
+        for form in ("2>NUL", ">NUL", ">NUL 2>&1"):
+            with self.subTest(redirect=form):
+                self.assertEqual(0, self.drive(form)[0])
+
+    def test_the_flag_is_what_denies_it_and_not_some_other_rule(self):
+        # With the flag off, the identical command is allowed. This is what
+        # makes the deny attributable to this gate rather than to the
+        # destructive-pattern list or anything else in the chain.
+        command = f">{self.UNIX_NULL} 2>&1"
+        self.assertEqual(2, self.drive(command, flag=True)[0])
+        self.assertEqual(0, self.drive(command, flag=False)[0])
+
+
 class MainFailOpenTest(unittest.TestCase):
     """NFR-4: an internal error in the gate allows the action rather than
     bricking the session. Forces a real exception inside main()'s dispatch and

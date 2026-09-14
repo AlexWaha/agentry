@@ -26,25 +26,24 @@ from __future__ import annotations
 
 import io
 import json
-import os
-import shutil
-import stat
 import subprocess
 import sys
-import tempfile
 import unittest
 import unittest.mock
 from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 
 PIPELINE_DIR = Path(__file__).resolve().parents[1] / "pipeline"
+TESTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(PIPELINE_DIR))
+sys.path.insert(0, str(TESTS_DIR))
 
 import advance
 import approve
 import git_state
 import state
 import stop_gate
+import tmproot
 
 # The stock build flow, as a literal: these tests must keep asserting against a
 # known stage list even when .agentry/pipeline.json is edited.
@@ -76,7 +75,8 @@ class _FakeConn:
         pass
 
 
-def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None) -> str | None:
+def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
+                set_fields=None) -> str | None:
     """stop_gate.decide() over a synthetic run set. Returns the block reason, or
     None when the hook allowed the stop. No DB, no git, no task files.
 
@@ -91,7 +91,8 @@ def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None) -> str 
             unittest.mock.patch.object(stop_gate.state, "all_runs", return_value=runs), \
             unittest.mock.patch.object(stop_gate.state, "load_pipeline",
                                        return_value=pipeline or {}), \
-            unittest.mock.patch.object(stop_gate.state, "set_fields"), \
+            unittest.mock.patch.object(stop_gate.state, "set_fields",
+                                       set_fields or unittest.mock.MagicMock()), \
             unittest.mock.patch.object(stop_gate, "read_backlog", return_value=queue), \
             unittest.mock.patch.object(stop_gate, "handoff_debt", return_value=[]), \
             unittest.mock.patch.object(stop_gate, "memory_debt", return_value=[]), \
@@ -125,14 +126,69 @@ class FreeSlotTest(unittest.TestCase):
         # the hook told the orchestrator to start task-0003, then task-0002.
         self.assertIsNone(decide_with([run(stage="done", awaiting_human="merge")]))
 
-    def test_blocked_run_offers_nothing(self):
+    def test_blocked_run_offers_nothing_and_is_surfaced_once(self):
+        # A blocked run never frees the slot - that is this test's original
+        # guarantee and it is unchanged. What changed in task-0067: it is also
+        # SURFACED on the first stop instead of being skipped in silence, which
+        # is how a blocked run went ninety minutes with neither watchdog saying
+        # a word. The marker that makes it once rather than a stop loop is
+        # `awaiting_human`, set on that first stop.
         reason = decide_with([run(stage="implement", status=state.ST_BLOCKED)])
-        self.assertIsNone(reason)
+        self.assertIsNotNone(reason)
+        self.assertIn("task-0001 is parked BLOCKED", reason)
+        self.assertIn("--reject", reason)
+        self.assertNotIn("Start the next ready task", reason)
+
+        # Second stop, with the marker the first one wrote: silent, and still no
+        # new task offered.
+        self.assertIsNone(decide_with([run(stage="implement", status=state.ST_BLOCKED,
+                                           awaiting_human=stop_gate.AWAITING_BLOCKED)]))
+
+    def test_surfacing_a_blocked_run_records_the_marker_that_bounds_it(self):
+        # Without the write, the surfacing above would repeat on every stop and
+        # the session could never end: the marker is the whole difference
+        # between raising it once and a stop loop.
+        with unittest.mock.patch.object(stop_gate.state, "set_fields") as set_fields:
+            decide_with([run(stage="implement", status=state.ST_BLOCKED)],
+                        set_fields=set_fields)
+        self.assertEqual(1, set_fields.call_count)
+        self.assertEqual(stop_gate.AWAITING_BLOCKED,
+                         set_fields.call_args.kwargs["awaiting_human"])
 
     def test_editing_run_is_still_driven_not_replaced(self):
         # Unchanged behaviour guard: an in-flight editing stage is continued.
         reason = decide_with([run(stage="implement")])
         self.assertIn("task-0001 is at stage 'implement'", reason)
+
+
+class BlockedRunIsVisibleAtSessionStartTest(unittest.TestCase):
+    """The second surface of the same `awaiting_human` write (task-0067, D-2).
+
+    The Stop hook owns surfacing a blocked run mid-session, because its output is
+    the only one that reaches the live session. This covers the other end: a
+    session that STARTS with a run already parked blocked. The resume summary ran
+    at SessionStart all along, but it printed the blocked run as one more
+    in-flight line under "Drive these through the pipeline via advance.py" - and
+    advance.py refuses to move a blocked run, so the only line about the run that
+    most needed attention was wrong advice."""
+
+    def resume(self, runs: list[dict]) -> str:
+        with unittest.mock.patch.object(state, "all_runs", return_value=runs):
+            return state._resume_text(_FakeConn())
+
+    def test_a_blocked_run_is_named_as_needing_the_ceo(self):
+        text = self.resume([run(stage="implement", status=state.ST_BLOCKED,
+                                awaiting_human="blocked")])
+        self.assertIn("BLOCKED, needs the CEO", text)
+        self.assertIn("task-0001", text)
+        self.assertIn("--reject", text)
+
+    def test_an_ordinary_run_gets_no_blocked_line(self):
+        # The control: the callout must not fire on every resume, or it stops
+        # meaning anything.
+        text = self.resume([run(stage="implement")])
+        self.assertIn("task-0001", text)
+        self.assertNotIn("BLOCKED", text)
 
 
 class BusyMarkerTest(unittest.TestCase):
@@ -233,16 +289,6 @@ class MergeEvidenceTest(unittest.TestCase):
         self.assertIn("does not carry this task yet", out["message"])
 
 
-def _rmtree(path: Path) -> None:
-    """Delete a throwaway git repo. Git's object files are read-only, which
-    plain rmtree cannot remove on Windows."""
-    def _force(func, target, _exc):
-        os.chmod(target, stat.S_IWRITE)
-        func(target)
-
-    shutil.rmtree(path, onerror=_force)
-
-
 class LocalMergeDetectionTest(unittest.TestCase):
     """task-0048: merge detection read only remote refs, so in `solo` mode - the
     mode whose whole point is that the trunk is not pushed - no task could ever
@@ -256,10 +302,11 @@ class LocalMergeDetectionTest(unittest.TestCase):
     def setUp(self):
         # A fresh directory per test: git leaves its object files read-only, so a
         # shared path that failed to delete on Windows broke the NEXT test's setUp.
-        self.tmp = Path(tempfile.mkdtemp(prefix="conveyor_repo_"))
+        # sandbox() owns both halves of that - it is project-local (task-0069) and
+        # its delete clears the read-only bit instead of ignoring the failure.
+        self.tmp = tmproot.sandbox(self, "conveyor_repo_")
         self.repo = self.tmp / "work"
         self.repo.mkdir()
-        self.addCleanup(_rmtree, self.tmp)
 
         self.git("init", "-b", "main")
         self.git("config", "user.email", "test@example.com")
@@ -526,10 +573,18 @@ class StrandedStageTest(unittest.TestCase):
             self.assertEqual(state.ST_BLOCKED, row["stage_status"])
 
     def test_stop_hook_offers_nothing_while_a_run_is_stranded(self):
+        # Neither status may free the slot. The blocked one is also surfaced now
+        # (task-0067), which is not an offer of work: what this test forbids is
+        # the queue handing the tree to task-0002, and that is asserted in both
+        # subtests.
         for status in (state.ST_IN_PROGRESS, state.ST_BLOCKED):
             with self.subTest(stage_status=status):
-                self.assertIsNone(decide_with([run(stage="ghost-stage", status=status)],
-                                              pipeline=BUILD_PIPELINE))
+                reason = decide_with([run(stage="ghost-stage", status=status)],
+                                     pipeline=BUILD_PIPELINE)
+                if status == state.ST_BLOCKED:
+                    self.assertIn("parked BLOCKED", reason)
+                else:
+                    self.assertIsNone(reason)
 
     def test_an_unreadable_pipeline_disables_the_check_rather_than_stranding(self):
         # Fail-open control: with no readable stage list the hook behaves as

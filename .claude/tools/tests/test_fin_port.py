@@ -24,17 +24,16 @@ import importlib
 import io
 import json
 import os
-import shutil
-import stat
 import subprocess
 import sys
-import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
 
 PIPELINE_DIR = Path(__file__).resolve().parents[1] / "pipeline"
+TESTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(PIPELINE_DIR))
+sys.path.insert(0, str(TESTS_DIR))
 
 import agent_gate
 import artifact_gate
@@ -42,14 +41,8 @@ import git_state
 import pretool_gate
 import stack_gate
 import state
+import tmproot
 import ui_evidence
-
-
-def _force_writable(func, target, _exc):
-    """rmtree onerror: git marks its object files read-only, which makes the
-    delete fail on Windows and leaves the next run a stale directory."""
-    os.chmod(target, stat.S_IWRITE)
-    func(target)
 
 
 class StackGateTest(unittest.TestCase):
@@ -129,7 +122,7 @@ class TaskRepoTest(unittest.TestCase):
     stack_gate.py and git_state.repos_for_task()."""
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="task_repo_"))
+        self.tmp = tmproot.sandbox(self, "task_repo_")
         self.dirs = {}
         for name in ("backlog", "active", "done"):
             d = self.tmp / name
@@ -138,14 +131,6 @@ class TaskRepoTest(unittest.TestCase):
         p = unittest.mock.patch.object(state, "TASK_DIRS", self.dirs)
         p.start()
         self.addCleanup(p.stop)
-        self.addCleanup(self._clean)
-
-    def _clean(self):
-        for d in self.dirs.values():
-            for f in d.glob("*.md"):
-                f.unlink()
-            d.rmdir()
-        self.tmp.rmdir()
 
     def _write(self, task, where="active", repo_line="repo: backend", body=""):
         (self.dirs[where] / f"{task}.md").write_text(
@@ -180,7 +165,7 @@ class ReposForTaskTest(unittest.TestCase):
     unmerged work and parked it forever."""
 
     def setUp(self):
-        self.root = Path(tempfile.mkdtemp(prefix="repo_scope_"))
+        self.root = tmproot.sandbox(self, "repo_scope_")
         self.backend = self.root / "backend"
         self.frontend = self.root / "frontend"
         for d in (self.backend, self.frontend):
@@ -192,12 +177,6 @@ class ReposForTaskTest(unittest.TestCase):
                                        return_value=[self.backend, self.frontend])
         p.start()
         self.addCleanup(p.stop)
-        self.addCleanup(self._clean)
-
-    def _clean(self):
-        for d in (self.backend, self.frontend):
-            d.rmdir()
-        self.root.rmdir()
 
     def _declares(self, value):
         return unittest.mock.patch.object(state, "task_repo", return_value=value)
@@ -310,10 +289,11 @@ class LaneValidationTest(unittest.TestCase):
         branch-name check answers first with a different reason and the same
         exit 2. A test states its own preconditions. Same shape as TempRepo in
         test_pretool_gate_git.py and LocalMergeDetectionTest in
-        test_conveyor_gaps.py, including the read-only cleanup: git leaves its
-        object files read-only, which makes a plain rmtree fail on Windows.
+        test_conveyor_gaps.py, including the project-local location and the
+        read-only cleanup: git leaves its object files read-only, which makes a
+        plain rmtree fail on Windows. Both now come from tmproot.
         """
-        tmp = Path(tempfile.mkdtemp(prefix="lane_branch_"))
+        tmp = tmproot.mkdtemp("lane_branch_")
         repo = tmp / "work"
         repo.mkdir()
 
@@ -335,7 +315,7 @@ class LaneValidationTest(unittest.TestCase):
                 "the gate must read OUR branch, not the ambient one")
             yield repo
         finally:
-            shutil.rmtree(tmp, onerror=_force_writable)
+            tmproot.rmtree(tmp)
 
     def _run_gate(self, lane, command, cwd):
         # task-0049: `cwd` is required, not defaulted to state.ROOT. A default
@@ -504,16 +484,10 @@ class ModeSetFromConfigTest(unittest.TestCase):
         self.mode = mode
         # A real file rather than a patched Path method: a Path instance's
         # read_text is read-only and cannot be mocked.
-        self.tmp = Path(tempfile.mkdtemp(prefix="mode_file_"))
+        self.tmp = tmproot.sandbox(self, "mode_file_")
         p = unittest.mock.patch.object(mode, "MODE_PATH", self.tmp / "mode")
         p.start()
         self.addCleanup(p.stop)
-        self.addCleanup(self._clean)
-
-    def _clean(self):
-        for f in self.tmp.glob("*"):
-            f.unlink()
-        self.tmp.rmdir()
 
     def _stored(self, value):
         (self.tmp / "mode").write_text(value + "\n", encoding="utf-8")
@@ -582,18 +556,11 @@ class ArtifactGlobTest(unittest.TestCase):
     artifact is neither a plan nor a spec."""
 
     def setUp(self):
-        self.root = Path(tempfile.mkdtemp(prefix="artifact_glob_"))
+        self.root = tmproot.sandbox(self, "artifact_glob_")
         (self.root / "docs").mkdir()
         p = unittest.mock.patch.object(state, "ROOT", self.root)
         p.start()
         self.addCleanup(p.stop)
-        self.addCleanup(self._clean)
-
-    def _clean(self):
-        for f in (self.root / "docs").glob("*"):
-            f.unlink()
-        (self.root / "docs").rmdir()
-        self.root.rmdir()
 
     def _write(self, name, chars):
         (self.root / "docs" / name).write_text("x" * chars, encoding="utf-8")
