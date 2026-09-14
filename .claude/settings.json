@@ -40,7 +40,8 @@
     "**/.claude/rules/infrastructure.md",
     "**/.claude/rules/api-conventions.md",
     "**/.claude/rules/performance.md",
-    "**/.claude/rules/human-voice.md"
+    "**/.claude/rules/human-voice.md",
+    "**/.claude/rules/documentation.md"
   ],
   "hooks": {
     "SessionStart": [

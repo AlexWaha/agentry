@@ -15,6 +15,7 @@ skills:
 rules:
   - api-conventions.md
   - performance.md
+  - documentation.md
   - mobile.md
 hooks:
   PreToolUse:

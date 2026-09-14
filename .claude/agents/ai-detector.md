@@ -8,6 +8,7 @@ effort: low
 maxTurns: 40
 tools: Read, Grep, Bash
 rules:
+  - documentation.md
   - human-voice.md
 hooks:
   PreToolUse:

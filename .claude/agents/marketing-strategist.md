@@ -11,6 +11,7 @@ skills:
   - gtm-strategy
   - market-research
 rules:
+  - documentation.md
   - human-voice.md
   - business-standards.md
 hooks:

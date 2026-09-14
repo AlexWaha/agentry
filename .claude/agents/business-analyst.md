@@ -11,6 +11,7 @@ skills:
   - market-research
   - business-plan
 rules:
+  - documentation.md
   - human-voice.md
   - business-standards.md
 hooks:

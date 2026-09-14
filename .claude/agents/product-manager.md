@@ -11,6 +11,7 @@ skills:
   - new-epic
   - new-task
 rules:
+  - documentation.md
   - business-standards.md
 hooks:
   PreToolUse:

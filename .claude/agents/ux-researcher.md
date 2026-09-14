@@ -10,6 +10,7 @@ tools: Read, Write, Glob, Grep
 skills:
   - market-research
 rules:
+  - documentation.md
   - business-standards.md
 hooks:
   PreToolUse:

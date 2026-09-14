@@ -16,6 +16,7 @@ skills:
 rules:
   - api-conventions.md
   - performance.md
+  - documentation.md
   - human-voice.md
   - i18n.md
 hooks:
