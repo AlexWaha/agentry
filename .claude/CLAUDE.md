@@ -316,23 +316,58 @@ The `.claude/` system (rules, agents, skills) must self-improve over time.
 
 ## Rules
 
-@import rules/quality-standard.md
-@import rules/communication.md
-@import rules/coding-style.md
-@import rules/architecture.md
-@import rules/testing.md
-@import rules/api-conventions.md
-@import rules/security.md
-@import rules/performance.md
-@import rules/git-workflow.md
-@import rules/infrastructure.md
-@import rules/documentation.md
-@import rules/human-voice.md
-@import rules/i18n.md
-@import rules/mobile.md
-@import rules/task-creation.md
-@import rules/code-retrieval.md
-@import rules/self-learning.md
-@import rules/pipeline.md
-@import rules/orchestration.md
-@import rules/business-standards.md
+The list at the bottom of this section is the core set: the rules every context
+gets, main thread included. Claude Code loads them by walking `.claude/rules/`
+at session start (build 2.1.269; design record
+`.agentry/plans/2026-09-14-task-0014-rules-split-matrix.md`), and the `@rules/`
+lines name the same files as a live include so the set survives a build without
+that walk. The main thread has no frontmatter, so
+`.claude/tools/hooks/inject_rules.py` cannot serve it, and this list is what it
+runs on. A rule that leaves the list is named in `claudeMdExcludes` in
+`.claude/settings.json` - that is what stops it loading everywhere - and reaches
+only the agents whose `rules:` key declares it. Adding a rule here costs every
+dispatch its size.
+
+| Rule | Why the main thread needs it (FR-30) |
+|---|---|
+| `quality-standard.md` | The orchestrator runs the exit gates, records approvals, commits and merges; the verification discipline, the em-dash ban, the NUL cleanup and the AI-authorship ban bind it directly. |
+| `communication.md` | The checkpoint-must-be-a-card rule, the response-language rule and the subagent report format govern the orchestrator's own turns and what it pays for in every dispatch. |
+| `coding-style.md` | Not core: the main thread never uses it; moves to 6 agents in commit 12. |
+| `architecture.md` | Not core: the main thread never uses it; moves to 8 agents in commit 9. |
+| `testing.md` | Not core: the main thread never uses it; moves to 4 agents in commit 10. |
+| `api-conventions.md` | Not core: the main thread never uses it; moves to 3 agents in commit 5. |
+| `security.md` | Not core: the main thread never uses it; moves to 8 agents in commit 11. |
+| `performance.md` | Not core: the main thread never uses it; moves to 6 agents in commit 6. |
+| `git-workflow.md` | The orchestrator is the only thread that branches, commits, merges (solo mode) and pushes; the pre-commit gate order, the branch-base check, the push-approval rule and the deploy-actions report are its procedure. |
+| `infrastructure.md` | Not core: the main thread never uses it; moves to 2 agents in commit 4. |
+| `documentation.md` | Not core: the main thread never uses it; moves to 16 agents in commit 8. |
+| `human-voice.md` | Not core: the main thread never uses it; moves to 13 agents in commit 7. |
+| `i18n.md` | Not core: the main thread never uses it; moves to 8 agents in commit 3. |
+| `mobile.md` | Not core: the main thread never uses it; moves to 3 agents in commit 2. |
+| `task-creation.md` | Mandated by FR-30; the orchestrator formalizes the CEO's ask into task files and runs the cross-layer impact check itself. |
+| `code-retrieval.md` | 2,114 bytes; the orchestrator answers codebase questions between dispatches, and rule 2 (N-of-N reading of the `.claude` tree) governs how it reads the roster and the task folders. |
+| `self-learning.md` | Mandated by FR-30; the distill-and-stamp loop after every task and lesson capture from agent reports are the orchestrator's and cannot be delegated. |
+| `pipeline.md` | The stage map the orchestrator drives with `advance.py`, and the context-absorption order it must write into every dispatch prompt; every agent's workflow step 1 cites it too, so core is its cheapest home. |
+| `orchestration.md` | The orchestrator's operating loop itself (hooks, busy marker, force majeure, steering, checkpoint advice); no agent needs it, and no other channel reaches the main thread. |
+| `business-standards.md` | Not core: the main thread never uses it; moves to 9 agents in commit 1. |
+
+@rules/quality-standard.md
+@rules/communication.md
+@rules/coding-style.md
+@rules/architecture.md
+@rules/testing.md
+@rules/api-conventions.md
+@rules/security.md
+@rules/performance.md
+@rules/git-workflow.md
+@rules/infrastructure.md
+@rules/documentation.md
+@rules/human-voice.md
+@rules/i18n.md
+@rules/mobile.md
+@rules/task-creation.md
+@rules/code-retrieval.md
+@rules/self-learning.md
+@rules/pipeline.md
+@rules/orchestration.md
+@rules/business-standards.md

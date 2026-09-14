@@ -33,6 +33,7 @@
       "Write"
     ]
   },
+  "claudeMdExcludes": [],
   "hooks": {
     "SessionStart": [
       {

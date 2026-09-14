@@ -2,9 +2,12 @@
 
 FR-28 of spec-0001, contract C-7. The hook under test is the reader half: it
 resolves the `rules:` key of the dispatched agent's frontmatter and delivers
-those files. The writer half (agent files gaining the key) is task-0014, so the
-corpus test at the bottom pins the no-op: all 31 shipped agents declare nothing
-today, and the hook runs on every dispatch in between.
+those files. The writer half is task-0014 (FR-29, FR-30), and RealTreeTest at
+the bottom is its N-of-N pin: three files have to agree about every rule file -
+the core list in .claude/CLAUDE.md, the complement in claudeMdExcludes, and the
+`rules:` keys across the 31 agents - and every number below is recomputed from
+those files rather than written down, so a move that updates two of the three
+goes red instead of silently dropping a rule for everybody.
 
 Two disciplines carried from task-0011. The fail-open handler is tested on the
 paths nothing else reaches - a handler no test can reach is a handler that can
@@ -18,6 +21,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import subprocess
 import sys
 import unittest
@@ -43,6 +47,65 @@ AGENT_COUNT = 31
 # The smallest shipped rule, used where a test needs a real one and its size is
 # beside the point.
 SMALL_RULE = "code-retrieval.md"
+
+# Derived from RULES_DIR rather than from TESTS_DIR.parents[n]: .claude is the
+# rules directory's parent whatever depth this test file sits at, and the design
+# record's parents[2] is the project root, one level above the file it names.
+CLAUDE_DIR = RULES_DIR.parent
+CLAUDE_MD = CLAUDE_DIR / "CLAUDE.md"
+SETTINGS = CLAUDE_DIR / "settings.json"
+
+# A core entry: `@rules/x.md` on its own line. The optional `import ` accepts the
+# spelling this repo shipped before task-0014, which looked like an include and
+# was not one - the captured path ran to the first whitespace, so it resolved
+# .claude/import and read the rest as prose.
+CORE_RE = re.compile(r"^@(?:import[ \t]+)?rules/([A-Za-z0-9._/-]+\.md)[ \t]*$", re.MULTILINE)
+# One row of the FR-30 table: | `x.md` | reason |
+REASON_RE = re.compile(r"^\| *`([A-Za-z0-9._/-]+\.md)` *\| *(.+?) *\|$", re.MULTILINE)
+EXCLUDE_RE = re.compile(r"^\*\*/\.claude/rules/([A-Za-z0-9._/-]+\.md)$")
+
+
+def rules_section() -> str:
+    """The `## Rules` section of .claude/CLAUDE.md, to the end of the file.
+
+    Scoped so a table elsewhere in the document cannot donate a row to the FR-30
+    record, and so the core list is read where it is declared.
+    """
+    text = CLAUDE_MD.read_text(encoding="utf-8")
+    head = text.index("\n## Rules\n")
+    return text[head:]
+
+
+def core_rules() -> list[str]:
+    return CORE_RE.findall(rules_section())
+
+
+def recorded_reasons() -> dict[str, str]:
+    return dict(REASON_RE.findall(rules_section()))
+
+
+def excluded_rules() -> list[str]:
+    raw = json.loads(SETTINGS.read_text(encoding="utf-8")).get("claudeMdExcludes", [])
+    names = []
+    for entry in raw:
+        match = EXCLUDE_RE.match(entry)
+        assert match, f"claudeMdExcludes entry is not a rule exclusion: {entry!r}"
+        names.append(match.group(1))
+    return names
+
+
+def shipped_rules() -> set[str]:
+    return {p.relative_to(RULES_DIR).as_posix() for p in RULES_DIR.rglob("*.md")}
+
+
+def declarations() -> dict[str, list[str]]:
+    """Every agent's declared entries, read through the hook's own parser.
+
+    Not a fresh regex on purpose: a key the hook cannot read is a key that
+    delivers nothing, and a second parser would call that state covered.
+    """
+    return {path.stem: inject_rules.declared_rules(path.read_text(encoding="utf-8"))
+            for path in sorted(AGENTS_DIR.glob("*.md"))}
 
 
 class InjectRulesTestCase(unittest.TestCase):
@@ -453,31 +516,110 @@ class FailOpenHandlerTest(InjectRulesTestCase):
 
 
 class RealTreeTest(unittest.TestCase):
-    """Against the shipped .claude/, in a real interpreter with real stdout."""
+    """Against the shipped .claude/, in a real interpreter with real stdout.
 
-    def test_a_real_dispatch_payload_injects_nothing_today(self):
-        # Criterion 2 on real data: no shipped agent declares a rule until
-        # task-0014, and the hook fires on every dispatch in between.
+    FR-29 and FR-30 live here. The counts are recomputed from the three files on
+    every run, so the only way to satisfy them is to change all three together.
+    """
+
+    def dispatch(self, name: str):
+        """The hook in a real interpreter, fed the payload a dispatch sends."""
         hook = Path(inject_rules.__file__)
         result = subprocess.run(
             [sys.executable, str(hook)],
             input=json.dumps({"hook_event_name": "SubagentStart",
-                              "agent_id": "agent-1", "agent_type": "architect"}),
+                              "agent_id": "agent-1", "agent_type": name}),
             capture_output=True, text=True, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "", result.stdout[:500])
+        return result.stdout
+
+    def test_a_real_dispatch_payload_injects_nothing_for_an_agent_without_the_key(self):
+        # Criterion 2 on real data. evidence-collector declares only core rules,
+        # so C-7's silent path is the one it takes - no key at all, never
+        # `rules: []`, which reads as a declaration of nothing.
+        out = self.dispatch("evidence-collector")
+        self.assertEqual(out, "", out[:500])
 
     @unittest.skipUnless(AGENTS_DIR.is_dir(), "shipped agents directory not present")
-    def test_no_shipped_agent_declares_a_rule_yet(self):
-        # task-0014 replaces this with "every declared entry resolves under
-        # .claude/rules/ and appears once".
-        agents = sorted(AGENTS_DIR.glob("*.md"))
-        self.assertEqual(len(agents), AGENT_COUNT, [p.stem for p in agents])
-        for path in agents:
-            with self.subTest(agent=path.stem):
-                self.assertEqual(
-                    inject_rules.declared_rules(path.read_text(encoding="utf-8")), [])
+    def test_a_real_dispatch_payload_injects_the_declared_block(self):
+        # The other half: a real agent, a real envelope, the real rule text.
+        name = "senior-backend-dev"
+        entries = inject_rules.declared_rules(
+            (AGENTS_DIR / f"{name}.md").read_text(encoding="utf-8"))
+        if not entries:
+            self.skipTest(f"{name} declares nothing yet (scaffold commit of task-0014)")
+        block = json.loads(self.dispatch(name))["hookSpecificOutput"]["additionalContext"]
+        self.assertTrue(block.startswith(
+            f"## Agent rules: {len(entries)} of {len(entries)} declared file(s), "
+            f"from .claude/agents/{name}.md"), block[:200])
+        positions = []
+        for entry in entries:
+            label = f"Contents of .claude/rules/{entry}:"
+            self.assertIn(label, block)
+            self.assertIn((RULES_DIR / entry).read_text(encoding="utf-8").rstrip(), block)
+            positions.append(block.index(label))
+        self.assertEqual(positions, sorted(positions), "declared order is the contract")
+
+    @unittest.skipUnless(AGENTS_DIR.is_dir(), "shipped agents directory not present")
+    def test_every_shipped_declaration_resolves_once(self):
+        # Replaces test_no_shipped_agent_declares_a_rule_yet. Run through the
+        # hook's parser over the real corpus, so a mistyped key is red here.
+        declared = declarations()
+        self.assertEqual(len(declared), AGENT_COUNT, sorted(declared))
+        for agent, entries in declared.items():
+            with self.subTest(agent=agent):
+                self.assertEqual(len(entries), len(set(entries)),
+                                 f"{agent} declares a rule twice: {entries}")
+                for entry in entries:
+                    self.assertIsNotNone(inject_rules.resolve_rule(entry, RULES_DIR),
+                                         f"{agent} declares {entry}, which does not "
+                                         f"resolve under .claude/rules/")
+
+    @unittest.skipUnless(AGENTS_DIR.is_dir(), "shipped agents directory not present")
+    def test_no_agent_declares_a_core_rule(self):
+        core = set(core_rules())
+        for agent, entries in declarations().items():
+            with self.subTest(agent=agent):
+                overlap = sorted(set(entries) & core)
+                self.assertFalse(overlap,
+                                 f"{agent} declares core rule(s) {overlap}: the "
+                                 f".claude/rules/ walk already delivers them, so the "
+                                 f"hook would inject a second copy")
+
+    @unittest.skipUnless(RULES_DIR.is_dir(), "shipped rules directory not present")
+    def test_rules_dir_is_covered_n_of_n(self):
+        # FR-29, counted rather than sampled.
+        core = set(core_rules())
+        declared = set().union(*declarations().values()) if AGENTS_DIR.is_dir() else set()
+        shipped = shipped_rules()
+        self.assertEqual(len(shipped), len(core | declared))
+        self.assertEqual(shipped, core | declared,
+                         f"orphaned or dangling: {sorted(shipped ^ (core | declared))}")
+        self.assertLessEqual(core, shipped, f"core names a missing file: {core - shipped}")
+        self.assertLessEqual(shipped - core, declared,
+                             f"removed from the core list and declared by nobody: "
+                             f"{sorted((shipped - core) - declared)}")
+
+    def test_claude_md_excludes_is_the_complement_of_the_core_set(self):
+        excluded = excluded_rules()
+        self.assertEqual(len(excluded), len(set(excluded)), excluded)
+        self.assertEqual(set(excluded), shipped_rules() - set(core_rules()),
+                         "a rule off the core list still loads everywhere until "
+                         "claudeMdExcludes names it")
+
+    def test_every_core_rule_has_a_recorded_reason(self):
+        # FR-30: one recorded reason per retained entry, and the two the task
+        # names by hand because they bind the orchestrator directly.
+        reasons = recorded_reasons()
+        core = set(core_rules())
+        self.assertEqual(set(reasons), core,
+                         f"the FR-30 table and the core list disagree: "
+                         f"{sorted(set(reasons) ^ core)}")
+        for rule, reason in reasons.items():
+            with self.subTest(rule=rule):
+                self.assertTrue(reason.strip(), rule)
+        self.assertLessEqual({"self-learning.md", "task-creation.md"}, core)
 
     @unittest.skipUnless(RULES_DIR.is_dir(), "shipped rules directory not present")
     def test_every_shipped_rule_resolves_when_declared(self):
