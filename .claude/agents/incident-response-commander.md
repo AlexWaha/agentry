@@ -11,6 +11,8 @@ mcpServers:
   - codegraph
 skills:
   - health-check
+rules:
+  - infrastructure.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

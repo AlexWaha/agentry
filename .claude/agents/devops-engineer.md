@@ -13,6 +13,8 @@ mcpServers:
   - codegraph
 skills:
   - infrastructure
+rules:
+  - infrastructure.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

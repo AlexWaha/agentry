@@ -339,7 +339,6 @@ dispatch its size.
 | `security.md` | Not core: the main thread never uses it; moves to 8 agents in commit 11. |
 | `performance.md` | Not core: the main thread never uses it; moves to 6 agents in commit 6. |
 | `git-workflow.md` | The orchestrator is the only thread that branches, commits, merges (solo mode) and pushes; the pre-commit gate order, the branch-base check, the push-approval rule and the deploy-actions report are its procedure. |
-| `infrastructure.md` | Not core: the main thread never uses it; moves to 2 agents in commit 4. |
 | `documentation.md` | Not core: the main thread never uses it; moves to 16 agents in commit 8. |
 | `human-voice.md` | Not core: the main thread never uses it; moves to 13 agents in commit 7. |
 | `task-creation.md` | Mandated by FR-30; the orchestrator formalizes the CEO's ask into task files and runs the cross-layer impact check itself. |
@@ -357,7 +356,6 @@ dispatch its size.
 @rules/security.md
 @rules/performance.md
 @rules/git-workflow.md
-@rules/infrastructure.md
 @rules/documentation.md
 @rules/human-voice.md
 @rules/task-creation.md
