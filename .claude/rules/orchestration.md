@@ -275,6 +275,30 @@ stage transition by `advance.py` and by `approve.py --reject`, so the hour is an
 hour per stage, and a task that keeps advancing never accumulates towards the
 park at all.
 
+**`task-0019` then made that hour theoretical, and this is the number to plan
+against.** The nag text is byte-stable for a given task and stage, so the
+reason-repeat backstop sees the same sentence every time and parks the task on
+the THIRD armed repeat - roughly six minutes at a nag every two, not an hour.
+Measured on a run at `test` with the gate failed and `continuation_ceiling` at
+30: stops one and two printed the demand, stop three parked, and `continuations`
+never exceeded 4. The practical consequences, in order of how likely they are to
+bite:
+
+- **`continuation_ceiling` no longer bites on a stable reason at all.** An
+  operator who tunes that key to buy more patience will see no effect, because
+  the backstop fires first every time. It still governs the case the backstop
+  cannot see: a reason that CHANGES between stops, where the repeat count resets
+  and only the per-stage budget accumulates.
+- **Recovery got more expensive, so the park is not free noise.** The only exit
+  from `blocked` is `approve.py --reject`, which returns the task to `implement`
+  and clears `commit_approved`. A park at `review` therefore costs two stages of
+  rework; a park at `ready` costs an approval the CEO had already given. That
+  used to be the price of 30 unanswered nags and is now the price of 3.
+- **The bound is on the SENTENCE, not the task.** Answer the instruction, or do
+  anything that changes what the hook says, and the budget resets whole. The
+  three repeats mean three stops on which the orchestrator was told exactly what
+  to do and did not do it.
+
 **The first bullet's blast radius grew, and this is the part to know before
 setting a marker by hand.** A marker used to gate ONE branch, the in-flight
 editing stage. It now short-circuits the Stop hook ahead of everything that

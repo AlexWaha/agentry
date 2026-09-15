@@ -3,6 +3,8 @@
   "cwd": ".",
   "retry_budget": 3,
   "continuation_ceiling": 30,
+  "_stop_hook_repeat_ceiling_comment": "Read by tools/pipeline/stop_gate.py block(). How many CONSECUTIVE blocks may carry the SAME reason before the hook stops repeating it: it parks the run the reason names, or - when the reason names no run - escalates once to the CEO and then goes quiet about that sentence. Independent of continuation_ceiling, which is per run and per stage; this one is per reason and survives stage transitions, so it catches the loops no per-branch budget can see. Armed only while the hook payload's stop_hook_active is true, so every demand is uttered at least once per turn whatever its history. Three by CEO decision RQ-7: two identical blocks are a legitimate retry. A missing or unreadable key falls back to 3; a value below 1 disables the backstop and every branch reports exactly as it did before it existed, which is the fail-open direction NFR-4 wants - losing a bound is recoverable, losing the report is the silent halt.",
+  "stop_hook_repeat_ceiling": 3,
   "main_branch": "main",
   "protected_branches": ["staging", "production"],
   "branch_pattern": "{type}/{task}",

@@ -403,6 +403,264 @@ class DebtNagBoundTest(unittest.TestCase):
                                           debt=self.DEBT))
 
 
+class StopHookActiveBackstopTest(unittest.TestCase):
+    """The reason-repeat backstop: `stop_hook_active` honoured as a last resort.
+
+    task-0018 gave every one of the eleven block sites a budget, so the question
+    this class has to answer first is what is left for a backstop to catch. Two
+    things, and both are pinned below. Five of those budgets are per RUN and per
+    STAGE, so a loop that keeps the stage moving - or that never charges at all
+    because its branch re-enters before the write - spends nothing; and three
+    sites are bounded by an ARGUMENT rather than by a counter ("this can only
+    fire once", "this reconciles before it blocks", "bounding this would buy
+    silence"), which holds exactly as long as the argument does.
+
+    The danger in the other direction is the one task-0018 nearly shipped: a
+    global quiet path that silences a demand nothing else reports. So the tests
+    that matter most here are the negative ones - the blocked-run surfacing and
+    both documentation demands must survive the backstop, and a trip that has no
+    run to park must escalate rather than go quiet."""
+
+    DEBT = ({"task": "task-0067", "reason": "section 'Key decisions' is too thin"},)
+
+    def setUp(self):
+        self.PIPE = {"stop_hook_repeat_ceiling": 3}
+        self.tmp = tmproot.sandbox(self, "stoprepeat")
+        for p in (unittest.mock.patch.object(state, "STATE_DIR", self.tmp),
+                  unittest.mock.patch.object(stop_gate, "STOP_HOOK_ACTIVE", True)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.set_fields = unittest.mock.MagicMock()
+
+    def stop(self, runs, **kw) -> str | None:
+        kw.setdefault("pipeline", self.PIPE)
+        kw.setdefault("set_fields", self.set_fields)
+        return decide_with(runs, **kw)
+
+    def parked(self) -> list:
+        return [c for c in self.set_fields.call_args_list
+                if c.kwargs.get("stage_status") == state.ST_BLOCKED]
+
+    # A run that is being driven and never advances. `continuations` stays 0 in
+    # every stop because the run row is rebuilt each time - which is not an
+    # artifact of the fixture but the shape of the real gap: advance.py zeroes
+    # that column on every stage transition, so a loop that keeps transitioning
+    # never accumulates towards continuation_ceiling at all.
+    def looping_run(self) -> list[dict]:
+        return [run(stage="implement", status=state.ST_IN_PROGRESS)]
+
+    def test_the_payload_flag_is_read_instead_of_discarded(self):
+        # FR-38, the literal criterion: main() used to json.load(sys.stdin) and
+        # throw the result away, comment and all.
+        for sent, expected in ((True, True), (False, False), (None, False)):
+            with self.subTest(stop_hook_active=sent):
+                payload = json.dumps({"hook_event_name": "Stop",
+                                      "stop_hook_active": sent})
+                with unittest.mock.patch.object(stop_gate, "STOP_HOOK_ACTIVE", False), \
+                        unittest.mock.patch.object(sys, "stdin", io.StringIO(payload)), \
+                        unittest.mock.patch.object(stop_gate, "decide", return_value=0):
+                    stop_gate.main()
+                    self.assertIs(expected, stop_gate.STOP_HOOK_ACTIVE)
+
+    def test_an_unreadable_payload_leaves_the_backstop_disarmed(self):
+        # NFR-4 in the direction that matters: losing the bound keeps the hook
+        # reporting, losing the report is the silent halt.
+        for junk in ("", "{not json", "null", "[1,2,3]"):
+            with self.subTest(payload=junk):
+                with unittest.mock.patch.object(stop_gate, "STOP_HOOK_ACTIVE", True), \
+                        unittest.mock.patch.object(sys, "stdin", io.StringIO(junk)), \
+                        unittest.mock.patch.object(stop_gate, "decide", return_value=0):
+                    stop_gate.main()
+                    self.assertFalse(stop_gate.STOP_HOOK_ACTIVE)
+
+    def test_two_identical_reasons_are_a_retry_and_the_third_parks_the_run(self):
+        # RQ-7: two identical blocks are a legitimate retry. Three is a loop.
+        for n in (1, 2):
+            with self.subTest(stop=n):
+                self.assertIn("task-0001", self.stop(self.looping_run()))
+                self.assertEqual([], self.parked())
+
+        self.assertIsNone(self.stop(self.looping_run()))   # the stop is released
+        self.assertEqual(["task-0001"], [c.args[1] for c in self.parked()])
+
+    def test_the_park_is_surfaced_rather_than_silent(self):
+        # The defect task-0018 nearly shipped, in its new clothes: parking a run
+        # and saying nothing halts the conveyor with no channel reporting it. The
+        # park is only acceptable because the NEXT stop raises it by name.
+        for _ in range(3):
+            self.stop(self.looping_run())
+
+        # First, the park must not stamp `awaiting_human` itself. Step 2 surfaces
+        # only while `aw != AWAITING_BLOCKED`, so a park that set it would make
+        # the run BLOCKED and already-surfaced in one write, and the conveyor
+        # would halt in silence for ever. Asserted against the recorded call
+        # rather than through a second decide(), because set_fields is a mock:
+        # nothing the park writes is read back, so feeding a hand-built run into
+        # the next stop would keep passing even after that regression.
+        park = self.parked()[-1]
+        self.assertEqual("task-0001", park.args[1])
+        self.assertNotIn("awaiting_human", park.kwargs)
+
+        surfaced = self.stop([run(stage="implement", status=state.ST_BLOCKED)])
+        self.assertIn("task-0001 is parked BLOCKED", surfaced)
+        self.assertIn("CEO", surfaced)
+
+    def test_a_park_at_ready_is_surfaced_too(self):
+        # The awkward case, and the one the mock hides: site 1 fires only while
+        # `awaiting_human` is 'commit' or 'push', so the run charge() parks there
+        # is BLOCKED with `aw` NON-EMPTY. That is exactly the pair task-0018's
+        # Critical got wrong (`if not aw` read it as already surfaced), so the
+        # park this task adds has to be fed back in with `aw` intact.
+        ready = [run(stage="ready", awaiting_human="commit", commit_approved=1)]
+        for n in (1, 2):
+            with self.subTest(stop=n):
+                self.assertIn("checkpoint approved", self.stop(ready))
+        self.assertIsNone(self.stop(ready))
+        self.assertEqual(["task-0001"], [c.args[1] for c in self.parked()])
+
+        # The parked run, with the awaiting_human it necessarily still carries.
+        surfaced = self.stop([run(stage="ready", awaiting_human="commit",
+                                  commit_approved=1, status=state.ST_BLOCKED)])
+        self.assertIn("task-0001 is parked BLOCKED", surfaced)
+
+    def test_the_backstop_is_independent_of_the_continuation_counter(self):
+        # FR-38's last criterion. continuation_ceiling is 30 and this run has
+        # spent 0 of it on every stop, so charge() would never park it; the
+        # backstop does, on its own evidence.
+        pipe = dict(self.PIPE, continuation_ceiling=30)
+        for _ in range(3):
+            self.stop(self.looping_run(), pipeline=pipe)
+        self.assertEqual(["task-0001"], [c.args[1] for c in self.parked()])
+
+    def test_three_different_reasons_do_not_trip_it(self):
+        # The comparison is on the reason, not on the count. Three stops, three
+        # different runs, no park - otherwise a busy conveyor would park itself.
+        for task in ("task-0001", "task-0002", "task-0003"):
+            with self.subTest(task=task):
+                reason = self.stop([run(task=task, stage="implement")])
+                self.assertIn(task, reason)
+        self.assertEqual([], self.parked())
+
+    def test_alternating_reasons_never_accumulate(self):
+        # The sharper version: the same reason six times, but never twice in a
+        # row. Consecutive means consecutive.
+        for _ in range(6):
+            self.assertIsNotNone(self.stop(self.looping_run()))
+            self.assertIsNotNone(self.stop([run(task="task-0099", stage="implement")]))
+        self.assertEqual([], self.parked())
+
+    def test_the_ceiling_comes_from_pipeline_json(self):
+        # FR-38: the value 3 is config, not a literal. Prove it by moving it.
+        pipe = {"stop_hook_repeat_ceiling": 5}
+        for n in range(1, 5):
+            with self.subTest(stop=n):
+                self.assertIsNotNone(self.stop(self.looping_run(), pipeline=pipe))
+                self.assertEqual([], self.parked())
+        self.assertIsNone(self.stop(self.looping_run(), pipeline=pipe))
+        self.assertEqual(["task-0001"], [c.args[1] for c in self.parked()])
+
+    def test_a_ceiling_below_one_disables_the_backstop_entirely(self):
+        # The off switch, and the fail-open direction for a nonsense value: the
+        # hook keeps reporting forever rather than going quiet.
+        for n in range(8):
+            with self.subTest(stop=n):
+                self.assertIsNotNone(
+                    self.stop(self.looping_run(), pipeline={"stop_hook_repeat_ceiling": 0}))
+        self.assertEqual([], self.parked())
+
+    def test_a_demand_with_no_run_to_park_escalates_instead_of_going_quiet(self):
+        # Site 11's residual risk from task-0018, and both debt demands. There is
+        # nothing to park, so the trip MUST speak. Going quiet here would be the
+        # silent halt rules/orchestration.md says never to buy over noise.
+        for n in (1, 2):
+            with self.subTest(stop=n):
+                reason = self.stop([], backlog=("task-0002",))
+                self.assertIn("Start the next ready task task-0002", reason)
+
+        escalation = self.stop([], backlog=("task-0002",))
+        self.assertIn("no run to park", escalation)
+        self.assertIn("AskUserQuestion", escalation)
+        self.assertIn("Start the next ready task task-0002", escalation)
+        self.assertEqual([], self.parked())
+
+        # ONE escalation, then quiet about that exact sentence - the CEO owns it.
+        self.assertIsNone(self.stop([], backlog=("task-0002",)))
+
+    def test_it_cannot_swallow_the_blocked_run_surfacing(self):
+        # The surfacing is bounded by an ARGUMENT (one-shot, stamped into
+        # awaiting_human), not by a counter, so it is exactly what a backstop
+        # could quietly eat. It cannot: the stamp means the same sentence never
+        # occurs twice in a row, so the count never reaches the ceiling.
+        first = self.stop([run(stage="implement", status=state.ST_BLOCKED)])
+        self.assertIn("task-0001 is parked BLOCKED", first)
+        for i in range(6):
+            with self.subTest(stop=i + 2):
+                # Silent because of the stamp, and provably not because of us.
+                self.assertIsNone(self.stop(
+                    [run(stage="implement", status=state.ST_BLOCKED,
+                         awaiting_human=stop_gate.AWAITING_BLOCKED)]))
+        # The count for that sentence is stuck at its first utterance: the six
+        # silent stops never reached block(), so nothing incremented it and it
+        # cannot approach the ceiling however long the run stays parked.
+        stored = json.loads(
+            (self.tmp / stop_gate.STOP_REPEAT_FILE).read_text(encoding="utf-8"))
+        self.assertEqual(1, stored["count"])
+        self.assertIn("task-0001 is parked BLOCKED", stored["reason"])
+
+        # And a second blocked run is still surfaced after all that.
+        second = self.stop([run(task="task-0004", stage="implement",
+                                status=state.ST_BLOCKED)])
+        self.assertIn("task-0004 is parked BLOCKED", second)
+
+    def test_the_debt_demand_is_still_raised_and_its_escalation_still_lands(self):
+        # The two demands nothing else in the harness reports. The backstop may
+        # defer them; it may not replace bounded_block()'s escalation with
+        # silence. Run the real nag counter so both bounds interact for real.
+        runs = [run(stage="ready", awaiting_human="commit")]
+        seen = [self.stop(runs, debt=self.DEBT, count_nags=True) for _ in range(6)]
+        self.assertTrue(any(s and "has no valid handoff doc" in s for s in seen),
+                        "the debt was never uttered")
+        self.assertTrue(any(s and "AskUserQuestion" in s for s in seen),
+                        "the debt was swallowed before it could escalate")
+        self.assertTrue(any(s and "task-0067" in s for s in seen))
+
+    def test_the_count_survives_the_process(self):
+        # Each stop is a fresh interpreter and the payload carries no count
+        # (measured: the Stop schema is stop_hook_active + optional fields, and
+        # stopHookBlockingCount is internal). The file is the mechanism.
+        self.stop(self.looping_run())
+        stored = json.loads(
+            (self.tmp / stop_gate.STOP_REPEAT_FILE).read_text(encoding="utf-8"))
+        self.assertEqual(1, stored["count"])
+        self.assertIn("task-0001", stored["reason"])
+
+    def test_a_corrupt_counter_file_heals_instead_of_pinning_the_count(self):
+        # debt_nags() had exactly this bug: json.loads sharing the outer handler
+        # meant a file left corrupt by a killed process returned 1 for ever.
+        for junk in ("{not json", "", "[1, 2, 3]", "42"):
+            with self.subTest(junk=junk):
+                (self.tmp / stop_gate.STOP_REPEAT_FILE).write_text(junk, encoding="utf-8")
+                self.assertEqual([1, 2, 3],
+                                 [stop_gate.stop_repeats("same reason") for _ in range(3)])
+
+    def test_a_disarmed_flag_reproduces_the_unbounded_loop_it_replaces(self):
+        # The before/after in one test. With the flag discarded - which is what
+        # main() did until this task, so STOP_HOOK_ACTIVE was effectively always
+        # False - the same reason repeats with nothing counting and nothing
+        # parked. This is the defect, reproduced, not described.
+        with unittest.mock.patch.object(stop_gate, "STOP_HOOK_ACTIVE", False):
+            for i in range(12):
+                with self.subTest(stop=i):
+                    self.assertIsNotNone(self.stop(self.looping_run()))
+            self.assertEqual([], self.parked())
+            self.assertFalse((self.tmp / stop_gate.STOP_REPEAT_FILE).is_file())
+
+        # Armed, the identical sequence terminates.
+        for _ in range(3):
+            self.stop(self.looping_run())
+        self.assertEqual(["task-0001"], [c.args[1] for c in self.parked()])
+
+
 class BlockedRunSurfacingBoundTest(unittest.TestCase):
     """task-0067's bound, re-pinned because task-0072 changes the branch it
     rests on: a blocked run is surfaced ONCE and then left alone.
@@ -1320,6 +1578,13 @@ class ContinuationBoundTest(unittest.TestCase):
         src = inspect.getsource(stop_gate.decide)
         self.assertEqual(6, src.count("return block("))
         self.assertEqual(5, src.count("return bounded_block("))
+        # And none of them may reach the channel directly. block() is where the
+        # reason-repeat backstop lives (task-0019) and bounded_block() routes
+        # through it, so emit() is the one way to print a block WITHOUT a bound.
+        # Counting only the two names above would let a twelfth branch written as
+        # `return emit(...)` leave both numbers untouched and skip the backstop
+        # entirely - a bypass that did not exist before emit() got a public name.
+        self.assertEqual(0, src.count("emit("))
 
 
 class ReadyStageOccupiesTest(unittest.TestCase):
