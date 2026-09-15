@@ -34,6 +34,14 @@ a BLOCKED run (one-shot, marked by `awaiting_human`) and the drift
 reconciliation (it performs the reconciliation before blocking, so the next stop
 finds nothing left to reconcile).
 
+Behind both of those sits one backstop that trusts neither: block() counts
+CONSECUTIVE BLOCKS CARRYING THE SAME REASON and stops repeating itself at
+`stop_hook_repeat_ceiling`, whatever branch produced them. It catches the
+repeats no per-branch budget can see - a site bounded by an argument rather
+than by a counter, a budget zeroed faster than it is spent, and a twelfth
+branch nobody classified. It is armed only while the harness's own
+`stop_hook_active` flag says this hook is already inside a stop loop.
+
 Fail-open: any error allows the stop (never trap the user in a loop).
 
 Hook output: print {"decision":"block","reason":...} to block; print nothing to
@@ -92,12 +100,63 @@ DEBT_NAG_FILE = "debt-nag.json"
 # reintroduces exactly that.
 RECONCILED_PREFIXES = ("handoff:", "memory:")
 
+# Where the reason-repeat backstop keeps its count, and what it defaults to when
+# `stop_hook_repeat_ceiling` is missing from pipeline.json. Three, not two, by
+# CEO decision RQ-7: two identical blocks are a legitimate retry, and a backstop
+# that trips on a retry cuts off work that was about to succeed.
+STOP_REPEAT_FILE = "stop-repeat.json"
+STOP_REPEAT_CEILING_DEFAULT = 3
+
+# Set by main() from the hook payload's `stop_hook_active`, which Claude Code
+# sends as a plain boolean: true on every Stop invocation that is a RE-ENTRY
+# after this hook already blocked once in the current turn.
+#
+# Measured in the 2.1.269 binary rather than assumed, because four documented
+# harness behaviours in this project turned out to differ in the build:
+#
+#   - The payload schema (offset 187320454) is `hook_event_name:"Stop",
+#     stop_hook_active:<bool>, last_assistant_message?, background_tasks?,
+#     session_crons?`. There is no count in it. The count exists internally as
+#     `stopHookBlockingCount` and is never sent, which is why the bound below
+#     has to persist its own - the same reason debt_nags() states.
+#   - Claude Code has a cap of its own (offset 193551378):
+#     `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP ?? 8`, after which it prints "A hook
+#     blocked the turn from ending N consecutive times, overriding and ending
+#     turn". DO NOT read that as "the loop is already bounded at 8, so this file
+#     need not be" - it is not, and deleting the backstop on that reading would
+#     leave nothing. The cap compares against `stopHookBlockingCount`, and the
+#     `next_turn` transition (offset 193561819, verbatim
+#     `transition:{reason:"next_turn"}`) re-enters with `stopHookBlockingCount:
+#     0` after every tool round. So the vendor cap counts only blocks with NO
+#     intervening tool use, and the conveyor's actual shape - block, the model
+#     runs advance.py, stop, block - zeroes it on every iteration and never
+#     approaches 8. The backstop below is therefore both the park AND the
+#     record, and the only boundary that fires on a real loop.
+#   - The flag is STICKIER than that internal count, and this is the fact that
+#     decides where it may be read. The same `next_turn` path, and the other
+#     non-block continuations (offsets 193546604, 193547939, 193548553,
+#     193549335, 193550215), all carry `stopHookActive: yo` through unchanged
+#     while resetting the count. So once anything has blocked in a turn, the flag
+#     stays true for every later Stop in that turn even after the model has done
+#     real work in between - which is precisely the case the conveyor lives in.
+#     Treating it as "stay quiet" would mute this hook for the rest of every turn
+#     after its first nudge. It is a qualifier on parking, never a mute.
+STOP_HOOK_ACTIVE = False
+
+# What decide() is holding when block() is reached, so the backstop can park the
+# looping run without re-opening the database or threading a parameter through
+# eleven call sites. A single-shot CLI process with exactly one decide() call is
+# the only reason a module global is honest here; an empty context simply means
+# "nothing to park", which is the case for every block() outside decide().
+_CTX: dict = {"conn": None, "runs": ()}
+
 BACKLOG_DIR = state.BACKLOG_DIR
 ACTIVE_DIR = state.ACTIVE_DIR
 DONE_DIR = state.DONE_DIR
 
 
-def block(reason: str) -> int:
+def emit(reason: str) -> int:
+    """Actually block the stop. The only writer of the hook's one channel."""
     print(json.dumps({"decision": "block", "reason": reason}))
     return 0
 
@@ -105,6 +164,140 @@ def block(reason: str) -> int:
 def allow() -> int:
     # No output -> Claude Code stops normally.
     return 0
+
+
+def stop_repeats(reason: str) -> int:
+    """How many consecutive blocks have now carried this exact reason, counting
+    the current one. A different reason starts the count again, so any progress
+    at all - a different branch, a different task, a different stage - restores
+    the full budget.
+
+    Consecutive BLOCKS, not consecutive stops: an allowed stop in between leaves
+    the count alone. That matches debt_nags(), and it is the conservative
+    direction, because a demand that alternates with silence is still a demand
+    nobody is satisfying.
+
+    The count has to outlive the process for the same reason debt_nags() gives -
+    a fresh interpreter per event, and `stop_hook_active` carries no count. It is
+    a file of its own rather than a second key in debt-nag.json: that file holds
+    ONE key and clear_debt_nags() unlinks it, so sharing it would have the two
+    counters evicting each other and the debt bounds are not mine to weaken.
+
+    An unreadable file is overwritten by the next write, in its own try, which is
+    the bug debt_nags() had: while json.loads shared the outer handler a file
+    left corrupt by a killed process returned 1 for ever. The outer fail-open
+    returns 1 too, which keeps this hook reporting and loses only the backstop -
+    the right way round, since silence is the failure this file exists to end.
+
+    Both halves of that guard are needed and the second one is easy to forget:
+    the first version of this function had the inner try and not the isinstance
+    check, and a file holding `[1, 2, 3]` or `42` parsed fine, then raised
+    AttributeError on .get() into the outer handler - measured 1, 1, 1 against a
+    healthy 1, 2, 3. Valid JSON of the wrong shape is just an absent file."""
+    try:
+        state.STATE_DIR.mkdir(parents=True, exist_ok=True)
+        p = state.STATE_DIR / STOP_REPEAT_FILE
+        prev = {}
+        if p.is_file():
+            try:
+                prev = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                prev = {}
+            if not isinstance(prev, dict):
+                prev = {}
+        n = int(prev.get("count", 0)) + 1 if prev.get("reason") == reason else 1
+        p.write_text(json.dumps({"reason": reason, "count": n}), encoding="utf-8")
+        return n
+    except Exception:
+        return 1
+
+
+def park_looping_run(reason: str) -> str | None:
+    """Park the run this reason keeps being emitted about, and name it.
+
+    The task is read out of the reason text because that is where it already is:
+    every run-bearing block in decide() names its task first, and the
+    alternative was passing a task through eleven call sites to be discarded at
+    ten of them. A reason whose first task id has no run - a completed task's
+    documentation, a backlog task not yet registered, a run already retired to
+    `done` - parks nothing and returns None, which is what makes the caller
+    escalate instead of going quiet.
+
+    Fail-open: any error parks nothing, so the caller speaks."""
+    try:
+        m = TASK_ID_RE.search(reason)
+        if not m:
+            return None
+        task = m.group(1)
+        r = next((x for x in _CTX["runs"] if x["task"] == task), None)
+        if r is None or r["stage"] == "done":
+            return None
+        state.set_fields(_CTX["conn"], task, stage_status=state.ST_BLOCKED)
+        # Forget the count now the park has replaced the loop. Without this, a
+        # CEO who spots the park in `state.py --show` and runs approve.py
+        # --reject WITHOUT waiting for the surfacing stop leaves the key at its
+        # tripped value, and this hook stays mute about that instruction until
+        # the turn ends and the flag disarms. Bounded either way, but a state
+        # nobody can see should not outlive the thing it described.
+        try:
+            (state.STATE_DIR / STOP_REPEAT_FILE).unlink()
+        except OSError:
+            pass
+        return task
+    except Exception:
+        return None
+
+
+def block(reason: str) -> int:
+    """Block the stop unless this exact reason has already been repeated to no
+    effect, in which case park the loop and let the session end.
+
+    Every one of the eleven block sites in decide() reaches the hook's channel
+    through here, including bounded_block()'s two, so the bound is structural
+    rather than enumerated: a twelfth branch inherits it by existing.
+
+    Two conditions, and both matter:
+
+    `stop_hook_active` - the harness telling us this invocation is a re-entry
+    after a block earlier in the same turn. False means the turn has not looped
+    yet (a human just spoke, or the previous block was answered), and the demand
+    gets said out loud whatever its history, without even being counted. That is
+    deliberate twice over: it guarantees every demand is uttered at least once
+    per turn, so the backstop can defer a report but never permanently swallow
+    one - and it keeps the counter file untouched on the ordinary first-nudge
+    stop, which is most of them.
+
+    The count reaching the ceiling - by then the same sentence has been printed
+    twice and changed nothing.
+
+    What happens on the trip is the whole safety argument, and it is never
+    "return allow() and hope". If the reason names a live run, that run is
+    parked BLOCKED, which is louder than the block it replaces: the next stop
+    surfaces it through decide() step 2 with a different reason, naming the CEO.
+    If it names no run - both documentation demands, and the start-the-next-task
+    branch task-0018 left unbounded on purpose - there is nothing to park, so it
+    escalates in the same breath, once, naming the card. Only after that does it
+    go quiet, and only about that exact sentence."""
+    if not STOP_HOOK_ACTIVE:
+        return emit(reason)
+    try:
+        n = stop_repeats(reason)
+        ceiling = int(state.load_pipeline().get(
+            "stop_hook_repeat_ceiling", STOP_REPEAT_CEILING_DEFAULT))
+    except Exception:
+        return emit(reason)
+    if ceiling < 1 or n < ceiling:
+        return emit(reason)
+    if n > ceiling:
+        return allow()  # parked or escalated on the trip stop; the CEO owns it
+    task = park_looping_run(reason)
+    if task:
+        return allow()  # step 2 surfaces it on the next stop, by name
+    return emit(
+        f"The same instruction has now been repeated {n} times with nothing changing, and "
+        f"there is no run to park. Stop re-attempting it and raise it with the CEO now "
+        f"(AskUserQuestion): the situation, the options, and your recommendation. This hook "
+        f"will not raise it again. The instruction that is not working: {reason}")
 
 
 def frontmatter(text: str) -> str:
@@ -492,6 +685,9 @@ def decide() -> int:
     try:
         runs = state.all_runs(conn)
         runs_by_task = {r["task"]: r for r in runs}
+        # What block()'s backstop needs to park a looping run. Set once, here,
+        # rather than threaded through every branch that might block.
+        _CTX["conn"], _CTX["runs"] = conn, runs
         editing = state.EDITING_STAGES
         pipeline = state.load_pipeline()
         ceiling = int(pipeline.get("continuation_ceiling", 30))
@@ -795,9 +991,20 @@ def decide() -> int:
 
 
 def main() -> int:
+    global STOP_HOOK_ACTIVE
+    # Cleared FIRST, so the flag is defined by this payload and never inherited.
+    # Assigning only on success left it sticky: armed once, an unreadable payload
+    # afterwards kept the backstop live on no evidence at all. It costs one line
+    # to make "we could not read the payload" and "the payload said false" the
+    # same state, which is what an untrusted input deserves.
+    STOP_HOOK_ACTIVE = False
     try:
-        json.load(sys.stdin)  # consume hook payload (stop_hook_active etc.)
-    except (ValueError, OSError):
+        payload = json.load(sys.stdin)
+        STOP_HOOK_ACTIVE = bool(payload.get("stop_hook_active"))
+    except Exception:
+        # Unreadable payload -> disarmed -> every branch reports as it did before
+        # this task. Losing the bound is the correct failure; losing the report
+        # is the silent halt.
         pass
     try:
         return decide()
