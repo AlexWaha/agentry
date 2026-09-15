@@ -47,10 +47,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
-import time
 
 import approvals
 import git_state
@@ -67,24 +65,17 @@ CHECKBOX_RE = re.compile(r"-\s*\[[ x]\]")
 
 
 def gate_marker_path(task: str):
-    return state.STATE_DIR / f"gate-{task}.json"
+    return state.busy_marker_path(task)
 
 
 def write_gate_marker(task: str, stage: str) -> None:
     """Heartbeat so stop_gate.py knows a long gate is legitimately running and
     must not nag or trip the continuation ceiling while it waits."""
-    state.STATE_DIR.mkdir(parents=True, exist_ok=True)
-    gate_marker_path(task).write_text(json.dumps({
-        "task": task, "stage": stage, "pid": os.getpid(),
-        "started": time.time(), "timeout": GATE_TIMEOUT,
-    }), encoding="utf-8")
+    state.write_busy_marker(task, stage, GATE_TIMEOUT)
 
 
 def clear_gate_marker(task: str) -> None:
-    try:
-        gate_marker_path(task).unlink()
-    except OSError:
-        pass
+    state.clear_busy_marker(task)
 
 
 def _frontmatter(text: str) -> dict:
@@ -340,7 +331,9 @@ def main() -> int:
                         help="which flow to start this task on; defaults to the session mode")
     parser.add_argument("--busy", metavar="STAGE",
                         help="mark this stage busy (a subagent was dispatched for it) so the "
-                             "Stop hook stops nagging while it works")
+                             "Stop hook stops nagging while it works. Free-form, but avoid "
+                             "the literal 'handoff': handoff.py --check clears markers with "
+                             "that stage once the doc validates, and would clear this one too")
     parser.add_argument("--idle", action="store_true",
                         help="clear the busy marker (the subagent returned)")
     args = parser.parse_args()

@@ -22,6 +22,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -93,6 +94,35 @@ ST_GATE_FAILED = "gate_failed"
 ST_BLOCKED = "blocked"
 
 EDITING_STAGES = ("implement", "test", "review")
+
+# How long a busy marker stays fresh with no explicit timeout of its own.
+BUSY_TIMEOUT = 900
+
+
+def busy_marker_path(task: str) -> Path:
+    """The busy marker for one task. Its FORMAT lives here rather than in the
+    module that happens to write it first, because it now has two writers
+    (advance.py around a gate or a dispatch, handoff.py around a scaffold) and
+    one reader (stop_gate.py). Two copies of a file format are two chances to
+    disagree about what `started` means."""
+    return STATE_DIR / f"gate-{task}.json"
+
+
+def write_busy_marker(task: str, stage: str, timeout: float = BUSY_TIMEOUT) -> None:
+    """Heartbeat saying real work is in flight for this task, so stop_gate.py
+    stays quiet instead of nagging and spending the run's continuation budget."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    busy_marker_path(task).write_text(json.dumps({
+        "task": task, "stage": stage, "pid": os.getpid(),
+        "started": time.time(), "timeout": timeout,
+    }), encoding="utf-8")
+
+
+def clear_busy_marker(task: str) -> None:
+    try:
+        busy_marker_path(task).unlink()
+    except OSError:
+        pass
 
 
 def now() -> str:
