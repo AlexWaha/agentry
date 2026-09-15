@@ -48,6 +48,13 @@ DEAD     a session THIS supervisor spawned has exited while its run still sits
          `advance.py --busy` records the pid of the advance.py process itself,
          which has already exited by the time the marker is read, so the
          marker's pid is dead for every healthy run. Hence our own registry.
+         A spawned session that has exited is SETTLED before anything else is
+         decided (settle_spawn): its exit code is read while it is still
+         readable, and the relaunch counts as successful only if that code was 0
+         AND the session left evidence of work. Anything else is refunded, so a
+         broken remedy cannot spend the budget of a working one. No clock is
+         involved anywhere in that - see the startup measurement above _SPAWNED
+         for why a clock cannot answer this question.
 STALLED  in flight, nothing above applies, the STAGE has not changed for
          `stall_seconds`, and nothing has written `continuations` for that long
          either - a stage frozen with a RECENT nag behind it is a live session,
@@ -1067,11 +1074,113 @@ def spawn_argv(cfg: dict, task: str, stage: str, why: str) -> list[str]:
     return [str(part).format(task=task, stage=stage, prompt=prompt) for part in raw]
 
 
+# Every session THIS process spawned, by pid, for as long as it is running. The
+# handle is kept for one fact and one only: proc.poll() is the only way to read
+# a child's exit code, and a pid alone cannot give it back once the process has
+# gone. Popped as soon as the code has been read, so the map holds live children
+# plus at most one poll interval of dead ones.
+#
+# A daemon restart empties it, so an exit code can be UNKNOWN. That is handled
+# rather than assumed away: see settle_spawn(), where unknown decides nothing on
+# its own and the work evidence decides instead.
+#
+# MEASURED 2026-09-15 on this host, with relaunch()'s exact spawn shape (Popen,
+# cwd=project root, stdin=DEVNULL, shell=False, stdout to a file,
+# AGENTRY_UNATTENDED=1), argv ["claude", "-p", "Reply with the single word: ok"]:
+# first byte of output at 6.0s, exit code 0 at about 8s, 3 bytes written. So
+# `claude -p` is NOT slow to start and does not buffer for minutes - it is
+# non-streaming, which makes time-to-first-byte equal to time-to-completion for
+# whatever the prompt asks. A spawned session that is quiet is doing work or is
+# dead; the clock cannot tell those apart, which is why nothing here uses one.
+_SPAWNED: dict[int, subprocess.Popen] = {}
+
+
+def spawn_exit_code(pid: int):
+    """The exit code of a session we spawned, or None when it cannot be read -
+    still running, never ours, or ours from before a daemon restart."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return None
+    proc = _SPAWNED.get(pid)
+    if proc is None:
+        return None
+    try:
+        code = proc.poll()
+    except Exception:
+        return None
+    if code is not None:
+        _SPAWNED.pop(pid, None)
+    return code
+
+
+def spawn_did_work(entry: dict, run: dict) -> str:
+    """The evidence that a spawned session did something, or '' for none.
+
+    Two facts, either of which is enough: the run moved out of the stage it was
+    spawned for, or it wrote something to its own log. Both are observed from
+    outside the session, which is the point - the session's own report is not
+    available to this process."""
+    if run.get("stage") and run.get("stage") != entry.get("spawn_stage"):
+        return f"the run left stage '{entry.get('spawn_stage')}'"
+    try:
+        size = Path(str(entry.get("spawn_log"))).stat().st_size
+    except Exception:
+        return ""
+    return f"its log holds {size} bytes" if size > 0 else ""
+
+
+def refund_action(reg: dict, task: str) -> None:
+    """Give back the per-task action a failed relaunch charged. The hourly
+    record is deliberately NOT removed: a mechanism that keeps failing must not
+    be able to retry for free, and the hourly cap is what bounds it."""
+    entry = entry_for(reg, task)
+    try:
+        entry["actions"] = max(0, int(entry.get("actions", 0)) - 1)
+    except (TypeError, ValueError):
+        entry["actions"] = 0
+
+
+def settle_spawn(entry: dict, reg: dict, run: dict) -> str:
+    """Close the book on a spawned session the first poll after it has exited.
+    Returns 'ok', 'failed', or '' when there is nothing to settle.
+
+    A relaunch is SUCCESSFUL only when the session exited 0 AND left evidence of
+    work. Anything else is a FAILED relaunch, logged with its exit code and
+    refunded, because the whole defect this fixes was a broken remedy spending
+    the budget of a working one (task-0079: three relaunches, three logs of 0 or
+    1 byte, no stage movement, all three counted as successes).
+
+    UNKNOWN exit code (a daemon restart lost the handle) decides nothing by
+    itself: with evidence the relaunch stands as successful, which is the old
+    behaviour, and without evidence it is a failure whatever the code was. So
+    losing the handle can never turn a working relaunch into a failed one."""
+    task = run.get("task")
+    pid = int(entry.get("pid") or 0)
+    if not pid or entry.get("spawn_settled") or pid_alive(pid):
+        return ""
+    entry["spawn_settled"] = True
+    code = spawn_exit_code(pid)
+    shown = code if isinstance(code, int) and not isinstance(code, bool) else "unknown"
+    evidence = spawn_did_work(entry, run)
+    if evidence and shown in (0, "unknown"):
+        log(f"spawned session pid {pid} for {task} exited (code {shown}) and did work: "
+            f"{evidence}")
+        return "ok"
+    refund_action(reg, task)
+    detail = evidence or "no stage change and no output"
+    notify(f"relaunch FAILED for {task}: supervisor-spawned session pid {pid} exited with "
+           f"code {shown} and is not a successful relaunch ({detail}). The attempt is "
+           f"refunded against the per-task action cap and stays charged against the hourly "
+           f"one.")
+    return "failed"
+
+
 def relaunch(classification: str, task: str, stage: str, why: str,
-             cfg: dict) -> tuple[bool, list, int]:
+             cfg: dict) -> tuple[bool, list, int, str]:
     """Spawn a headless session to continue this run.
 
-    Returns (spawned, argv, pid) - pid is 0 when nothing was spawned.
+    Returns (spawned, argv, pid, log path) - pid is 0 when nothing was spawned.
 
     THE GUARD: a classification outside RELAUNCHABLE returns immediately,
     before the argv is even built. LOOPING is not in that set, so a looping run
@@ -1087,7 +1196,7 @@ def relaunch(classification: str, task: str, stage: str, why: str,
     if classification not in RELAUNCHABLE:
         notify(f"refused to relaunch {task}: classification {classification} is not relaunchable "
                f"(relaunchable: {', '.join(sorted(RELAUNCHABLE))})")
-        return False, [], 0
+        return False, [], 0, ""
 
     argv = spawn_argv(cfg, task, stage, why)
     try:
@@ -1095,7 +1204,7 @@ def relaunch(classification: str, task: str, stage: str, why: str,
         out = run_log_dir() / f"{task}-{int(time.time())}.log"
     except Exception as exc:
         notify(f"could not prepare a spawn log for {task}: {exc!r} - nothing was spawned")
-        return False, argv, 0
+        return False, argv, 0, ""
 
     try:
         with out.open("w", encoding="utf-8") as handle:
@@ -1105,11 +1214,13 @@ def relaunch(classification: str, task: str, stage: str, why: str,
     except Exception as exc:
         notify(f"spawn FAILED for {task} ({classification}): {exc!r}. Command was: {argv}. "
                f"Pipeline state is untouched.")
-        return False, argv, 0
+        return False, argv, 0, ""
 
+    _SPAWNED[proc.pid] = proc
     notify(f"relaunched {task} ({classification}: {why}) as pid {proc.pid}. "
-           f"Command: {argv}. Output: {out}")
-    return True, argv, proc.pid
+           f"Command: {argv}. Output: {out}. Not a success yet - settle_spawn() decides "
+           f"that from its exit code and its work once it has exited.")
+    return True, argv, proc.pid, str(out)
 
 
 # --- the poll ---------------------------------------------------------------
@@ -1123,10 +1234,13 @@ def handle_run(run: dict, reg: dict, cfg: dict, now_ts: float, act: bool) -> dic
     task = run["task"]
     entry = entry_for(reg, task)
     observe(entry, run, now_ts)
+    # Before any verdict: if the session we spawned has exited, read its exit
+    # code while it is still readable and decide whether that relaunch worked.
+    settled = settle_spawn(entry, reg, run)
     label, why = classify(run, entry, cfg, now_ts)
 
     event = {"task": task, "stage": run.get("stage"), "classification": label,
-             "why": why, "action": "", "stop": ""}
+             "why": why, "action": "", "stop": "", "spawn": settled}
 
     # Notify on a CHANGE of label only, so a stalled run does not write a log
     # line every poll for the rest of the night.
@@ -1163,12 +1277,14 @@ def handle_run(run: dict, reg: dict, cfg: dict, now_ts: float, act: bool) -> dic
         event["action"] = f"skipped (task file is in {where or 'no'} folder, not active/)"
         return event
 
-    spawned, argv, pid = relaunch(label, task, str(run.get("stage")), why, cfg)
+    spawned, argv, pid, spawn_log = relaunch(label, task, str(run.get("stage")), why, cfg)
     if spawned:
         record_action(reg, task, ACTION_RELAUNCH, now_ts)
         entry["pid"] = pid
         entry["spawn_stage"] = run.get("stage")
         entry["spawned"] = now_ts
+        entry["spawn_log"] = spawn_log
+        entry.pop("spawn_settled", None)
         event["action"] = ACTION_RELAUNCH
         event["argv"] = argv
         event["pid"] = pid

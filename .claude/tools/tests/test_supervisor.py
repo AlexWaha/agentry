@@ -136,6 +136,8 @@ class Sandbox(unittest.TestCase):
             patcher = unittest.mock.patch.object(state, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        supervisor._SPAWNED.clear()
+        self.addCleanup(supervisor._SPAWNED.clear)
         self.notices: list[str] = []
         patcher = unittest.mock.patch.object(supervisor, "notify", self.notices.append)
         patcher.start()
@@ -455,7 +457,7 @@ class LoopingIsNeverRelaunchedTest(Sandbox):
 
     def test_relaunch_refuses_looping_without_spawning_anything(self):
         with unittest.mock.patch.object(supervisor.subprocess, "Popen") as popen:
-            spawned, argv, pid = supervisor.relaunch(
+            spawned, argv, pid, _log = supervisor.relaunch(
                 supervisor.LOOPING, "task-0001", "implement", "loop", cfg())
         self.assertFalse(spawned)
         self.assertEqual([], argv)
@@ -472,7 +474,7 @@ class LoopingIsNeverRelaunchedTest(Sandbox):
                 frozenset({supervisor.STALLED, supervisor.DEAD, supervisor.LOOPING})), \
                 unittest.mock.patch.object(supervisor.subprocess, "Popen") as popen:
             popen.return_value = unittest.mock.Mock(pid=4242)
-            spawned, _, pid = supervisor.relaunch(
+            spawned, _, pid, _log = supervisor.relaunch(
                 supervisor.LOOPING, "task-0001", "implement", "loop", cfg())
         self.assertTrue(spawned)
         self.assertEqual(4242, pid)
@@ -561,6 +563,118 @@ class RelaunchTest(Sandbox):
         self.assertIn("would", event["action"])
         self.assertEqual(state.ST_IN_PROGRESS, self.read_row()["stage_status"])
         self.assertEqual([], reg["actions"])
+
+
+class SpawnSettlementTest(Sandbox):
+    """task-0079. A relaunch used to be reported as a success the instant Popen
+    returned, and charged a per-task action for it. Three spawns that did nothing
+    therefore stopped the supervisor outright, on a live pipeline, silently.
+
+    A relaunch is now successful only if the session exited 0 AND left evidence
+    of work. Nothing here is a clock: the measured startup of `claude -p` on this
+    host is about 6s to first byte (see the note above _SPAWNED), so a timer
+    cannot separate a failed spawn from a working one."""
+
+    def spawn(self, reg, pid=901, code=1):
+        """One relaunch, then one further poll with the child gone. Returns the
+        settling event. The second poll does not act, so the settlement is
+        measured on its own rather than through a fresh relaunch."""
+        proc = unittest.mock.Mock(pid=pid)
+        proc.poll.return_value = code
+        run = row(updated=aged(99999))
+        with unittest.mock.patch.object(supervisor.subprocess, "Popen", return_value=proc), \
+                unittest.mock.patch.object(state, "task_dir", return_value="active"):
+            supervisor.handle_run(run, reg, cfg(), time.time(), act=True)
+        with unittest.mock.patch.object(supervisor, "pid_alive", return_value=False):
+            return supervisor.handle_run(run, reg, cfg(), time.time(), act=False)
+
+    def test_a_spawn_that_died_with_nothing_to_show_is_a_failed_relaunch(self):
+        self.make_row("task-0001")
+        reg = supervisor.empty_registry()
+        event = self.spawn(reg, code=1)
+        self.assertEqual("failed", event["spawn"])
+        failure = [n for n in self.notices if "relaunch FAILED" in n]
+        self.assertEqual(1, len(failure), self.notices)
+        # The exit code is IN the line: it is the one fact that explains the
+        # death and it was previously discarded at the moment it was readable.
+        self.assertIn("code 1", failure[0])
+
+    def test_three_failed_relaunches_leave_the_per_task_budget_intact(self):
+        self.make_row("task-0001")
+        reg = supervisor.empty_registry()
+        for pid in (901, 902, 903):
+            self.spawn(reg, pid=pid, code=1)
+        self.assertEqual(0, reg["tasks"]["task-0001"]["actions"])
+        self.assertEqual("", supervisor.caps_exceeded(reg, "task-0001", cfg(), time.time()))
+        # The hourly record keeps all three, so a mechanism that only fails
+        # cannot retry for free - it hits the hourly cap instead.
+        self.assertEqual(3, len(reg["actions"]))
+
+    def test_a_spawn_that_exited_zero_but_did_nothing_is_still_a_failed_relaunch(self):
+        # The three real relaunches on record (task-0079) left logs of 0 and 1
+        # bytes and moved no stage. A clean exit code alone is not work done.
+        self.make_row("task-0001")
+        reg = supervisor.empty_registry()
+        event = self.spawn(reg, pid=907, code=0)
+        self.assertEqual("failed", event["spawn"])
+        self.assertEqual(0, reg["tasks"]["task-0001"]["actions"])
+        self.assertTrue(any("no stage change and no output" in n for n in self.notices),
+                        self.notices)
+
+    def test_a_spawn_that_exited_zero_and_did_work_stays_charged(self):
+        self.make_row("task-0001")
+        reg = supervisor.empty_registry()
+        proc = unittest.mock.Mock(pid=904)
+        proc.poll.return_value = 0
+        run = row(updated=aged(99999))
+        with unittest.mock.patch.object(supervisor.subprocess, "Popen", return_value=proc), \
+                unittest.mock.patch.object(state, "task_dir", return_value="active"):
+            supervisor.handle_run(run, reg, cfg(), time.time(), act=True)
+        Path(reg["tasks"]["task-0001"]["spawn_log"]).write_text("worked", encoding="utf-8")
+        with unittest.mock.patch.object(supervisor, "pid_alive", return_value=False):
+            event = supervisor.handle_run(run, reg, cfg(), time.time(), act=False)
+        self.assertEqual("ok", event["spawn"])
+        self.assertEqual(1, reg["tasks"]["task-0001"]["actions"])
+        self.assertEqual([], [n for n in self.notices if "relaunch FAILED" in n])
+
+    def test_an_unreadable_exit_code_never_turns_a_working_relaunch_into_a_failure(self):
+        # None (the handle was lost to a daemon restart) and a junk value (a
+        # hand-edited registry, a mock) are both UNKNOWN, and unknown decides
+        # nothing on its own: the evidence decides, which is the old behaviour.
+        self.make_row("task-0001")
+        for code in (None, "junk"):
+            with self.subTest(code=code):
+                reg = supervisor.empty_registry()
+                proc = unittest.mock.Mock(pid=905)
+                proc.poll.return_value = code
+                run = row(updated=aged(99999))
+                with unittest.mock.patch.object(supervisor.subprocess, "Popen",
+                                                return_value=proc), \
+                        unittest.mock.patch.object(state, "task_dir", return_value="active"):
+                    supervisor.handle_run(run, reg, cfg(), time.time(), act=True)
+                Path(reg["tasks"]["task-0001"]["spawn_log"]).write_text("x", encoding="utf-8")
+                with unittest.mock.patch.object(supervisor, "pid_alive", return_value=False):
+                    event = supervisor.handle_run(run, reg, cfg(), time.time(), act=False)
+                self.assertEqual("ok", event["spawn"])
+                self.assertEqual(1, reg["tasks"]["task-0001"]["actions"])
+
+    def test_a_live_spawn_is_never_waited_on_and_settles_nothing(self):
+        # The poll loop must not block on a healthy long-running session: the
+        # only liveness question asked is pid_alive(), and poll() is never
+        # reached while the child is up.
+        self.make_row("task-0001")
+        reg = supervisor.empty_registry()
+        proc = unittest.mock.Mock(pid=906)
+        run = row(updated=aged(99999))
+        with unittest.mock.patch.object(supervisor.subprocess, "Popen", return_value=proc), \
+                unittest.mock.patch.object(state, "task_dir", return_value="active"):
+            supervisor.handle_run(run, reg, cfg(), time.time(), act=True)
+        with unittest.mock.patch.object(supervisor, "pid_alive", return_value=True):
+            event = supervisor.handle_run(run, reg, cfg(), time.time(), act=False)
+        self.assertEqual("", event["spawn"])
+        proc.wait.assert_not_called()
+        proc.poll.assert_not_called()
+        self.assertEqual(1, reg["tasks"]["task-0001"]["actions"])
 
 
 class CapsTest(Sandbox):
@@ -670,7 +784,7 @@ class NeverPushMergeOrApproveTest(Sandbox):
         # real Popen call rather than the prompt text.
         with unittest.mock.patch.object(supervisor.subprocess, "Popen") as popen:
             popen.return_value = unittest.mock.Mock(pid=99)
-            spawned, _argv, _pid = supervisor.relaunch(
+            spawned, _argv, _pid, _log = supervisor.relaunch(
                 supervisor.STALLED, "task-0001", "implement", "stalled", cfg())
         self.assertTrue(spawned)
         env = popen.call_args.kwargs["env"]
