@@ -9,6 +9,8 @@ maxTurns: 30
 tools: Read, Write, Glob, Grep
 mcpServers:
   - codegraph
+rules:
+  - documentation.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

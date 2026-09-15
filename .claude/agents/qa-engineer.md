@@ -14,6 +14,9 @@ mcpServers:
 skills:
   - write-tests
   - bug-fix
+rules:
+  - coding-style.md
+  - testing.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

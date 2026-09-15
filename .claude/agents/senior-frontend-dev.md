@@ -15,6 +15,11 @@ skills:
   - feature-scaffold
   - frontend-standards
   - bug-fix
+rules:
+  - coding-style.md
+  - testing.md
+  - i18n.md
+  - mobile.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

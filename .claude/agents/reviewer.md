@@ -13,6 +13,16 @@ mcpServers:
   - codegraph
 skills:
   - deep-review
+rules:
+  - coding-style.md
+  - architecture.md
+  - testing.md
+  - api-conventions.md
+  - security.md
+  - performance.md
+  - documentation.md
+  - human-voice.md
+  - i18n.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

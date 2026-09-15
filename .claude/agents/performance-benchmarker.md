@@ -9,6 +9,8 @@ maxTurns: 40
 tools: Read, Bash, Glob, Grep
 skills:
   - health-check
+rules:
+  - performance.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

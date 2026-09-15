@@ -14,6 +14,10 @@ mcpServers:
 skills:
   - db-design
   - migration
+rules:
+  - coding-style.md
+  - architecture.md
+  - security.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

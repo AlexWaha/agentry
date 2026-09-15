@@ -131,7 +131,7 @@ reason is worse than no gate. Replace all four before the first task.
 
 ## 3. Decide which optional rules apply
 
-These rules are included but gated. Leave them imported in `CLAUDE.md` only if the project actually needs them.
+These rules are included but gated. None of them is in the core set, so each one already reaches only the agents whose `rules:` key declares it (`.claude/CLAUDE.md`, section Rules).
 
 | Rule | Keep if… |
 |------|----------|
@@ -139,7 +139,7 @@ These rules are included but gated. Leave them imported in `CLAUDE.md` only if t
 | `rules/mobile.md` | Project includes a mobile app (React Native, Flutter, native) |
 | `rules/business-standards.md` | Business planning agents will be activated |
 
-Unused rules can stay imported - they're marked `[DEFERRED]` or `[OPTIONAL]` and take no action on their own.
+Dropping one is three edits, not one: remove it from every agent `rules:` key that names it, remove its entry from `claudeMdExcludes` in `.claude/settings.json`, then delete the file. Leaving the file in place is not free and not inert - an unreferenced rule file is still loaded for every context by the `.claude/rules/` walk unless `claudeMdExcludes` names it, whatever `[DEFERRED]` or `[OPTIONAL]` says in its header.
 
 ## 4. Configure permissions
 
@@ -184,7 +184,7 @@ Before starting real work, confirm:
 - [ ] `grep -rE '\{\{[A-Z_]+\}\}' .claude/` returns zero matches (or only inside `_onboarding.md` itself and `tasks/templates/handoff-template.md`, whose `{{...}}` are runtime tokens for `handoff.py --for`)
 - [ ] `grep -r 'PROJECT-SPECIFIC - REPLACE ME' .agentry/project/` is empty (you filled everything in)
 - [ ] `.claude/settings.local.json` is gitignored
-- [ ] `CLAUDE.md` imports only the rules that apply to this project
+- [ ] `.claude/CLAUDE.md` lists only the core rules, each with its recorded main-thread reason, and `claudeMdExcludes` names every other rule file
 
 ## 8. Autonomous pipeline (deterministic orchestration)
 

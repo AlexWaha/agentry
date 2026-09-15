@@ -230,10 +230,13 @@ Self-learning is key. When something breaks and gets fixed, update knowledge to 
 
 ## Rules
 
-The universal rules live in `.claude/rules/` and are imported by the orchestrator
-doc at `.claude/CLAUDE.md`. Keep an optional rule (`i18n`, `mobile`,
-`business-standards`) imported only if the project needs it - see
-`.claude/_onboarding.md` section 3.
+The universal rules live in `.claude/rules/`. The core set is listed in the
+orchestrator doc at `.claude/CLAUDE.md` and reaches every context; every other
+rule is named in `claudeMdExcludes` in `.claude/settings.json` and reaches only
+the agents whose `rules:` key declares it. To drop an optional rule (`i18n`,
+`mobile`, `business-standards`) this project does not need, remove it from every
+`rules:` key that names it and from `claudeMdExcludes`, then delete the file -
+see `.claude/_onboarding.md` section 3.
 
 ---
 

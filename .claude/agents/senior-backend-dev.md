@@ -14,6 +14,14 @@ mcpServers:
 skills:
   - feature-scaffold
   - bug-fix
+rules:
+  - coding-style.md
+  - architecture.md
+  - testing.md
+  - api-conventions.md
+  - security.md
+  - performance.md
+  - i18n.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"

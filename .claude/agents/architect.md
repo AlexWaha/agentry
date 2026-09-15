@@ -12,6 +12,13 @@ mcpServers:
 skills:
   - api-design
   - db-design
+rules:
+  - architecture.md
+  - api-conventions.md
+  - security.md
+  - performance.md
+  - documentation.md
+  - mobile.md
 hooks:
   PreToolUse:
     - matcher: "Bash|Edit|Write"
