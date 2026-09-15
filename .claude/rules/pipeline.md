@@ -55,8 +55,12 @@ adds `performance-benchmarker` in review.
 
 Every dispatched agent reads, in this order, BEFORE producing anything:
 
-1. The last 1-3 handoff docs in `.agentry/tasks/handoffs/` - what the previous
-   tasks shipped, decided, and warned about.
+1. The handoff chain, which ARRIVES INJECTED - do not go and read it. A
+   `SubagentStart` hook (`handoff.py --inject`) delivers the newest handoff doc
+   in full plus one index line per older document, under
+   `handoff.inject_budget_bytes`. Read an older document from the index only
+   when this task actually needs it. Opening the last three by habit pays for
+   the same bytes twice.
 2. `.agentry/project/project-context.md` - the overall project context.
 3. The task's spec (`spec:` in the task frontmatter -> `.agentry/specs/`), or the
    task file's acceptance criteria when `spec: none`.

@@ -128,6 +128,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "architect|product-manager|sprint-prioritizer|rapid-prototyper|spec-developer|senior-backend-dev|senior-frontend-dev|data-engineer|devops-engineer|qa-engineer|reviewer|security-engineer",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/handoff.py\" --inject",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "SubagentStop": [
