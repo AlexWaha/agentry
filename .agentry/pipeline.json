@@ -105,7 +105,13 @@
     },
     "plan": {
       "_comment": "Design. Turns a request into an approved plan, a spec and task files sitting in tasks/backlog/. Writes documents, never product code.",
-      "editing_stages": [],
+      "_editing_stages_comment": "Every stage an AGENT owns and the conveyor must drive to an exit gate. This key was [] until task-0020, on the reading that a planning stage writes documents rather than code and so serializes against nothing - which is false twice over: those documents are files in this repository's working tree, and stop_gate.decide() uses the set to decide what is IN FLIGHT, not what is compiled. Empty meant a plan run mid-flight matched no branch of the run loop, so nothing drove it and the next backlog task was started on top of it. `approval` is excluded because the CEO owns it, not an agent; `done` is excluded as terminal. `plan-review` IS included for the same reason build's `review` is: read-only for the reviewer does not mean the run has let go of its branch. `approval` is protected by being a checkpoint stage rather than by being absent from this list: state.checkpoint_stages() reads both the `checkpoint` and `checkpoints` spellings, so the Stop hook neither drives it nor treats its tree as free. Do NOT normalise `checkpoint` to `checkpoints` here as a cleanup - advance.stage_checkpoints() reads the plural and filters to commit/push, so renaming the key would change what advance.py does to this stage without giving the flow a real checkpoint. KNOWN GAP, follow-up task filed: the plan flow still has no checkpoint of its own - no run.db column, no advance.py branch - and an absent `exit_gate` is measured to return configured=true AND passed=true, so a hand-run advance.py still walks `approval` to `breakdown`. What task-0020 closed is the automatic half: nothing instructs anyone to do that every stop any more.",
+      "editing_stages": [
+        "formalize",
+        "draft",
+        "plan-review",
+        "breakdown"
+      ],
       "stages": [
         {
           "name": "formalize",

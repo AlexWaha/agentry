@@ -95,6 +95,21 @@ ST_BLOCKED = "blocked"
 
 EDITING_STAGES = ("implement", "test", "review")
 
+# The build flow's checkpoint stage, and the twin of EDITING_STAGES in every
+# respect: a last-resort default for `build` only, used when pipeline.json
+# cannot be read at all. Never consulted while the config parses.
+CHECKPOINT_STAGES = ("ready",)
+
+# Both spellings a stage definition may use to declare a human checkpoint.
+# `checkpoints` (plural, a list) is what advance.stage_checkpoints() reads and
+# what every other reader in this tree expects; `checkpoint` (singular, a
+# string) appears on the plan flow's `approval` stage and has NO reader
+# anywhere. It is accepted here so that stage stays protected, and the odd
+# spelling is deliberately not "tidied" in pipeline.json: normalising it without
+# also giving the plan flow a real checkpoint would look like a cleanup and
+# would silently unprotect the stage.
+CHECKPOINT_KEYS = ("checkpoints", "checkpoint")
+
 # How long a busy marker stays fresh with no explicit timeout of its own.
 BUSY_TIMEOUT = 900
 
@@ -188,13 +203,50 @@ def first_stage(pipeline: dict, which: str = BUILD) -> str:
 
 
 def editing_stages(pipeline: dict, which: str = BUILD) -> tuple[str, ...]:
-    """Stages during which the working tree is being changed. Only these are
-    serialized across tasks; a planning stage writes documents, not code."""
+    """Stages an agent owns and the conveyor drives to an exit gate. A run on one
+    of them holds the working tree, so they are serialized across tasks.
+
+    "Holds the tree", not "writes code": the plan flow's documents are files in
+    this repository too, and reading the name literally is what left
+    pipelines.plan.editing_stages empty and plan runs undriven until task-0020.
+    Excluded are the stages an agent does NOT own - a checkpoint stage waiting on
+    the CEO, and the terminal stage.
+
+    An absent key falls back to the module constant for `build` and to nothing
+    for any other flow (NFR-4): a flow whose stages we cannot read drives no run
+    rather than driving every run."""
     block = (pipeline.get("pipelines") or {}).get(which) or {}
     raw = block.get("editing_stages")
     if raw is None:
         return EDITING_STAGES if which == BUILD else ()
     return tuple(str(s) for s in raw)
+
+
+def checkpoint_stages(pipeline: dict, which: str = BUILD) -> tuple[str, ...]:
+    """Stages whose definition declares a human checkpoint. The counterpart of
+    editing_stages(): together they answer "who owns this stage", an agent or a
+    person, and the Stop hook needs both to decide whether to drive a run and
+    whether that run still holds the working tree.
+
+    This exists so no caller has to spell a stage name. `stop_gate` compared
+    `r["stage"] == "ready"` for exactly this, which was correct for `build` and
+    blind everywhere else: the plan flow's `approval` is the same kind of stage
+    and matched nothing, so the conveyor both nagged at it and read its tree as
+    free. A second literal for `approval` would have been the same bug waiting
+    on a third flow.
+
+    A flow that declares no checkpoint stage gets an empty tuple - that is the
+    config speaking, not a failure. Only an UNREADABLE flow (no stage names at
+    all) falls back, and then to the module constant for `build` alone, exactly
+    as editing_stages() does: a broken config must not make `ready` look like a
+    free slot."""
+    names = stage_names(pipeline, which)
+    if not names:
+        return CHECKPOINT_STAGES if which == BUILD else ()
+    return tuple(
+        str(s.get("name", "")) for s in stages(pipeline, which)
+        if any(s.get(k) for k in CHECKPOINT_KEYS)
+    )
 
 
 def connect() -> sqlite3.Connection:
