@@ -59,6 +59,11 @@ Everything under `.agentry/project/` is placeholder content from the previous pr
 - [ ] `project/stack.md` - fill in stack, commands, env vars, routes, placeholder values
 - [ ] `project/README.md` - usually left as-is (it explains what the folder is for)
 
+If the workspace holds more than one repository, stack facts that are true of
+only one of them (its commands, ports, framework conventions) go in that repo's
+own nested `CLAUDE.md`, which is loaded only when an agent reads a file inside
+that repo. See `docs/technical/nested-claude-md.md`.
+
 ## 2. Fill in placeholders across the template
 
 Search-and-replace these across `.claude/` files. Values you define in `project/stack.md` are the source of truth.

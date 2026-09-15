@@ -329,6 +329,13 @@ only the agents whose `rules:` key declares it. Those patterns match by
 filename, so a user-level rule of the same name under `~/.claude/rules/` is
 excluded too. Adding a rule here costs every dispatch its size.
 
+A rule that belongs to one repository rather than to the whole workspace does
+not belong in this list at all - it belongs in that repo's nested `CLAUDE.md`,
+which loads only when an agent reads a file inside the repo. Mechanism, audit
+and measurement: `docs/technical/nested-claude-md.md`. Adding or removing an
+entry in the list below means re-running that document's audit table, which is
+the only check that a repo-specific rule has not crept into the core set.
+
 | Rule | Why the main thread needs it (FR-30) |
 |---|---|
 | `quality-standard.md` | The orchestrator runs the exit gates, records approvals, commits and merges; the verification discipline, the em-dash ban, the NUL cleanup and the AI-authorship ban bind it directly. |
