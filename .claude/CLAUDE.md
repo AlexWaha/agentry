@@ -325,8 +325,9 @@ that walk. The main thread has no frontmatter, so
 `.claude/tools/hooks/inject_rules.py` cannot serve it, and this list is what it
 runs on. A rule that leaves the list is named in `claudeMdExcludes` in
 `.claude/settings.json` - that is what stops it loading everywhere - and reaches
-only the agents whose `rules:` key declares it. Adding a rule here costs every
-dispatch its size.
+only the agents whose `rules:` key declares it. Those patterns match by
+filename, so a user-level rule of the same name under `~/.claude/rules/` is
+excluded too. Adding a rule here costs every dispatch its size.
 
 | Rule | Why the main thread needs it (FR-30) |
 |---|---|
