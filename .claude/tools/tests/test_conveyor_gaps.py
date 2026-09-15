@@ -49,6 +49,7 @@ sys.path.insert(0, str(TESTS_DIR))
 
 import advance
 import approve
+import gate as gate_module
 import git_state
 import handoff
 import state
@@ -2191,6 +2192,160 @@ class CrashIsReportedTest(unittest.TestCase):
         with self.assertRaises(KeyboardInterrupt):
             with self.crashing(KeyboardInterrupt()) as (call, _err, _out):
                 call()
+
+
+# Deliberately module-level, matching BUILD_PIPELINE/PLAN_PIPELINE above: a
+# dict as a class attribute trips RUF012 (mutable default), and this one is
+# never mutated by the tests that read it.
+GATE_TIMEOUT_PIPELINE = {"pipelines": {"build": {"stages": [
+    {"name": "test", "owner": "qa-engineer",
+     "exit_gate": {"cmd": "sleep 999999", "expect_exit": 0}},
+]}}}
+
+
+class GateNeverReturnsTest(unittest.TestCase):
+    """task-0022, loop shape 4: a stage exit-gate command that never returns.
+
+    gate.run_gate() bounds the subprocess call with `timeout=900` and catches
+    subprocess.TimeoutExpired. If either half were missing, a hung gate
+    command would hang gate.py, which hangs advance.py, which hangs the
+    orchestrator turn that called it - nothing downstream (not stop_gate.py,
+    not the supervisor) can see a process that never returns, only a stage
+    that never advances. No sleeping: the timeout is proven by mocking
+    subprocess.run to raise the exception the real timeout raises after
+    900 seconds, not by waiting for one."""
+
+    def test_a_hung_gate_command_degrades_to_a_failed_gate_not_a_hang(self):
+        timeout_exc = subprocess.TimeoutExpired(cmd="sleep 999999", timeout=900)
+        with unittest.mock.patch.object(gate_module.subprocess, "run",
+                                        side_effect=timeout_exc):
+            result = gate_module.run_gate(GATE_TIMEOUT_PIPELINE, "test", task=None)
+
+        self.assertEqual(124, result["exit"])
+        self.assertFalse(result["passed"])
+        self.assertIn("timed out", result["output"])
+
+    def test_the_subprocess_call_itself_asks_for_a_bound(self):
+        # The other half: gate.py must ASK for a timeout, not merely survive
+        # one. Without `timeout=` in the call, subprocess.run blocks for real
+        # and the except clause above never has anything to catch.
+        calls = unittest.mock.MagicMock(
+            return_value=unittest.mock.MagicMock(returncode=0, stdout="", stderr=""))
+        with unittest.mock.patch.object(gate_module.subprocess, "run", calls):
+            gate_module.run_gate(GATE_TIMEOUT_PIPELINE, "test", task=None)
+
+        self.assertIn("timeout", calls.call_args.kwargs)
+        self.assertGreater(calls.call_args.kwargs["timeout"], 0)
+
+
+class CrossMechanismInteractionTest(unittest.TestCase):
+    """The interaction task-0022 was reframed around: task-0018's per-stage
+    charge() budget, task-0019's reason-repeat backstop, and task-0020's
+    config-resolved stage sets, all firing on the SAME run.
+
+    None of the three tasks' own suites cross them. StopHookActiveBackstopTest
+    fixes `continuations` at 0 by construction, and says why in its own
+    comment: advance.py zeroes that column on every stage transition, so a
+    run that keeps transitioning never accumulates. PlanRunIsInFlightTest and
+    UnlistedStageIsDrivenTest never arm stop_hook_active. So a run that is
+    genuinely being charged for real work, while ALSO tripping the backstop on
+    a stable reason, was unpinned - which is exactly what happened during this
+    task's own session: a healthy task was parked at continuations=4, nowhere
+    near the ceiling of 30, because the backstop counts CONSECUTIVE ARMED
+    stops and charge() counts every stop whether armed or not. One unarmed
+    stop (a human just spoke) plus three armed ones reproduces it: the
+    backstop trips on its third armed repeat while the budget has spent four."""
+
+    def setUp(self):
+        self.tmp = tmproot.sandbox(self, "crossmech")
+        p = unittest.mock.patch.object(state, "STATE_DIR", self.tmp)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _sequence(self, r, active_pattern, pipeline=None, **kw):
+        """Feed decide() the same run through `active_pattern` stops,
+        updating `continuations` from what the PREVIOUS stop actually wrote -
+        the same bookkeeping advance.py persists between real stops, rather
+        than a fixture frozen at one value. Returns (reasons, the set_fields
+        mock covering every stop)."""
+        calls = unittest.mock.MagicMock()
+        reasons = []
+        for active in active_pattern:
+            with unittest.mock.patch.object(stop_gate, "STOP_HOOK_ACTIVE", active):
+                reasons.append(decide_with([r], set_fields=calls, pipeline=pipeline, **kw))
+            for c in reversed(calls.call_args_list):
+                if "continuations" in c.kwargs:
+                    r = dict(r, continuations=c.kwargs["continuations"])
+                    break
+        return reasons, calls
+
+    def _parks(self, calls) -> list:
+        return [c for c in calls.call_args_list
+                if c.kwargs.get("stage_status") == state.ST_BLOCKED]
+
+    def test_a_low_continuation_editing_run_is_still_parked_by_the_backstop(self):
+        r = run(stage="implement", continuations=0)
+        reasons, calls = self._sequence(r, [False, True, True, True])
+
+        # Three stops speak the same demand; the fourth parks in silence and
+        # is surfaced on the NEXT stop instead (StopHookActiveBackstopTest
+        # already owns that surfacing - this class is only about the numbers
+        # that lead up to it).
+        for reason in reasons[:3]:
+            self.assertIn("task-0001 is at stage 'implement'", reason)
+        self.assertIsNone(reasons[3])
+
+        self.assertEqual(1, len(self._parks(calls)))
+        cont_writes = [c.kwargs["continuations"] for c in calls.call_args_list
+                      if "continuations" in c.kwargs]
+        self.assertEqual([1, 2, 3, 4], cont_writes)
+        self.assertLess(cont_writes[-1], 30)  # nowhere near continuation_ceiling
+
+    def test_the_ready_checkpoint_branch_parks_the_same_way(self):
+        # A different charge() call site (site 1, not site 3) feeding the same
+        # backstop - the approval already given is not what trips it.
+        r = run(stage="ready", awaiting_human="commit", commit_approved=1,
+               continuations=0)
+        reasons, calls = self._sequence(r, [False, True, True, True])
+
+        for reason in reasons[:3]:
+            self.assertIn("checkpoint approved", reason)
+        self.assertIsNone(reasons[3])
+
+        parks = self._parks(calls)
+        self.assertEqual(1, len(parks))
+        # The park never stamps awaiting_human itself - see
+        # StopHookActiveBackstopTest.test_the_park_is_surfaced_rather_than_silent
+        # for why that matters. Re-asserted here because this is a different
+        # call site reaching the same park() call.
+        self.assertNotIn("awaiting_human", parks[0].kwargs)
+
+    def test_a_plan_pipeline_editing_stage_is_parked_the_same_way(self):
+        r = plan_run(stage="draft", continuations=0)
+        reasons, calls = self._sequence(r, [False, True, True, True],
+                                        pipeline=PLAN_PIPELINE)
+
+        for reason in reasons[:3]:
+            self.assertIn("task-0001 is at stage 'draft'", reason)
+        self.assertIsNone(reasons[3])
+
+        self.assertEqual(1, len(self._parks(calls)))
+        cont_writes = [c.kwargs["continuations"] for c in calls.call_args_list
+                      if "continuations" in c.kwargs]
+        self.assertEqual([1, 2, 3, 4], cont_writes)
+
+    def test_an_unlisted_stage_run_is_parked_the_same_way(self):
+        # task-0020's twelfth branch: charged through the same charge() door
+        # as the other five run-bearing sites, so it is just as reachable by
+        # the backstop as the branches that predate it.
+        r = plan_run(stage="draft", continuations=0)
+        reasons, calls = self._sequence(r, [False, True, True, True],
+                                        pipeline=PLAN_PIPELINE_UNSET)
+
+        for reason in reasons[:3]:
+            self.assertIn("editing_stages does not list", reason)
+        self.assertIsNone(reasons[3])
+        self.assertEqual(1, len(self._parks(calls)))
 
 
 if __name__ == "__main__":
