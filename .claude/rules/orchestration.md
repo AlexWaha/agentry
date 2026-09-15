@@ -113,7 +113,13 @@ the agent.
 
 For each task, drive the deterministic FSM - never hand-wave a stage as done:
 
-0. **Handoff first.** Run `python .claude/tools/pipeline/handoff.py --check`. If it
+0. **Handoff first.** Run `python .claude/tools/pipeline/handoff.py --check`. It
+   exits non-zero for two different reasons and they need different answers, so
+   read the JSON rather than the exit code alone. `thread_problems` is an epic
+   thread document that is malformed or over `handoff.thread_max_bytes`: fix
+   that file yourself, there is no task to document and no agent to dispatch;
+   registration is unaffected, since `advance.py` reads `uncovered_done_tasks()`
+   and never this section. `handoff_debt` is the real chain debt. If it
    reports debt, dispatch the NEXT task's assignee to write the handoff doc for the
    completed task BEFORE registering anything: scaffold with `handoff.py --for
    task-XXXX`, then the agent fills every section of
@@ -143,8 +149,12 @@ For each task, drive the deterministic FSM - never hand-wave a stage as done:
    work, senior-backend-dev for backend, etc. `advance.py` prints the resolved
    name; a task whose stack does not match its assignee is a task-creation defect.
    Every `implement` dispatch prompt MUST instruct the agent to read, before any
-   code: (a) the last 1-3 docs in `.agentry/tasks/handoffs/`, (b)
-   `.agentry/project/project-context.md`, (c) the task's spec (`spec:` frontmatter).
+   code: (a) `.agentry/project/project-context.md`, (b) the task's spec (`spec:`
+   frontmatter). Do NOT tell it to read the last 1-3 handoff docs - the
+   `SubagentStart` hook (`handoff.py --inject`) already delivers the newest one
+   in full plus an index line per older document, so an instruction to read them
+   buys the same bytes a second time. Point it at the index instead: read an
+   older handoff only when the task needs that one.
 3. **Advance.** When the agent reports done, run `advance.py --task task-XXXX`.
    The script runs the stage's exit gate itself and only advances on a real pass.
    On failure it bumps `retries` and tells you to fix and re-run; after the
