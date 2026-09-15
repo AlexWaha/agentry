@@ -2446,3 +2446,89 @@ class CrossMechanismInteractionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DebtCheckerFailsOpenOutLoudTest(unittest.TestCase):
+    """task-0077: every debt checker was `except Exception: return []` with no
+    stderr, no log and no marker, so a broken checker read as "no debt".
+
+    Fail-open is correct and stays (NFR-4 - a checker bug must not brick the
+    conveyor). Silence is the defect: measured on unchanged code, a raising
+    `handoff.uncovered_done_tasks` produced `[]`, exit 0 and zero bytes of
+    stderr, which is byte-identical to a clean tree."""
+
+    # Every fail-open debt-checker site, enumerated from the code: five, not the
+    # four the task file named - advance.memory_debt has the same shape and was
+    # equally silent. `session_start.cleanup_nul` is task-0076's and untouched.
+    SITES = (
+        ("stop_gate.handoff_debt", handoff, "uncovered_done_tasks",
+         lambda: stop_gate.handoff_debt(), []),
+        ("stop_gate.memory_debt", memory_update, "unstamped_done_tasks",
+         lambda: stop_gate.memory_debt(), []),
+        ("stop_gate.latest_undocumented", handoff, "latest_main_task_undocumented",
+         lambda: stop_gate.latest_undocumented(), None),
+        ("advance.handoff_debt", handoff, "uncovered_done_tasks",
+         lambda: advance.handoff_debt(), []),
+        ("advance.memory_debt", memory_update, "unstamped_done_tasks",
+         lambda: advance.memory_debt(), []),
+    )
+
+    def setUp(self):
+        state.CHECKS_SKIPPED.clear()
+        self.addCleanup(state.CHECKS_SKIPPED.clear)
+
+    @contextmanager
+    def _broken(self, module, attr):
+        err = io.StringIO()
+        boom = RuntimeError("simulated: checker is broken")
+        with unittest.mock.patch.object(module, attr, side_effect=boom), \
+                unittest.mock.patch.object(sys, "stderr", err):
+            yield err
+
+    def test_every_site_still_fails_open_and_now_says_so(self):
+        for name, module, attr, call, fallback in self.SITES:
+            with self.subTest(site=name):
+                state.CHECKS_SKIPPED.clear()
+                with self._broken(module, attr) as err:
+                    self.assertEqual(call(), fallback)  # fail-OPEN, unchanged
+                line = err.getvalue()
+                self.assertIn(state.SKIPPED_PREFIX, line)
+                self.assertIn(name, line)                 # names the checker
+                self.assertIn("RuntimeError", line)       # names the exception
+                self.assertIn("simulated: checker is broken", line)
+                self.assertEqual(line.count("\n"), 1)     # one line, not a dump
+                self.assertEqual(state.CHECKS_SKIPPED, [name])
+
+    def test_a_healthy_checker_says_nothing(self):
+        # The other half of the claim: the diagnostic marks a skip, not a run.
+        err = io.StringIO()
+        with unittest.mock.patch.object(handoff, "uncovered_done_tasks",
+                                        return_value=[]), \
+                unittest.mock.patch.object(sys, "stderr", err):
+            self.assertEqual(stop_gate.handoff_debt(), [])
+        self.assertEqual(err.getvalue(), "")
+        self.assertEqual(state.CHECKS_SKIPPED, [])
+
+    def test_the_stop_is_still_allowed_but_the_release_is_not_reported_clean(self):
+        # allow() keeps allowing - CRASH_EXIT is the "allowed, and the harness
+        # raises stop-hook-error over the stderr" code, measured in stop_gate's
+        # own CRASH_EXIT comment. A block must NOT be converted into an allow,
+        # so emit() is untouched.
+        self.assertEqual(stop_gate.allow(), 0)
+        state.CHECKS_SKIPPED.append("stop_gate.handoff_debt")
+        self.assertEqual(stop_gate.allow(), stop_gate.CRASH_EXIT)
+        self.assertNotEqual(stop_gate.CRASH_EXIT, 2)  # 2 would BLOCK the stop
+        with redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(stop_gate.emit("a real demand"), 0)
+        self.assertEqual(json.loads(out.getvalue())["decision"], "block")
+
+    def test_registration_output_distinguishes_skipped_from_clean(self):
+        run = {"stage": "implement", "stage_status": "in_progress"}
+        with redirect_stdout(io.StringIO()) as out:
+            advance.result("started", "task-0100", run, "go")
+        self.assertNotIn("checks_skipped", json.loads(out.getvalue()))
+        state.CHECKS_SKIPPED.append("advance.handoff_debt")
+        with redirect_stdout(io.StringIO()) as out:
+            advance.result("started", "task-0100", run, "go")
+        self.assertEqual(json.loads(out.getvalue())["checks_skipped"],
+                         ["advance.handoff_debt"])

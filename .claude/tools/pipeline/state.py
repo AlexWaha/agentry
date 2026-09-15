@@ -140,6 +140,35 @@ def clear_busy_marker(task: str) -> None:
         pass
 
 
+# --- debt-checker fail-open, out loud -----------------------------------------
+# Every debt checker catches broadly and returns an empty result, because NFR-4
+# says a bug in a checker must not brick the conveyor. That is right and is not
+# in question. What was wrong is that it was SILENT: an empty list from a
+# crashed checker is byte-identical to an empty list from a clean tree, so one
+# typo turned enforcement into permission and the only symptom was that the
+# pipeline stopped complaining - which reads exactly like success.
+#
+# Lives here because state.py is already imported at the top of every hook and
+# nothing in this block can throw at import time (task-0077 Notes).
+CHECKS_SKIPPED: list[str] = []
+SKIPPED_PREFIX = "[debt-check-skipped]"
+
+
+def checker_failed(name: str, exc: BaseException, fallback):
+    """Record and announce a debt checker that raised, then fail open.
+
+    Returns `fallback` so the call site's behaviour is unchanged - no site
+    becomes fail-closed. The line goes to stderr on a fixed prefix so an
+    automated reader can tell "skipped" from "clean" by grep rather than by
+    reading prose, and the name is kept in CHECKS_SKIPPED so the block that
+    consumes `fallback` can say the check was skipped instead of passing an
+    uninformed release off as a verdict."""
+    CHECKS_SKIPPED.append(name)
+    print(f"{SKIPPED_PREFIX} {name}: {type(exc).__name__}: {exc}",
+          file=sys.stderr, flush=True)
+    return fallback
+
+
 def now() -> str:
     """Machine timestamp for the run log: UTC, explicitly marked Z."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

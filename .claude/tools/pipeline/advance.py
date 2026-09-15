@@ -103,8 +103,8 @@ def handoff_debt() -> list:
     try:
         import handoff
         return handoff.uncovered_done_tasks()
-    except Exception:
-        return []
+    except Exception as exc:
+        return state.checker_failed("advance.handoff_debt", exc, [])
 
 
 def memory_debt() -> list:
@@ -119,8 +119,8 @@ def memory_debt() -> list:
             sys.path.insert(0, p)
         import update as memory_update
         return memory_update.unstamped_done_tasks()
-    except Exception:
-        return []
+    except Exception as exc:
+        return state.checker_failed("advance.memory_debt", exc, [])
 
 
 def check_task_ready(task: str) -> str:
@@ -319,6 +319,10 @@ def result(action: str, task: str, run: dict, message: str) -> int:
         "stage_status": run.get("stage_status"),
         "awaiting_human": run.get("awaiting_human", ""),
         "message": message,
+        # Present only when a debt checker raised, so a reader that has never
+        # seen this key still parses; an automated reader tells "the gates were
+        # checked and clear" from "a gate was skipped" by its presence alone.
+        **({"checks_skipped": list(state.CHECKS_SKIPPED)} if state.CHECKS_SKIPPED else {}),
     }, indent=2))
     return 0
 

@@ -169,7 +169,18 @@ def emit(reason: str) -> int:
 
 def allow() -> int:
     # No output -> Claude Code stops normally.
-    return 0
+    #
+    # Unless a debt checker was skipped this stop. Then this release is
+    # uninformed, not clean, and saying nothing is the exact defect task-0077
+    # was filed for. CRASH_EXIT still ALLOWS the stop - measured, see its
+    # comment below - but the harness keeps the stderr line checker_failed
+    # wrote and raises `stop-hook-error` over it. Fail-open, out loud.
+    #
+    # In allow() and not in emit(): a stop that is genuinely being blocked
+    # already reaches the model through the hook's own channel, and exiting
+    # non-zero there would discard the block, which is the one direction this
+    # fix must never move.
+    return CRASH_EXIT if state.CHECKS_SKIPPED else 0
 
 
 # The exit code for "this hook crashed". NOT 0 and NOT 2, and both halves were
@@ -470,8 +481,8 @@ def handoff_debt() -> list:
     try:
         import handoff
         return handoff.uncovered_done_tasks()
-    except Exception:
-        return []
+    except Exception as exc:
+        return state.checker_failed("stop_gate.handoff_debt", exc, [])
 
 
 def memory_debt() -> list:
@@ -483,8 +494,8 @@ def memory_debt() -> list:
             sys.path.insert(0, p)
         import update as memory_update
         return memory_update.unstamped_done_tasks()
-    except Exception:
-        return []
+    except Exception as exc:
+        return state.checker_failed("stop_gate.memory_debt", exc, [])
 
 
 def debt_nags(key: str) -> int:
@@ -630,8 +641,8 @@ def latest_undocumented():
     try:
         import handoff
         return handoff.latest_main_task_undocumented()
-    except Exception:
-        return None
+    except Exception as exc:
+        return state.checker_failed("stop_gate.latest_undocumented", exc, None)
 
 
 def _git_repos() -> list:
