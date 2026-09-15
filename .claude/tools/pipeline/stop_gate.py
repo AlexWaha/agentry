@@ -517,10 +517,22 @@ def charge(conn, r: dict, ceiling: int) -> bool:
     The counter is per STAGE, not per run: advance.py zeroes it on every stage
     transition and approve.py --reject zeroes it too, so a stage starts with the
     full ceiling however long the stages before it took. That is what makes it
-    safe to charge a second branch - the `ready` stage's budget is its own."""
+    safe to charge a second branch - the `ready` stage's budget is its own.
+
+    The park is written to the DATABASE AND TO `r`, and the second write is not
+    housekeeping. `r` comes from the state.all_runs() snapshot decide() took at
+    the top, and every later reader in this stop - the free-slot test above all -
+    reads that snapshot, not the database. Without the in-memory write the run
+    still says `in_progress` to everything downstream on the very stop that
+    parked it, so a caller that relies on the BLOCKED status to hold the working
+    tree is reading a value that is already false. Measured on the plan flow: the
+    hook answered "Start the next ready task" on the parking stop while the run
+    held its branch. Build never showed it because its callers key on the stage
+    name, which this does not touch."""
     cont = r["continuations"] + 1
     if cont > ceiling:
         state.set_fields(conn, r["task"], stage_status=state.ST_BLOCKED)
+        r["stage_status"] = state.ST_BLOCKED
         return False
     state.set_fields(conn, r["task"], continuations=cont)
     return True
@@ -688,7 +700,6 @@ def decide() -> int:
         # What block()'s backstop needs to park a looping run. Set once, here,
         # rather than threaded through every branch that might block.
         _CTX["conn"], _CTX["runs"] = conn, runs
-        editing = state.EDITING_STAGES
         pipeline = state.load_pipeline()
         ceiling = int(pipeline.get("continuation_ceiling", 30))
 
@@ -718,6 +729,19 @@ def decide() -> int:
             stage, status, aw = r["stage"], r["stage_status"], r["awaiting_human"]
             if stage == "done":
                 continue
+            # THE RUN'S OWN FLOW, not the build flow (FR-39). This was
+            # state.EDITING_STAGES, a module constant naming three build stages,
+            # so every branch below was blind to the `plan` pipeline: a plan run
+            # mid-flight matched no branch, nothing drove it, and step 3 read a
+            # free slot and started a backlog task on top of its tree. Resolved
+            # per run because `runs` can hold one of each.
+            which = state.run_pipeline(r)
+            editing = state.editing_stages(pipeline, which)
+            # Who owns this stage: an agent (editing) or a person (checkpoint).
+            # Both come from the run's own flow, and both are needed, because a
+            # checkpoint stage must be left alone by the drive branch AND must
+            # still hold the working tree in the free-slot test below.
+            checkpoints = state.checkpoint_stages(pipeline, which)
             if status == state.ST_BLOCKED:
                 # A BLOCKED RUN IS SURFACED HERE, EXACTLY ONCE (task-0067).
                 # It is not autonomously advanceable, so this hook used to skip
@@ -776,7 +800,27 @@ def decide() -> int:
             if stage == "ready" and aw in ("commit", "push"):
                 continue
             # Editing stage in flight (in_progress or gate_failed retry).
-            if stage in editing:
+            #
+            # A CHECKPOINT STAGE IS NEVER DRIVEN, even if a flow lists it in its
+            # editing_stages. This branch's sentence is "finish the stage work",
+            # and the work of a checkpoint stage is a human's approval, so the
+            # demand is addressed to nobody - and since task-0019 a byte-stable
+            # sentence parks the run on the third armed repeat, which at a
+            # checkpoint costs an approval that was already given. The free-slot
+            # test below has the other half: a stage that stops being nagged must
+            # still hold the tree, or the queue takes it from under the human.
+            # Those two halves are the pair that produced task-0018's Critical,
+            # so they move together or not at all.
+            if stage in editing and stage not in checkpoints:
+                # A human owns the run - same guard the branch below carries, and
+                # a guard rather than a fix: no writer of `awaiting_human`
+                # produces this state today, because the two branches above claim
+                # every `ready` run and no other build stage sets the column. It
+                # is written down because the set is config now. Give
+                # `awaiting_human` a third writer and without this line the
+                # conveyor starts nagging over a human.
+                if aw:
+                    continue
                 # A fresh busy-marker means a long gate or a dispatched subagent
                 # is legitimately working this stage - stay quiet, do not nag or
                 # burn the continuation ceiling until it finishes or the marker
@@ -793,6 +837,44 @@ def decide() -> int:
                     f"{r['task']} is at stage '{stage}'. Finish the stage work (dispatch the owning "
                     f"subagent if needed), then run: python .claude/tools/pipeline/advance.py "
                     f"--task {r['task']}. Do not ask the user whether to continue.")
+            # A LIVE RUN ON A STAGE ITS OWN FLOW DEFINES AND editing_stages DOES
+            # NOT NAME (FR-39). Before this branch such a run matched nothing in
+            # the loop and the hook said not one word about it. That was
+            # invisible while the set was a build-only constant, because every
+            # build stage is covered by a branch above; the moment the set comes
+            # from config it is a live hole, since leaving a stage out of
+            # editing_stages then means "the conveyor never mentions this run
+            # again", which is not what an operator editing that key is asking
+            # for. The plan flow reaches it today at `approval`.
+            #
+            # THREE EXCLUSIONS, each preserving a behaviour the build flow
+            # already had, which is why they are guards and not oversights:
+            #
+            #   - a stage the flow does not define at all. That is stranded(),
+            #     which advance.py already blocks by name; it holds the queue
+            #     through the occupied test below and stays silent here. A
+            #     pipeline.json too broken to read names no stages, so this also
+            #     keeps an unreadable config from nagging about every run.
+            #   - a checkpoint stage, resolved by state.checkpoint_stages():
+            #     `ready` on build, `approval` on plan, and whatever a later flow
+            #     declares. Same reason as the drive branch above - the work is a
+            #     human's - stated once for every flow instead of once per stage
+            #     name. Both spellings count; see CHECKPOINT_KEYS.
+            #   - `awaiting_human` set: a human owns the run and there is
+            #     nothing to demand of the orchestrator. Same reason the
+            #     checkpoint branches above continue rather than block.
+            if (stage not in state.stage_names(pipeline, which)
+                    or stage in checkpoints
+                    or aw or busy_marker_fresh(r["task"])):
+                continue
+            if not charge(conn, r, ceiling):
+                continue
+            return block(
+                f"{r['task']} is at stage '{stage}' of the '{which}' flow, which "
+                f"pipelines.{which}.editing_stages does not list, so no branch of the Stop "
+                f"hook drives it. Run: python .claude/tools/pipeline/advance.py "
+                f"--task {r['task']} - it advances the stage or names the recovery. If the "
+                f"stage is real work, add it to editing_stages. Do not ask the user.")
 
         # Nothing above was driveable. If ANY task has a fresh busy marker, a
         # dispatched agent is working right now and every branch below would be
@@ -820,16 +902,60 @@ def decide() -> int:
         #   - ANY run awaiting a human - the CEO may be reading the diff on that
         #     very branch. A task parked on a human is unfinished work, not a
         #     free slot, so go quiet and wait instead;
-        #   - a run at `ready`, approved or not. This one was missing until
+        #   - a run on a CHECKPOINT STAGE, approved or not. Missing until
         #     task-0018: with every checkpoint auto-approved, `awaiting_human` is
-        #     empty and `ready` is not an editing stage, so a task holding a
-        #     dirty tree and a checked-out branch read as a free slot and the
-        #     next backlog task was started on top of it. The stage name is a
-        #     literal here as it is twice above; FR-39 (task-0020) is what reads
-        #     the stage sets from config;
+        #     empty and a checkpoint stage is not an editing stage, so a task
+        #     holding a dirty tree and a checked-out branch read as a free slot
+        #     and the next backlog task was started on top of it;
         #   - a run stranded on a stage its flow does not define (see stranded()).
+        #
+        # THE CHECKPOINT CLAUSE IS RESOLVED FROM CONFIG, not from a stage name,
+        # and that is the root fix rather than a tidy-up. This read
+        # `r["stage"] == "ready"`, which is true of the build flow because the
+        # build flow happens to spell its checkpoint that way. Every other flow
+        # fell through it: the plan flow's `approval` matched nothing here and
+        # nothing in the run loop, so the conveyor drove the CEO's own approval
+        # stage and read its tree as free at the same time. Special-casing
+        # `approval` would have been a second literal of the same shape, and the
+        # next flow a third. state.checkpoint_stages() asks the definition
+        # instead, so a stage is a checkpoint because its config says so.
+        #
+        # It pairs with the exclusion in the drive branch above and must move
+        # with it: what is not nagged must still occupy, or the queue takes the
+        # tree from under the human the nag was withheld for. That pair is
+        # task-0018's Critical restated, which is why both directions are tested
+        # for both flows.
+        #
+        # WHAT THIS DOES NOT DO: it stops the conveyor driving `approval`; it
+        # does not give the plan flow a checkpoint. There is no column for one in
+        # run.db, no branch for one in advance.py, and advance.stage_checkpoints()
+        # filters to `commit` and `push`, so a hand-run `advance.py --task X` on
+        # `approval` still walks it to `breakdown` - measured, because an absent
+        # `exit_gate` returns configured=True AND passed=True from gate.py. The
+        # automatic hole is closed: nothing instructs anyone to do it every stop.
+        # The remaining one is the KNOWN GAP noted in pipeline.json and has its
+        # own follow-up task.
+        #
+        # The BLOCKED clause is the same "a blocked task still owns its dirty
+        # tree" the second bullet states, spelled without going through a stage
+        # set. It fires on exactly one stop, the one charge() parks on: the
+        # caller continues with `awaiting_human` still empty, and the NEXT stop
+        # is covered by the surfacing branch, which returns before this test is
+        # reached. While the set covered every parkable stage that window was
+        # covered too; now that any stage can be parked by the branch above, it
+        # needs saying. A misconfigured editing_stages therefore costs driving,
+        # never tree safety.
+        #
+        # It reads `r["stage_status"]` out of the SNAPSHOT, so it depends on
+        # charge() writing the park into `r` as well as into the database. That
+        # coupling is the whole clause: with the in-memory write removed this
+        # reads `in_progress` on the only stop it exists for and the queue hands
+        # the tree away. Verified by deleting each half in turn.
         occupied = any(
-            (r["stage"] in editing) or r["stage"] == "ready" or r["awaiting_human"]
+            r["stage"] in state.editing_stages(pipeline, state.run_pipeline(r))
+            or r["stage"] in state.checkpoint_stages(pipeline, state.run_pipeline(r))
+            or r["awaiting_human"]
+            or (r["stage"] != "done" and r["stage_status"] == state.ST_BLOCKED)
             or stranded(r, pipeline)
             for r in runs
         )

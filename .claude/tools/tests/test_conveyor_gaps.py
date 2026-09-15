@@ -1573,10 +1573,14 @@ class ContinuationBoundTest(unittest.TestCase):
         self.assertIn("continuations=cont", inspect.getsource(stop_gate.charge))
 
     def test_every_block_site_in_decide_is_accounted_for(self):
-        # Eleven, enumerated in this class's docstring. A new branch changes a
-        # count here and the author has to say which door it goes through.
+        # Twelve. Eleven are enumerated in this class's docstring; the twelfth
+        # is task-0020's, the run-loop branch for a live run on a stage its own
+        # flow defines and editing_stages does not name. It goes through the
+        # charge() door like the other five run-bearing sites, which is what
+        # UnlistedStageIsDrivenTest asserts on the counter itself. A new branch
+        # changes a count here and the author has to say which door it uses.
         src = inspect.getsource(stop_gate.decide)
-        self.assertEqual(6, src.count("return block("))
+        self.assertEqual(7, src.count("return block("))
         self.assertEqual(5, src.count("return bounded_block("))
         # And none of them may reach the channel directly. block() is where the
         # reason-repeat backstop lives (task-0019) and bounded_block() routes
@@ -1761,6 +1765,342 @@ class ScaffoldWritesABusyMarkerTest(unittest.TestCase):
         state.write_busy_marker("task-0100", "implement")
         handoff.drop_scaffold_markers(set())
         self.assertTrue(stop_gate.busy_marker_fresh("task-0100"))
+
+
+# The plan flow, as a literal, in the shape task-0020 gave it. Same reason
+# BUILD_PIPELINE is a literal: these assertions must survive an edit to
+# .agentry/pipeline.json. `approval` carries `checkpoint` SINGULAR, which is
+# what the real file says and what advance.stage_checkpoints() does not read -
+# the difference is load-bearing below, so it is reproduced rather than tidied.
+PLAN_PIPELINE = {
+    "retry_budget": 3,
+    "pipelines": {"plan": {
+        "editing_stages": ["formalize", "draft", "plan-review", "breakdown"],
+        "stages": [
+            {"name": "formalize", "owner": "architect"},
+            {"name": "draft", "owner": "architect"},
+            {"name": "plan-review", "owner": "reviewer"},
+            {"name": "approval", "owner": "ceo", "checkpoint": "plan"},
+            {"name": "breakdown", "owner": "product-manager"},
+            {"name": "done", "owner": "ceo"},
+        ],
+    }},
+}
+
+# The same flow with the key as it shipped before task-0020. Kept so the defect
+# can be forced back in one argument instead of being described in a comment.
+PLAN_PIPELINE_UNSET = json.loads(json.dumps(PLAN_PIPELINE))
+PLAN_PIPELINE_UNSET["pipelines"]["plan"]["editing_stages"] = []
+
+
+def plan_run(task="task-0001", stage="draft", **extra) -> dict:
+    return run(task=task, stage=stage, pipeline=state.PLAN, **extra)
+
+
+class PlanRunIsInFlightTest(unittest.TestCase):
+    """FR-39: `editing = state.EDITING_STAGES` made half the conveyor invisible.
+
+    The constant names three BUILD stages, so a `plan` run mid-flight matched no
+    branch of the run loop: nothing drove it, and the free-slot test read a tree
+    nobody was holding, so the queue started a backlog task on top of it.
+
+    The source swap alone does not fix it, and that is the substance of the
+    task rather than a footnote: the shipped config said `"editing_stages": []`
+    for this flow, so resolving from config would have made a plan run LESS in
+    flight than the constant did. The set had to be decided and written down."""
+
+    # Two branches can speak about the same run, and their messages share a
+    # prefix, so every assertion below names the branch rather than the task.
+    # Measured: with `editing = state.EDITING_STAGES` put back, all of this
+    # class passed on `assertIn("task-0001 is at stage 'draft'")` alone, because
+    # the fallback branch says that too. A test that cannot see the defect it
+    # was written for is worse than no test.
+    DRIVEN = "Finish the stage work (dispatch the owning"
+    UNLISTED = "editing_stages does not list"
+
+    def test_a_plan_run_mid_flight_is_driven_as_editing_work(self):
+        reason = decide_with([plan_run(stage="draft")], pipeline=PLAN_PIPELINE)
+        self.assertIsNotNone(reason)
+        self.assertIn("task-0001 is at stage 'draft'", reason)
+        self.assertIn(self.DRIVEN, reason)
+        self.assertNotIn(self.UNLISTED, reason)
+        self.assertNotIn("Start the next ready task", reason)
+
+    def test_every_agent_owned_plan_stage_is_driven_not_just_draft(self):
+        # The criterion names `draft`; pinning only `draft` would pass with a
+        # one-element list and leave the other three stages exactly as broken.
+        for stage in ("formalize", "draft", "plan-review", "breakdown"):
+            with self.subTest(stage=stage):
+                reason = decide_with([plan_run(stage=stage)], pipeline=PLAN_PIPELINE)
+                self.assertIn(f"task-0001 is at stage '{stage}'", reason)
+                self.assertIn(self.DRIVEN, reason)
+                self.assertNotIn(self.UNLISTED, reason)
+
+    def test_the_empty_key_that_shipped_is_the_state_the_fix_had_to_reach(self):
+        # RED, forced back: with editing_stages [] the drive branch cannot see
+        # the run. What it must NOT do any more is go silent, so both halves are
+        # asserted - the stage is not driven as editing work, and the run is
+        # still spoken about, by the branch task-0020 added for exactly this.
+        reason = decide_with([plan_run(stage="draft")], pipeline=PLAN_PIPELINE_UNSET)
+        self.assertIsNotNone(reason)
+        self.assertIn(self.UNLISTED, reason)
+        self.assertNotIn(self.DRIVEN, reason)
+        self.assertNotIn("Start the next ready task", reason)
+
+    def test_the_shipped_config_really_lists_the_plan_stages(self):
+        # The fixtures above are literals, so every assertion in this class
+        # would pass against a pipeline.json that still says []. This is the one
+        # test that reads the real file, and it is what makes the rest mean
+        # something on this repository.
+        listed = state.editing_stages(state.load_pipeline(), state.PLAN)
+        self.assertIn("draft", listed)
+        self.assertEqual(("formalize", "draft", "plan-review", "breakdown"), listed)
+
+    def test_a_plan_run_holds_the_queue_once_its_budget_is_spent(self):
+        # The queue half, which the drive branch hides: while it returns a block
+        # the free-slot test is never reached. Spend the budget and the branch
+        # falls through, which is the stop the old code would have offered
+        # task-0002 on.
+        calls = unittest.mock.MagicMock()
+        first = decide_with([plan_run(stage="draft", continuations=30)],
+                            pipeline=PLAN_PIPELINE, set_fields=calls)
+        self.assertEqual(state.ST_BLOCKED, calls.call_args.kwargs["stage_status"])
+        self.assertNotIn("Start the next ready task", first or "")
+
+        # And on the stop after the park, still nothing offered: the run is
+        # surfaced BLOCKED by name.
+        nxt = decide_with([plan_run(stage="draft", status=state.ST_BLOCKED)],
+                          pipeline=PLAN_PIPELINE)
+        self.assertIn("task-0001 is parked BLOCKED", nxt)
+        self.assertNotIn("Start the next ready task", nxt)
+
+    def test_a_finished_plan_run_still_frees_the_slot(self):
+        # Control against the opposite failure: a set that holds the queue for
+        # ever is as broken as one that never holds it.
+        self.assertIn("Start the next ready task",
+                      decide_with([plan_run(stage="done")], pipeline=PLAN_PIPELINE))
+
+    def test_a_busy_marker_silences_the_plan_drive_branch_too(self):
+        calls = unittest.mock.MagicMock()
+        self.assertIsNone(decide_with([plan_run(stage="draft")], pipeline=PLAN_PIPELINE,
+                                      set_fields=calls, busy=True, any_busy=True,
+                                      backlog=()))
+        self.assertEqual(0, calls.call_count)
+
+
+class UnlistedStageIsDrivenTest(unittest.TestCase):
+    """FR-39, fourth criterion: a stage the flow defines and editing_stages does
+    not name must not fall out of the loop in silence.
+
+    Invisible while the set was a build-only constant - every build stage is
+    claimed by a branch above - and a live hole the moment the set is config,
+    because leaving a stage out of the key would otherwise mean "the conveyor
+    never mentions this run again"."""
+
+    # The example is `draft` under the config as it SHIPPED (editing_stages
+    # empty), not `approval`. `approval` was this class's example until the
+    # checkpoint set became config-resolved, at which point it stopped being an
+    # unlisted stage and became a protected one - the two tests below errored on
+    # `NoneType` the moment that landed, which is the branch correctly going
+    # quiet. An omitted work stage is what this branch is actually for.
+    def test_the_unlisted_stage_is_named_and_charged(self):
+        calls = unittest.mock.MagicMock()
+        reason = decide_with([plan_run(stage="draft")], pipeline=PLAN_PIPELINE_UNSET,
+                             set_fields=calls)
+        self.assertIn("task-0001 is at stage 'draft' of the 'plan' flow", reason)
+        self.assertIn("advance.py --task task-0001", reason)
+        # Charged through the same door as the other run-bearing sites: the
+        # counter is what bounds it, and asserting the text alone would pass on
+        # an unbounded branch - which is the defect task-0018 spent a task on.
+        self.assertEqual(1, calls.call_args.kwargs["continuations"])
+
+    def test_it_parks_the_run_when_the_budget_is_gone_rather_than_repeating(self):
+        # A real queue, not `backlog=()`. An empty backlog makes the free-slot
+        # branch unreachable whatever it decides, which would hide the same hole
+        # the neighbouring test exists to catch, from the other side.
+        calls = unittest.mock.MagicMock()
+        decide_with([plan_run(stage="draft", continuations=30)],
+                    pipeline=PLAN_PIPELINE_UNSET, set_fields=calls)
+        self.assertEqual(state.ST_BLOCKED, calls.call_args.kwargs["stage_status"])
+
+    def test_the_drive_branch_does_not_nag_over_a_human(self):
+        # A GUARD, pinned as a guard: no writer of `awaiting_human` produces an
+        # editing-stage run with the column set today, so this state is
+        # assembled rather than reproduced and the test proves only that the
+        # guard is present. It is here because the editing set is configuration
+        # now - put a checkpoint stage in some flow's editing_stages and this
+        # becomes reachable, at which point the conveyor would nag over the
+        # human and task-0019's backstop would park the run on the third stop.
+        calls = unittest.mock.MagicMock()
+        self.assertIsNone(decide_with([plan_run(stage="draft", awaiting_human="plan")],
+                                      pipeline=PLAN_PIPELINE, set_fields=calls))
+        self.assertEqual(0, calls.call_count)
+
+    def test_the_parked_run_still_occupies_the_tree_on_the_stop_that_parks_it(self):
+        # THE PARKING STOP ITSELF, reproduced rather than assembled. The first
+        # version of this test handed decide() a run that was ALREADY
+        # ST_BLOCKED, which the surfacing branch intercepts and blocks on before
+        # the free-slot test is ever reached - so it passed with the clause it
+        # was written for deleted. Feed the state the machine actually has at
+        # that moment instead: in_progress, budget exhausted, so charge() parks
+        # it inside this call and the loop falls through to the queue.
+        reason = decide_with([plan_run(stage="draft", continuations=30)],
+                             pipeline=PLAN_PIPELINE_UNSET)
+        self.assertNotIn("Start the next ready task", reason or "")
+
+    def test_the_stop_after_the_park_surfaces_it_rather_than_offering_work(self):
+        # The next stop, with the status charge() wrote. Different branch,
+        # different guarantee: this one is the surfacing, and it is asserted
+        # separately so that neither test can stand in for the other.
+        nxt = decide_with([plan_run(stage="draft", status=state.ST_BLOCKED)],
+                          pipeline=PLAN_PIPELINE_UNSET)
+        self.assertIn("task-0001 is parked BLOCKED", nxt)
+        self.assertNotIn("Start the next ready task", nxt)
+
+    def test_a_checkpoint_stage_is_never_nagged_as_stage_work(self):
+        # `ready` carries `checkpoints`, so its work is the CEO's approval and
+        # the demand would be addressed to nobody. Since task-0019 that stable
+        # sentence would also park the run on the third repeat, costing an
+        # approval the CEO had already given. Silence here, and the queue is
+        # held by the free-slot test instead.
+        calls = unittest.mock.MagicMock()
+        self.assertIsNone(decide_with([run(stage="ready")], pipeline=BUILD_PIPELINE,
+                                      set_fields=calls))
+        self.assertEqual(0, calls.call_count)
+
+    def test_a_stage_the_flow_does_not_define_is_left_to_stranded(self):
+        # Excluded deliberately: advance.py blocks a stranded run by name, and
+        # the free-slot test holds the queue. Nagging it here would duplicate
+        # one report and spend a budget on a run whose recovery is already
+        # written down.
+        self.assertIsNone(decide_with([run(stage="ghost-stage")],
+                                      pipeline=BUILD_PIPELINE))
+
+    def test_an_unreadable_pipeline_does_not_make_every_run_a_nag(self):
+        # Fail-open control. No stage names means no stage is "defined", so this
+        # branch claims nothing and the hook behaves as it did before the branch
+        # existed.
+        self.assertIn("Start the next ready task task-0002",
+                      decide_with([run(stage="ghost-stage")], pipeline={}))
+
+
+# The plan flow with `approval` wrongly listed as an editing stage. Not a
+# configuration anyone should write - it is the one that proves the drive branch
+# excludes a checkpoint stage on the strength of the stage definition rather
+# than on the strength of it being absent from editing_stages.
+PLAN_PIPELINE_APPROVAL_LISTED = json.loads(json.dumps(PLAN_PIPELINE))
+PLAN_PIPELINE_APPROVAL_LISTED["pipelines"]["plan"]["editing_stages"] = [
+    "formalize", "draft", "plan-review", "approval", "breakdown"]
+
+
+class CheckpointStageFromConfigTest(unittest.TestCase):
+    """The root the CEO asked to be fixed: the free-slot test derived from the
+    literal stage name `ready`, so it was right for `build` by coincidence and
+    blind to every other flow.
+
+    The plan flow's `approval` is the same kind of stage - a human's - and
+    matched neither the literal here nor any branch of the run loop, so the
+    conveyor drove the CEO's approval stage AND read its tree as free. A
+    special case for `approval` would have been the same bug with a second
+    name in it. Both halves are asserted for both flows, because they are one
+    decision: what is not nagged must still occupy."""
+
+    def test_a_plan_run_at_approval_is_silent_and_holds_the_queue(self):
+        # The case the CEO named. One call, both halves: nothing said about the
+        # run, and task-0002 not started while it sits there.
+        calls = unittest.mock.MagicMock()
+        self.assertIsNone(decide_with([plan_run(stage="approval")],
+                                      pipeline=PLAN_PIPELINE, set_fields=calls))
+        # Silent AND uncharged - a nag that spends the budget would park the run
+        # on the third stop even if the text never reached the CEO.
+        self.assertEqual(0, calls.call_count)
+
+    def test_a_build_run_at_ready_is_silent_and_holds_the_queue(self):
+        # The same two halves for the flow that already worked, now reached
+        # through the config rather than through its name being spelled in the
+        # source. This is what the removed literal used to guarantee.
+        calls = unittest.mock.MagicMock()
+        self.assertIsNone(decide_with([run(stage="ready")], pipeline=BUILD_PIPELINE,
+                                      set_fields=calls))
+        self.assertEqual(0, calls.call_count)
+
+    def test_both_spellings_of_the_checkpoint_key_count(self):
+        # `approval` says `checkpoint`, `ready` says `checkpoints`, and no reader
+        # in the tree reads the singular. Pinned so that normalising the odd one
+        # out cannot quietly unprotect the stage.
+        self.assertEqual(("approval",), state.checkpoint_stages(PLAN_PIPELINE, state.PLAN))
+        self.assertEqual(("ready",), state.checkpoint_stages(BUILD_PIPELINE, state.BUILD))
+
+    def test_a_checkpoint_stage_wins_even_if_editing_stages_lists_it(self):
+        # The two halves move together or not at all. With `approval` wrongly in
+        # editing_stages the drive branch must still leave it alone, and the
+        # free-slot test must still hold the tree for it - otherwise the pair
+        # comes apart exactly where task-0018's Critical came from.
+        calls = unittest.mock.MagicMock()
+        self.assertIsNone(decide_with([plan_run(stage="approval")],
+                                      pipeline=PLAN_PIPELINE_APPROVAL_LISTED,
+                                      set_fields=calls))
+        self.assertEqual(0, calls.call_count)
+
+    def test_an_unreadable_config_still_holds_the_tree_for_ready(self):
+        # NFR-4, and the direction matters: a config we cannot read must not turn
+        # a checkpoint into a free slot. Falls back to the module constant for
+        # build exactly as editing_stages() does.
+        self.assertEqual(state.CHECKPOINT_STAGES, state.checkpoint_stages({}, state.BUILD))
+        self.assertIsNone(decide_with([run(stage="ready")], pipeline={}))
+
+    def test_a_flow_that_declares_no_checkpoint_gets_none_invented(self):
+        # An empty answer from a READABLE config is the config speaking. Only an
+        # unreadable flow falls back, which is what keeps the fallback from
+        # becoming a hidden default.
+        no_cp = json.loads(json.dumps(PLAN_PIPELINE))
+        for s in no_cp["pipelines"]["plan"]["stages"]:
+            s.pop("checkpoint", None)
+        self.assertEqual((), state.checkpoint_stages(no_cp, state.PLAN))
+
+    def test_the_word_ready_is_gone_from_the_decide_source(self):
+        # The literal is the thing being removed, so its absence is the
+        # assertion. Two readers had it; the run loop's remaining `ready`
+        # branches key on commit and push, which are build-only columns in
+        # run.db, and generalising those needs the checkpoint that does not
+        # exist yet - so they stay and are counted here rather than banned.
+        src = inspect.getsource(stop_gate.decide)
+        code = "\n".join(ln for ln in src.splitlines() if not ln.strip().startswith("#"))
+        self.assertEqual(2, code.count('== "ready"'))
+        self.assertIn('aw == "commit"', code)
+
+
+class BuildFlowUnchangedTest(unittest.TestCase):
+    """FR-39's third criterion: for the flow that already worked this is a
+    source swap, not a semantic one.
+
+    The swap is only safe because `state.editing_stages()` falls back to the
+    module constant for `build` when the key is absent, so the fixtures here -
+    which carry no editing_stages key at all - resolve to exactly what the
+    constant gave the old code."""
+
+    def test_each_editing_stage_is_driven_as_before(self):
+        for stage in state.EDITING_STAGES:
+            with self.subTest(stage=stage):
+                reason = decide_with([run(stage=stage)], pipeline=BUILD_PIPELINE)
+                self.assertIn(f"task-0001 is at stage '{stage}'", reason)
+                # The drive branch, not task-0020's fallback: the two messages
+                # share a prefix and only this phrase tells them apart.
+                self.assertIn("Finish the stage work (dispatch the owning", reason)
+                self.assertNotIn("editing_stages does not list", reason)
+
+    def test_the_absent_key_resolves_to_the_module_constant(self):
+        self.assertEqual(state.EDITING_STAGES,
+                         state.editing_stages(BUILD_PIPELINE, state.BUILD))
+
+    def test_a_ready_run_with_no_awaiting_human_is_still_silent_and_still_occupies(self):
+        # Both halves of the decision to leave `ready` out of editing_stages and
+        # keep it as its own clause in the free-slot test.
+        self.assertIsNone(decide_with([run(stage="ready")], pipeline=BUILD_PIPELINE))
+
+    def test_a_done_run_still_frees_the_slot(self):
+        self.assertIn("Start the next ready task",
+                      decide_with([run(stage="done")], pipeline=BUILD_PIPELINE))
 
 
 if __name__ == "__main__":
