@@ -8,6 +8,11 @@ state and either:
   - allows the stop when every task is parked at a human checkpoint, blocked, or
     done and no ready backlog remains.
 
+There is a third outcome and it is not a decision: this script CRASHING. It then
+allows the stop like the second case, because failing open is not negotiable,
+but it exits non-zero so the harness raises its `stop-hook-error` notification
+instead of letting the crash pass for a considered release. See CRASH_EXIT.
+
 A blocked run is surfaced once before it is left alone (it is the CEO's to
 unblock, and nothing else in the harness tells him it exists) - see decide().
 
@@ -55,6 +60,7 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 
 import approvals
 import mode
@@ -164,6 +170,27 @@ def emit(reason: str) -> int:
 def allow() -> int:
     # No output -> Claude Code stops normally.
     return 0
+
+
+# The exit code for "this hook crashed". NOT 0 and NOT 2, and both halves were
+# measured on build 2.1.269 rather than read off the documentation:
+#
+#   0 - the stop is allowed and the harness shows NOTHING. Measured with a Stop
+#       hook that raised, caught its own exception and returned 0, which is
+#       exactly the shape main() had: the run produced no notification, no
+#       stderr and no stream event. Nothing anywhere said the hook had failed.
+#   2 - the stop is BLOCKED and stderr goes to the model. That is the opposite
+#       of failing open; a crashing hook would trap the session in a stop loop.
+#   1 - the stop is allowed AND the harness raises its own notification, keyed
+#       `stop-hook-error`, priority `immediate`: "Stop hook error occurred,
+#       ctrl+o to see". Measured twice, with a raised traceback and with a bare
+#       non-zero exit, and once more on a stop carrying stop_hook_active, which
+#       the minified source suggested might suppress it and did not. The turn
+#       ended normally in all three (`stop_reason: end_turn`).
+#
+# So the channel this file's own comments wanted already exists in the harness,
+# and exiting 0 was the one thing that hid it. See main().
+CRASH_EXIT = 1
 
 
 def stop_repeats(reason: str) -> int:
@@ -1135,8 +1162,25 @@ def main() -> int:
     try:
         return decide()
     except Exception:
-        # Fail open: never trap the user in a stop loop.
-        return allow()
+        # FAIL OPEN, AND SAY SO. Failing open is not in question - a crash here
+        # must never trap the user in a stop loop, and it still does not: exit 1
+        # allows the stop exactly as exit 0 did. What changed is that the crash
+        # is no longer indistinguishable from a decision to release.
+        #
+        # Until this task the handler returned allow(), so a crashed hook and a
+        # hook that had examined every run and found nothing to do produced the
+        # identical result: exit 0, no output, session ends. The whole conveyor
+        # would stop advancing and the only evidence would be that it had gone
+        # quiet - the failure mode this file exists to prevent, in the file
+        # itself.
+        #
+        # The traceback goes to stderr because that is what the harness shows.
+        # It is not printed for its own sake: on a non-zero exit Claude Code
+        # keeps the stderr and raises the `stop-hook-error` notification that
+        # points at it (ctrl+o). On exit 0 it keeps nothing, which is why moving
+        # off 0 is the fix and printing alone would not have been.
+        traceback.print_exc(file=sys.stderr)
+        return CRASH_EXIT
 
 
 if __name__ == "__main__":

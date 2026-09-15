@@ -2103,5 +2103,95 @@ class BuildFlowUnchangedTest(unittest.TestCase):
                       decide_with([run(stage="done")], pipeline=BUILD_PIPELINE))
 
 
+class CrashIsReportedTest(unittest.TestCase):
+    """FR-40: a Stop hook that crashes must not look like one that released.
+
+    The spec asked for this as a `StopFailure` hook registration. Measured on
+    build 2.1.269, that event is not what it sounds like: it fires INSTEAD of
+    Stop when an API error ends the turn (its `error` field carries
+    `rate_limit`, `max_output_tokens` and ten siblings), and it cannot observe a
+    hook failure at all. The reporting channel for THAT already exists in the
+    harness - the `stop-hook-error` notification, raised on any non-zero exit
+    from a Stop hook - and the single thing hiding it was main() catching every
+    exception and returning 0, the one exit code the harness shows nothing for.
+
+    So what is pinned here is the exit code, not a message: on exit 0 there is
+    nothing for a test to read, because the silence IS the defect."""
+
+    @contextmanager
+    def crashing(self, exc=None):
+        err = io.StringIO()
+        out = io.StringIO()
+        boom = exc or RuntimeError("deliberate crash inside decide")
+        with unittest.mock.patch.object(stop_gate, "decide", side_effect=boom), \
+                unittest.mock.patch.object(sys, "stdin",
+                                           io.StringIO('{"hook_event_name": "Stop"}')), \
+                unittest.mock.patch.object(sys, "stderr", err), \
+                redirect_stdout(out):
+            yield lambda: stop_gate.main(), err, out
+
+    def test_a_crash_exits_non_zero_so_the_harness_reports_it(self):
+        # Delete the `return CRASH_EXIT` line (or put back `return allow()`) and
+        # this is the assertion that goes red: 0 is the value that produced no
+        # notification, no stderr and no stream event in the measurement.
+        with self.crashing() as (call, _err, _out):
+            self.assertNotEqual(0, call())
+
+    def test_a_crash_still_fails_open(self):
+        # NFR-4, and the half that must not be traded for the half above. Exit 2
+        # is the only code that BLOCKS a stop and feeds stderr to the model, so
+        # reporting the crash must never reach for it: that would trap the
+        # session in a stop loop on the way to being loud about it.
+        with self.crashing() as (call, _err, out):
+            self.assertNotEqual(2, call())
+        # And nothing may reach stdout, which is where a block decision lives.
+        self.assertEqual("", out.getvalue())
+
+    def test_the_traceback_reaches_stderr(self):
+        # The exit code raises the notification; stderr is what ctrl+o then
+        # shows. Without it the human is told a hook failed and not which one.
+        with self.crashing() as (call, err, _out):
+            call()
+        text = err.getvalue()
+        self.assertIn("deliberate crash inside decide", text)
+        self.assertIn("Traceback", text)
+
+    def test_a_healthy_stop_stays_silent(self):
+        # The other direction: this must not turn every ordinary stop into a
+        # notification. A decide() that returns normally keeps its own code and
+        # writes no stderr.
+        err = io.StringIO()
+        with unittest.mock.patch.object(stop_gate, "decide", return_value=0), \
+                unittest.mock.patch.object(sys, "stdin",
+                                           io.StringIO('{"hook_event_name": "Stop"}')), \
+                unittest.mock.patch.object(sys, "stderr", err):
+            self.assertEqual(0, stop_gate.main())
+        self.assertEqual("", err.getvalue())
+
+    def test_junk_in_the_payload_does_not_swallow_a_crash(self):
+        # Fail-open direction under junk. The payload read has its own handler,
+        # and an unreadable one must not route around the report: whatever the
+        # stdin held, a crashing decide() still exits non-zero and still says
+        # why. `None` and `[]` are the shapes that parse and then explode on
+        # .get(), which is how the stop-repeat counter was pinned at 1 for ever.
+        for junk in ("", "{not json", "null", "[1,2,3]", '{"stop_hook_active": "yes"}'):
+            with self.subTest(payload=junk):
+                err = io.StringIO()
+                with unittest.mock.patch.object(stop_gate, "decide",
+                                                side_effect=RuntimeError("boom")), \
+                        unittest.mock.patch.object(sys, "stdin", io.StringIO(junk)), \
+                        unittest.mock.patch.object(sys, "stderr", err):
+                    self.assertNotEqual(0, stop_gate.main())
+                self.assertIn("boom", err.getvalue())
+
+    def test_a_crash_that_is_not_an_exception_still_propagates(self):
+        # BaseException is deliberately NOT caught: KeyboardInterrupt and
+        # SystemExit are the user and the interpreter, not a hook defect, and
+        # swallowing them into a tidy exit code is how a Ctrl-C gets eaten.
+        with self.assertRaises(KeyboardInterrupt):
+            with self.crashing(KeyboardInterrupt()) as (call, _err, _out):
+                call()
+
+
 if __name__ == "__main__":
     unittest.main()
