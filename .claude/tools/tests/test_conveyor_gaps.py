@@ -904,9 +904,16 @@ class BusyMarkerTest(unittest.TestCase):
 class MergeEvidenceTest(unittest.TestCase):
     """Defect 4: nothing reaches done because evidence was absent."""
 
-    def _fake_git(self, refs=(), merged=(), tagged=False):
-        """Minimal git stand-in: which refs exist, which are in main, and
-        whether main carries a '[task-NNNN]' commit."""
+    def _fake_git(self, refs=(), merged=(), tagged=False, first_parent=("main",)):
+        """Minimal git stand-in: which refs exist, which are in main, whether
+        main carries a '[task-NNNN]' commit, and the first-parent chain.
+
+        The chain is what tells a real merge from an empty branch (task-0065):
+        containment holds for both, so a ref counts as merged only when it sits
+        OFF the chain, where a merge commit leaves the side it pulled in. The
+        default models that shape - the chain is the trunk own commits, and a
+        declared branch reaches the trunk from the side.
+        """
         def _git(repo, *args, timeout=None):
             if args[0] == "fetch":
                 return 0, ""
@@ -915,7 +922,10 @@ class MergeEvidenceTest(unittest.TestCase):
             if args[0] == "log":                         # task_in_main
                 return 0, "abc1234 [task-0043] work" if tagged else ""
             if args[0] == "rev-parse":
-                return (0, args[-1]) if args[-1] in refs else (1, "")
+                ref = args[-1].replace("^{commit}", "")
+                return (0, ref) if ref in refs or ref == "main" else (1, "")
+            if args[0] == "rev-list":                    # the first-parent chain
+                return 0, "\n".join(first_parent)
             if args[0] == "merge-base":
                 return (0, "") if args[2] in merged else (1, "")
             return 1, ""
@@ -954,6 +964,16 @@ class MergeEvidenceTest(unittest.TestCase):
                            refs=("origin/bugfix/task-0001",))
         self.assertEqual("park", out["action"])
         self.assertEqual("merge", out["awaiting_human"])
+        self.assertIn("does not carry this task yet", out["message"])
+
+    def test_a_declared_branch_that_merely_points_at_main_parks(self):
+        # task-0065: contained in the trunk, but sitting ON its first-parent
+        # chain - the shape of a branch with no commits, not of a merge.
+        out = self._finish({"branch": "bugfix/task-0001"},
+                           refs=("origin/bugfix/task-0001",),
+                           merged=("origin/bugfix/task-0001",),
+                           first_parent=("main", "origin/bugfix/task-0001"))
+        self.assertEqual("park", out["action"])
         self.assertIn("does not carry this task yet", out["message"])
 
 
@@ -1033,6 +1053,70 @@ class LocalMergeDetectionTest(unittest.TestCase):
         # A branch that exists but is merged nowhere: known, and known unmerged.
         self.work_branch("feature/task-9004", "work")
         self.assertIs(False, self.report("task-9004")[0]["in_main"])
+
+    # task-0065: pointer containment is not merge evidence. An empty branch is
+    # an ancestor of main the moment it is cut, which is the state EVERY task
+    # starts in, so the old ancestry test reported the task as merged before it
+    # had shipped a line.
+
+    def test_a_branch_with_no_commits_is_never_reported_as_merged(self):
+        # The exact live case: git checkout -b, nothing committed yet.
+        self.git("checkout", "-b", "techdebt/task-9101")
+        self.git("checkout", "main")
+        self.assertEqual(self.git("rev-parse", "techdebt/task-9101"),
+                         self.git("rev-parse", "main"))
+
+        self.assertIsNone(git_state.merged_into_main(self.repo, "techdebt/task-9101"))
+        self.assertIsNot(True, self.report("task-9101")[0]["in_main"])
+
+    def test_an_empty_branch_stays_unmerged_while_main_moves_on(self):
+        # Main advancing past the empty branch - by its own commits and by
+        # merging somebody else's work - is still not this task shipping.
+        self.git("checkout", "-b", "techdebt/task-9102")
+        self.git("checkout", "main")
+        self.commit("unrelated work on main")
+        self.work_branch("feature/task-9103", "somebody else's branch")
+        self.git("merge", "--no-ff", "-m", "merge a different branch", "feature/task-9103")
+
+        self.assertIsNone(git_state.merged_into_main(self.repo, "techdebt/task-9102"))
+        self.assertIsNot(True, self.report("task-9102")[0]["in_main"])
+        # ... while the branch that really was merged still reads as carried.
+        self.assertIs(True, git_state.merged_into_main(self.repo, "feature/task-9103"))
+
+    def test_the_three_outcomes_stay_distinct(self):
+        self.work_branch("feature/task-9104", "carried work")
+        self.git("merge", "--no-ff", "-m", "merge it", "feature/task-9104")
+        self.work_branch("feature/task-9105", "work that was never merged")
+        self.git("checkout", "-b", "feature/task-9106")      # empty: cannot tell
+        self.git("checkout", "main")
+
+        self.assertIs(True, git_state.merged_into_main(self.repo, "feature/task-9104"))
+        self.assertIs(False, git_state.merged_into_main(self.repo, "feature/task-9105"))
+        self.assertIsNone(git_state.merged_into_main(self.repo, "feature/task-9106"))
+        self.assertIsNone(git_state.merged_into_main(self.repo, "feature/task-does-not-exist"))
+
+    def test_junk_git_output_fails_towards_cannot_tell(self):
+        for answer in ((1, ""), (128, "fatal: not a git repository"), (0, "")):
+            with self.subTest(answer=answer):
+                with unittest.mock.patch.object(git_state, "_git", return_value=answer):
+                    self.assertIsNone(
+                        git_state.merged_into_main(self.repo, "feature/task-9107"))
+
+    def test_a_fast_forward_merge_with_no_tag_parks_rather_than_closing(self):
+        # The cost of requiring positive evidence, stated as a test: a
+        # fast-forward leaves the branch tip ON main's first-parent chain, which
+        # is byte-identical to an empty branch. Cannot tell, so it parks - and a
+        # tagged commit is what closes it.
+        self.work_branch("feature/task-9108", "work merged by fast-forward")
+        self.git("merge", "--ff-only", "feature/task-9108")
+        self.assertEqual(self.git("rev-parse", "feature/task-9108"),
+                         self.git("rev-parse", "main"))
+        self.assertIsNone(git_state.merged_into_main(self.repo, "feature/task-9108"))
+        self.assertIsNot(True, self.report("task-9108")[0]["in_main"])
+
+        self.work_branch("feature/task-9109", "[task-9109] tagged work")
+        self.git("merge", "--ff-only", "feature/task-9109")
+        self.assertTrue(self.report("task-9109")[0]["in_main"])
 
     def test_a_repository_with_no_remote_resolves_the_trunk(self):
         self.assertEqual("", self.git("remote"))

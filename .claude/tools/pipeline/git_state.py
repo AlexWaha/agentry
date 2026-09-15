@@ -108,12 +108,40 @@ def trunk(repo: Path) -> str:
 
 
 def merged_into_main(repo: Path, ref: str) -> bool | None:
-    """True when the trunk already contains ref - ancestry, the one signal that
-    needs nobody to have written a commit tag correctly. None when it cannot be
-    told apart from a missing ref or a broken repo."""
+    """True only when the trunk carries WORK that arrived from ref.
+
+    Containment of the branch POINTER is not that, and used to be what this
+    answered. A branch freshly cut from main is trivially an ancestor of it
+    while carrying nothing - the state every task starts in - so the old
+    ancestry test said True in the window between `git checkout -b` and the
+    first commit, and `done` could retire a task that shipped nothing.
+
+    The positive evidence is the shape of a merge: a merged branch tip sits on
+    the SIDE of a merge commit, off the trunk's first-parent chain, so the trunk
+    reaching it proves both that the merge happened and that the merged side was
+    non-empty. A tip still ON the first-parent chain is either an empty branch
+    or a fast-forward merge, and those two are indistinguishable from the refs
+    alone - that is None, cannot tell, which parks. Never True.
+
+    Three outcomes, kept apart on purpose:
+      True  - the trunk carries commits that came in from this branch
+      False - the trunk does not contain the ref at all
+      None  - cannot tell: missing ref, unreadable repo, or a tip on the
+              first-parent chain (empty branch or fast-forward)."""
     if not _ref_exists(repo, ref):
         return None
-    return _is_ancestor(repo, ref, trunk(repo))
+    code, sha = _git(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+    if code != 0 or not sha:
+        return None
+    main_ref = trunk(repo)
+    if not _ref_exists(repo, main_ref):
+        return None
+    if not _is_ancestor(repo, ref, main_ref):
+        return False
+    code, chain = _git(repo, "rev-list", "--first-parent", main_ref)
+    if code != 0:
+        return None
+    return None if sha in chain.splitlines() else True
 
 
 def task_in_main(repo: Path, task: str) -> bool | None:
@@ -254,10 +282,12 @@ def task_report(task: str, do_fetch: bool = True, branch: str = "") -> list[dict
         if do_fetch:
             fetch(repo)
         found = declared_ref(repo, branch) or branch_for(repo, task)
-        # Merged is the UNION of the signals: ancestry proves an ordinary merge
-        # and needs no commit tag, the tag proves a squash merge that left no
-        # ancestry. Either one is enough; only when both are silent (None) does
-        # the repo stay unknown.
+        # Merged is the UNION of the signals, and each one must be POSITIVE
+        # evidence on its own: merge shape proves an ordinary merge and needs no
+        # commit tag, the tag proves a squash merge that left no merge shape.
+        # Either one is enough; only when both are silent (None) does the repo
+        # stay unknown. Pointer containment is not a signal - see
+        # merged_into_main.
         signals = [task_in_main(repo, task)]
         if found:
             signals.append(merged_into_main(repo, found))
