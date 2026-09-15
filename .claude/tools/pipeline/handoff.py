@@ -284,9 +284,43 @@ def uncovered_done_tasks() -> list[dict]:
             problems = validate_handoff(path, task)
             if problems:
                 out.append({"task": task, "reason": "; ".join(problems)})
+        drop_scaffold_markers({d["task"] for d in out})
         return out
     except Exception:
         return []
+
+
+def drop_scaffold_markers(still_owed: set) -> None:
+    """Clear the busy marker of any task whose handoff doc now validates.
+
+    The marker's reason is "an agent is filling this doc", and that reason ends
+    when the doc passes validation - not `state.BUSY_TIMEOUT` seconds later.
+    Without this, a doc written in two minutes went on suppressing the debt
+    demands, the queue and the drift reconciler for the remaining thirteen.
+    Hung off the check every caller already makes (advance.py, stop_gate.py,
+    pretool_gate.py all call uncovered_done_tasks) so the clearing happens on
+    the same stop that observes the doc, rather than waiting for a human to
+    remember `--idle`.
+
+    ONLY markers this module wrote, identified by `stage == "handoff"`: a gate
+    marker written by advance.py around a live stage belongs to a RUN, and
+    unlinking it would start nagging an agent that is still working.
+
+    Fail-open per marker and overall: a marker left behind costs silence until
+    it expires, which is the pre-existing behaviour, never an exception out of
+    the debt check."""
+    try:
+        for p in state.STATE_DIR.glob("gate-*.json"):
+            task = p.name[len("gate-"):-len(".json")]
+            if task in still_owed:
+                continue
+            try:
+                if json.loads(p.read_text(encoding="utf-8")).get("stage") == "handoff":
+                    state.clear_busy_marker(task)
+            except (OSError, ValueError):
+                continue
+    except Exception:
+        pass
 
 
 def latest_main_task_undocumented() -> dict | None:
@@ -552,9 +586,24 @@ def scaffold(task: str, force: bool = False) -> tuple[bool, str]:
                          ("{{MERGE_COMMIT}}", commit), ("{{FILES}}", files)):
         text = text.replace(token, value)
     path.write_text(text, encoding="utf-8")
+    # Scaffolding IS the dispatch signal: the orchestrator runs --for immediately
+    # before dispatching the agent that fills the doc. Without the marker the
+    # Stop hook demands the doc on every stop while that agent is writing it -
+    # measured on tasks 0004, 0005, 0007, 0008 and three times on 0009, and the
+    # instruction it repeats is to do the thing already being done. Fail-open:
+    # an unwritable marker costs nagging, never the scaffold.
+    try:
+        state.write_busy_marker(task, "handoff")
+    except Exception:
+        pass
     return True, (f"scaffolded {rel(path)} (merge_commit: {commit}). Fill every FILL-ME "
                   f"section in your own words, then verify: python "
-                  f".claude/tools/pipeline/handoff.py --check")
+                  f".claude/tools/pipeline/handoff.py --check - which also drops the "
+                  f"busy marker this just wrote, once the doc validates. Until then the "
+                  f"Stop hook is quiet about this debt, the queue and status drift, for "
+                  f"at most {int(state.BUSY_TIMEOUT)}s. To end that sooner without "
+                  f"filling the doc: python .claude/tools/pipeline/advance.py --task "
+                  f"{task} --idle")
 
 
 def waive(task: str, reason: str) -> str:

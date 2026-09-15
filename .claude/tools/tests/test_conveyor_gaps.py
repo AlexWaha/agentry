@@ -30,6 +30,7 @@ Each test pins one defect that cost a round trip every turn of a real session:
 
 from __future__ import annotations
 
+import inspect
 import io
 import json
 import subprocess
@@ -86,7 +87,8 @@ class _FakeConn:
 
 
 def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
-                set_fields=None, debt=(), mem_debt=(), count_nags=False) -> str | None:
+                set_fields=None, debt=(), mem_debt=(), count_nags=False,
+                busy=False, any_busy=False, latest=None) -> str | None:
     """stop_gate.decide() over a synthetic run set. Returns the block reason, or
     None when the hook allowed the stop. No DB, no git, no task files.
 
@@ -94,9 +96,17 @@ def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
     gate marker for the task id used here (written whenever the orchestrator
     dispatches a subagent for it) silenced the hook and failed these tests for
     an environmental reason. BusyMarkerTest covers that function directly.
+    any_busy_marker_fresh is mocked for the same reason and it is the stronger
+    case: it globs that directory, so a marker for ANY task - one this test never
+    heard of - would short-circuit decide() and turn every assertion here into a
+    silent None. `busy` / `any_busy` turn them on for the tests that are about
+    the marker itself.
 
     debt / mem_debt default to none, so every pre-existing assertion here is
-    about a pipeline with its documentation paid up.
+    about a pipeline with its documentation paid up. `latest` defaults to None
+    for the same reason, and it is a patch, so a probe that forgets to pass it
+    silently tests a branch that cannot fire - which is how a green result was
+    once recorded for site 6.
 
     count_nags is off by default, which is deliberate and not laziness. The real
     counter persists in a file under state.STATE_DIR: left live it would make
@@ -122,10 +132,12 @@ def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
             unittest.mock.patch.object(stop_gate, "read_backlog", return_value=queue), \
             unittest.mock.patch.object(stop_gate, "handoff_debt", return_value=list(debt)), \
             unittest.mock.patch.object(stop_gate, "memory_debt", return_value=list(mem_debt)), \
-            unittest.mock.patch.object(stop_gate, "latest_undocumented", return_value=None), \
+            unittest.mock.patch.object(stop_gate, "latest_undocumented", return_value=latest), \
             unittest.mock.patch.object(stop_gate, "reconcile_status_drift", return_value=([], [])), \
             unittest.mock.patch.object(stop_gate.approvals, "granted", return_value=True), \
-            unittest.mock.patch.object(stop_gate, "busy_marker_fresh", return_value=False), \
+            unittest.mock.patch.object(stop_gate, "busy_marker_fresh", return_value=busy), \
+            unittest.mock.patch.object(stop_gate, "any_busy_marker_fresh",
+                                       return_value=any_busy), \
             redirect_stdout(buf):
         stop_gate.decide()
     for p in nag_patches:
@@ -1146,6 +1158,344 @@ class SoloCheckpointTest(unittest.TestCase):
         self.assertEqual("commit", out["awaiting_human"])
         self.assertEqual("ready", self._row("task-0602")["stage"])
         self.assertEqual(0, self._row("task-0602")["commit_approved"])
+
+
+class ContinuationBoundTest(unittest.TestCase):
+    """FR-37: no branch of decide() blocks for ever, and no HEALTHY task is
+    parked for being slow.
+
+    Both halves are the test. A counter that increments is trivially easy to
+    write and proves nothing: the failure this project has actually produced is
+    the other one - a live task parked BLOCKED by a counter that climbed for
+    reasons unrelated to looping. So every bound below is asserted together with
+    the stop before it, which must still drive the work.
+
+    The eleven block sites in decide(), N of N, and which door each goes
+    through:
+
+      charge() - blocks on a run, spends that stage's continuation budget:
+        1. approved checkpoint pending (`ready` + commit/push approved)
+        2. editing stage, gate FAILED
+        3. editing stage, in progress
+      bounded_block() - blocks on something with NO run row, spends the nag
+      budget for that demand's key:
+        4. handoff debt before starting a backlog task      key `handoff:`
+        5. memory debt before starting a backlog task       key `memory:`
+        6. the latest merged task undocumented              key `main-handoff:`
+        7. handoff debt with no other work to drive         key `handoff:`
+        8. memory debt with no other work to drive          key `memory:`
+      Site 6's namespace is not decoration: the reconciliation at the top of
+      decide() clears a key only when its namespace was evaluated, and site 6's
+      source (latest_undocumented) is not evaluated there. Bounds asserted by
+      DebtBoundBeforeStartingTest, site 6 included.
+      deliberately uncounted, because they cannot repeat:
+        9. surfacing a BLOCKED run - one-shot, marked by `awaiting_human`
+       10. drift reconciliation - it reconciles BEFORE blocking, so the next
+           stop finds nothing left to reconcile
+      deliberately uncounted, and the one residual risk:
+       11. "start the next ready task" - there is no run to charge (that is what
+           the instruction asks the orchestrator to create), and bounding it
+           would make the queue go silent, which is the halt failure
+           rules/orchestration.md says never to buy. It repeats only while the
+           orchestrator declines an instruction it could satisfy in one turn.
+    """
+
+    def charge(self, cont: int, ceiling: int = 30):
+        """One charge() against a run with `cont` continuations already spent.
+        Returns (may_block, the set_fields mock)."""
+        calls = unittest.mock.MagicMock()
+        with unittest.mock.patch.object(stop_gate.state, "set_fields", calls):
+            return stop_gate.charge(None, run(continuations=cont), ceiling), calls
+
+    def test_the_last_continuation_in_the_budget_is_still_spent_not_parked(self):
+        # Off by one in the other direction parks a task one stop early, which
+        # is the failure mode this whole class exists for.
+        may_block, calls = self.charge(29, ceiling=30)
+        self.assertTrue(may_block)
+        self.assertEqual(30, calls.call_args.kwargs["continuations"])
+        self.assertNotIn("stage_status", calls.call_args.kwargs)
+
+    def test_the_budget_ends_in_a_park_and_the_caller_stops_blocking(self):
+        may_block, calls = self.charge(30, ceiling=30)
+        self.assertFalse(may_block)
+        self.assertEqual(state.ST_BLOCKED, calls.call_args.kwargs["stage_status"])
+
+    def test_a_healthy_editing_run_is_driven_every_stop_below_the_ceiling(self):
+        # The whole budget, one stop at a time: each one must still say what to
+        # do, and none of them may park the run.
+        for cont in (0, 1, 15, 29):
+            with self.subTest(continuations=cont):
+                calls = unittest.mock.MagicMock()
+                reason = decide_with([run(stage="implement", continuations=cont)],
+                                     set_fields=calls)
+                self.assertIn("task-0001 is at stage 'implement'", reason)
+                self.assertEqual(cont + 1, calls.call_args.kwargs["continuations"])
+                self.assertNotIn(state.ST_BLOCKED,
+                                 [c.kwargs.get("stage_status")
+                                  for c in calls.call_args_list])
+
+    def test_an_approved_checkpoint_never_acted_on_stops_repeating(self):
+        # Before task-0018 this branch was uncounted: the hook told the
+        # orchestrator to commit, on every stop, for ever.
+        for gate, flag in (("commit", "commit_approved"), ("push", "push_approved")):
+            with self.subTest(gate=gate):
+                calls = unittest.mock.MagicMock()
+                reason = decide_with([run(stage="ready", awaiting_human=gate,
+                                          **{flag: 1})], set_fields=calls)
+                self.assertIn("checkpoint approved", reason)
+                self.assertEqual(1, calls.call_args.kwargs["continuations"])
+
+                # Past the budget the stop that spends it parks the run and
+                # falls through; the park is then surfaced on the NEXT stop,
+                # where the status reads BLOCKED. Both halves are asserted -
+                # pinning only the first would pin the silence.
+                calls = unittest.mock.MagicMock()
+                decide_with([run(stage="ready", awaiting_human=gate,
+                                 continuations=30, **{flag: 1})],
+                            set_fields=calls, backlog=())
+                self.assertEqual(state.ST_BLOCKED,
+                                 calls.call_args.kwargs["stage_status"])
+
+                nxt = decide_with([run(stage="ready", awaiting_human=gate,
+                                       status=state.ST_BLOCKED, **{flag: 1})])
+                self.assertIn("task-0001 is parked BLOCKED", nxt)
+
+    def test_the_park_this_branch_produces_is_surfaced_not_silent(self):
+        """Bounding a branch must not trade a loud failure for a quiet one.
+
+        The park sets `stage_status` BLOCKED while `awaiting_human` is still
+        'commit' - that branch cannot fire with any other value - so a
+        surfacing keyed on "is anything awaited" never fired. Measured before
+        the fix: two stops, both None, no writes on the second, and the queue
+        held because `ready` counts as occupied. Nothing else covers it -
+        supervisor.classify answers HEALTHY for both a blocked run and an
+        awaited one, and handle_run does not notify on HEALTHY."""
+        blocked = run(stage="ready", awaiting_human="commit", commit_approved=1,
+                      status=state.ST_BLOCKED)
+        calls = unittest.mock.MagicMock()
+        reason = decide_with([blocked], set_fields=calls)
+
+        self.assertIsNotNone(reason)
+        self.assertIn("task-0001 is parked BLOCKED", reason)
+        self.assertIn("--reject", reason)
+        self.assertNotIn("Start the next ready task", reason)
+        # Stamped, so the surfacing is once rather than a stop loop.
+        self.assertEqual(stop_gate.AWAITING_BLOCKED,
+                         calls.call_args.kwargs["awaiting_human"])
+        self.assertIsNone(decide_with([run(stage="ready", status=state.ST_BLOCKED,
+                                           awaiting_human=stop_gate.AWAITING_BLOCKED)]))
+
+    def test_a_busy_marker_keeps_the_approved_checkpoint_branch_quiet(self):
+        # The orchestrator is mid-commit. Nagging it now spends the budget of a
+        # run that is being worked on, which is how a healthy task gets parked.
+        calls = unittest.mock.MagicMock()
+        self.assertIsNone(decide_with([run(stage="ready", awaiting_human="commit",
+                                           commit_approved=1)],
+                                      set_fields=calls, busy=True, backlog=()))
+        self.assertEqual(0, calls.call_count)
+
+    def test_a_fresh_marker_anywhere_silences_every_run_less_branch(self):
+        # Debt, the queue and the drift reconciler all talk to an agent that is
+        # already working. The handoff-debt loop measured on tasks 0004, 0005,
+        # 0007, 0008 and 0009 is this case.
+        debt = ({"task": "task-0067", "reason": "no handoff doc"},)
+        for kw in ({"debt": debt}, {"mem_debt": debt}, {}):
+            with self.subTest(**kw):
+                self.assertIsNone(decide_with([], any_busy=True, **kw))
+        # Control: without the marker each of those DOES speak up.
+        self.assertIn("task-0067", decide_with([], debt=debt))
+        self.assertIn("Start the next ready task", decide_with([]))
+
+    def test_continuations_has_exactly_one_writer(self):
+        # The invariant is structural, not a habit: a new branch cannot bump the
+        # counter its own way, and cannot quietly skip it either, because
+        # charge() is the only thing that writes the column.
+        src = Path(stop_gate.__file__).read_text(encoding="utf-8")
+        self.assertEqual(1, src.count("continuations=cont"))
+        self.assertIn("continuations=cont", inspect.getsource(stop_gate.charge))
+
+    def test_every_block_site_in_decide_is_accounted_for(self):
+        # Eleven, enumerated in this class's docstring. A new branch changes a
+        # count here and the author has to say which door it goes through.
+        src = inspect.getsource(stop_gate.decide)
+        self.assertEqual(6, src.count("return block("))
+        self.assertEqual(5, src.count("return bounded_block("))
+
+
+class ReadyStageOccupiesTest(unittest.TestCase):
+    """FR-37: a task at `ready` owns its branch and its dirty tree whether or
+    not a human is being waited on.
+
+    With every checkpoint auto-approved, `awaiting_human` is empty and `ready`
+    is not an editing stage, so the free-slot calculation read a free slot and
+    the queue started the next backlog task on top of a checked-out branch."""
+
+    def test_a_ready_run_with_no_awaiting_human_is_not_a_free_slot(self):
+        self.assertIsNone(decide_with([run(stage="ready")]))
+
+    def test_the_other_stages_still_answer_as_before(self):
+        # Control: the fix must not freeze the queue on a finished run.
+        self.assertIn("Start the next ready task",
+                      decide_with([run(stage="done")]))
+
+
+# Site 6's demand: the newest task-tagged commit on main with no handoff doc.
+# Module level rather than a class attribute, which ruff reads as a mutable
+# default (RUF012) - the sibling DEBT/MEM fixtures are tuples and escape it.
+LATEST_UNDOCUMENTED = {"task": "task-0077", "sha": "abcdef123456",
+                       "reason": "no handoff doc"}
+
+
+class DebtBoundBeforeStartingTest(unittest.TestCase):
+    """The debt block that gates a backlog task was the unbounded copy.
+
+    Its twin, the one that fires when there is nothing else to drive, has been
+    bounded since task-0072's follow-up; this one repeated for ever, and it is
+    the copy that fired in the measured loop. Both now spend the same budget,
+    keyed by the debt, because it is one debt and which copy speaks depends only
+    on whether a backlog task happened to exist."""
+
+    DEBT = ({"task": "task-0067", "reason": "no handoff doc"},)
+
+    def setUp(self):
+        self.tmp = tmproot.sandbox(self, "startdebt")
+        p = unittest.mock.patch.object(state, "STATE_DIR", self.tmp)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def stop(self, **kw) -> str | None:
+        """One stop with a free slot, a ready backlog task, and the REAL counter."""
+        return decide_with([], count_nags=True, **kw)
+
+    def test_the_debt_gates_the_start_then_escalates_then_goes_quiet(self):
+        for n in range(1, stop_gate.DEBT_NAG_CEILING + 1):
+            with self.subTest(stop=n):
+                reason = self.stop(debt=self.DEBT)
+                self.assertIn("Before starting task-0002", reason)
+                self.assertNotIn("AskUserQuestion", reason)
+
+        reason = self.stop(debt=self.DEBT)
+        self.assertIn("AskUserQuestion", reason)
+        self.assertIn("task-0067", reason)
+
+        for n in range(3):
+            with self.subTest(after_escalation=n):
+                self.assertIsNone(self.stop(debt=self.DEBT))
+
+    def test_a_spent_key_does_not_mute_the_same_demand_when_it_recurs(self):
+        """A spent nag key must not outlive the demand that spent it.
+
+        The clearing used to sit at the LAST branch of decide(), which the run
+        loop returns before on every stop that has work to drive. Measured
+        against the pre-fix code: budget spent, three stops with an editing run
+        in flight, file still {"key": "handoff:task-0067", "count": 5}, and the
+        same demand recurring was allowed without being uttered once. The count
+        is bookkeeping, so it is now reconciled above the loop, on every stop."""
+        for _ in range(stop_gate.DEBT_NAG_CEILING + 2):
+            self.stop(debt=self.DEBT)
+        # Stops with a run to drive: the loop returns and every branch below it
+        # is skipped. The debt is gone in this window (the doc was written).
+        for _ in range(3):
+            decide_with([run(stage="implement")], count_nags=True)
+        self.assertFalse((self.tmp / stop_gate.DEBT_NAG_FILE).exists())
+        # The doc is edited back below min_section_chars later on.
+        reason = self.stop(debt=self.DEBT)
+        self.assertIn("Before starting task-0002", reason)
+        self.assertNotIn("AskUserQuestion", reason)
+
+    def test_the_merged_task_demand_escalates_then_goes_quiet(self):
+        """Site 6 is bounded by a namespace of its own, and needs its own test.
+
+        It fires only when handoff and memory debt are both empty, so the
+        reconciliation at the top of decide() sees an EMPTY live set on exactly
+        the stops this demand speaks on. Sharing the `handoff:` namespace made
+        every one of those stops look like "that key is dead": measured, eight
+        consecutive stops all at count 1, never escalating and never muting.
+        `main-handoff:` is outside RECONCILED_PREFIXES, so an evaluation that
+        did not look at it leaves it alone."""
+        for n in range(1, stop_gate.DEBT_NAG_CEILING + 1):
+            with self.subTest(stop=n):
+                reason = self.stop(latest=LATEST_UNDOCUMENTED)
+                self.assertIn("task-0077", reason)
+                self.assertNotIn("AskUserQuestion", reason)
+
+        self.assertIn("AskUserQuestion", self.stop(latest=LATEST_UNDOCUMENTED))
+        for n in range(3):
+            with self.subTest(after_escalation=n):
+                self.assertIsNone(self.stop(latest=LATEST_UNDOCUMENTED))
+
+    def test_the_merged_task_demand_keeps_its_own_budget(self):
+        # The namespace must separate the budgets in both directions: spending
+        # the handoff budget must not mute a demand that has said nothing.
+        for _ in range(stop_gate.DEBT_NAG_CEILING + 2):
+            self.stop(debt=self.DEBT)
+        reason = self.stop(latest=LATEST_UNDOCUMENTED)
+        self.assertIn("task-0077", reason)
+        self.assertNotIn("AskUserQuestion", reason)
+
+    def test_an_outstanding_key_keeps_its_spent_budget(self):
+        # The other half: clearing per key must not hand a live demand a fresh
+        # budget on every stop, which would make the bound unreachable.
+        for _ in range(stop_gate.DEBT_NAG_CEILING):
+            self.stop(debt=self.DEBT)
+        self.assertIn("AskUserQuestion", self.stop(debt=self.DEBT))
+
+    def test_the_two_copies_of_one_debt_share_one_budget(self):
+        # Spend it through the free-slot copy...
+        for _ in range(stop_gate.DEBT_NAG_CEILING + 2):
+            self.stop(debt=self.DEBT)
+        # ...and the no-work-to-drive copy is spent too. Two budgets for one
+        # demand would mean twice as many stops before the CEO hears about it.
+        self.assertIsNone(decide_with([run(stage="ready", awaiting_human="commit")],
+                                      count_nags=True, debt=self.DEBT))
+
+
+class ScaffoldWritesABusyMarkerTest(unittest.TestCase):
+    """handoff.py --for is run immediately before the agent that fills the doc
+    is dispatched, so it is the signal that the work is in flight. Without it
+    the Stop hook demands the doc on every stop while it is being written."""
+
+    def setUp(self):
+        self.tmp = tmproot.sandbox(self, "scaffoldbusy")
+        for target, attr, value in (
+                (state, "STATE_DIR", self.tmp),
+                (handoff, "handoff_dir", lambda: self.tmp / "handoffs"),
+                (handoff, "_merge_facts", lambda task: ("abc123", "a.py")),
+                (handoff, "_task_title", lambda task: "A title")):
+            p = unittest.mock.patch.object(target, attr, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_scaffolding_marks_the_task_busy(self):
+        self.assertFalse(stop_gate.busy_marker_fresh("task-0099"))
+        created, msg = handoff.scaffold("task-0099")
+        self.assertTrue(created)
+        self.assertTrue(stop_gate.busy_marker_fresh("task-0099"))
+        self.assertTrue(stop_gate.any_busy_marker_fresh())
+        # A marker the reader cannot see the end of is the halt failure. The
+        # message names both the bound and the command that ends it early.
+        self.assertIn(str(int(state.BUSY_TIMEOUT)), msg)
+        self.assertIn("--idle", msg)
+
+    def test_the_marker_goes_when_the_doc_validates(self):
+        # 900s is a ceiling, not a price to pay in full: the marker's reason is
+        # "an agent is filling this doc", and it ends when the doc validates.
+        handoff.scaffold("task-0099")
+        self.assertTrue(stop_gate.busy_marker_fresh("task-0099"))
+
+        handoff.drop_scaffold_markers({"task-0099"})          # still owed
+        self.assertTrue(stop_gate.busy_marker_fresh("task-0099"))
+
+        handoff.drop_scaffold_markers(set())                  # doc validates
+        self.assertFalse(stop_gate.busy_marker_fresh("task-0099"))
+
+    def test_a_gate_marker_is_never_dropped_by_the_handoff_check(self):
+        # A marker written by advance.py around a live stage belongs to a RUN.
+        # Unlinking it would start nagging an agent that is still working, so
+        # only markers this module wrote (stage == "handoff") are touched.
+        state.write_busy_marker("task-0100", "implement")
+        handoff.drop_scaffold_markers(set())
+        self.assertTrue(stop_gate.busy_marker_fresh("task-0100"))
 
 
 if __name__ == "__main__":

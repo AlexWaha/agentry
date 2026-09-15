@@ -267,6 +267,30 @@ second one - see below:
   every two minutes. So the cost of leaving the marker unset is an hour of
   nagging and then a park, not three minutes of it.
 
+`task-0018` changed the price of both options. The choice is the same one; what
+each side costs is not.
+
+**The second bullet's park is per STAGE.** `continuations` is zeroed on every
+stage transition by `advance.py` and by `approve.py --reject`, so the hour is an
+hour per stage, and a task that keeps advancing never accumulates towards the
+park at all.
+
+**The first bullet's blast radius grew, and this is the part to know before
+setting a marker by hand.** A marker used to gate ONE branch, the in-flight
+editing stage. It now short-circuits the Stop hook ahead of everything that
+follows: both documentation-debt demands, the backlog queue and the drift
+reconciler all go quiet while any marker is fresh. A stale marker therefore
+silences four things rather than one. The bound is `state.BUSY_TIMEOUT`, 900
+seconds, after which every one of them speaks again - which is why this is a
+deferral and not the permanent silence of task-0072.
+
+**And the orchestrator is no longer the only writer.** `handoff.py --for`
+writes a marker for the task it scaffolds, so the debt demand stays quiet while
+the agent fills the doc instead of ordering it to do what it is doing.
+`handoff.py --check` drops that marker as soon as the doc validates, so the
+normal path pays seconds rather than the full 900; the full 900 is paid only
+when the scaffold is never filled.
+
 The root is that two watchdogs share one counter with opposite meanings.
 `continuations` is "how often I nagged" to the Stop hook and "the session is
 looping" to the supervisor, and nagging about an idle task is indistinguishable

@@ -23,6 +23,17 @@ off whenever any task was parked on the CEO, which is the normal state of a
 pipeline with a human in it (task-0072). Only the free-slot question reads the
 free slot now.
 
+No block repeats for ever. Every branch that blocks ON A RUN goes through
+charge(), which spends one of that stage's `continuation_ceiling` continuations
+and parks the run BLOCKED when the budget is gone. Every branch that blocks on
+something with NO run row - documentation owed by a completed task, a backlog
+task not yet registered - goes through bounded_block() instead, because
+`continuations` is a column of a run and there is none to charge. The two
+exceptions are deliberate and are the two blocks that cannot repeat: surfacing
+a BLOCKED run (one-shot, marked by `awaiting_human`) and the drift
+reconciliation (it performs the reconciliation before blocking, so the next stop
+finds nothing left to reconcile).
+
 Fail-open: any error allows the stop (never trap the user in a loop).
 
 Hook output: print {"decision":"block","reason":...} to block; print nothing to
@@ -59,7 +70,7 @@ BLOCKED_RE = re.compile(r"^blocked_on:[ \t]*(?!\s*$)\S", re.MULTILINE)
 
 # What `awaiting_human` is set to when a blocked run is surfaced to the CEO. It
 # doubles as the surfaced-once marker, so a blocked run is raised on one stop
-# rather than on every one. See decide(), step 1.
+# rather than on every one. See decide(), step 2.
 AWAITING_BLOCKED = "blocked"
 
 # How many consecutive stops may be blocked on the SAME outstanding debt before
@@ -71,6 +82,15 @@ AWAITING_BLOCKED = "blocked"
 # exactly the stop loop line 26 promises never to create.
 DEBT_NAG_CEILING = 3
 DEBT_NAG_FILE = "debt-nag.json"
+
+# The key namespaces the top-of-decide() reconciliation actually evaluates: it
+# is handed the live `handoff:` and `memory:` demands, and nothing else. A key
+# outside these was NOT LOOKED AT, which is not the same as dead, and clearing
+# it would pin its count at 1 for ever - no escalation and no mute. Measured on
+# the `main-handoff:` key: eight consecutive stops, all count 1. Adding a
+# namespace here without also feeding its live keys to clear_debt_nags()
+# reintroduces exactly that.
+RECONCILED_PREFIXES = ("handoff:", "memory:")
 
 BACKLOG_DIR = state.BACKLOG_DIR
 ACTIVE_DIR = state.ACTIVE_DIR
@@ -134,13 +154,34 @@ def busy_marker_fresh(task: str) -> bool:
     not gone stale. Lets the Stop hook stay quiet instead of nagging while real
     work is in flight. Fail-open: any error -> not fresh (nag as before)."""
     try:
-        p = state.STATE_DIR / f"gate-{task}.json"
+        p = state.busy_marker_path(task)
         if not p.is_file():
             return False
         d = json.loads(p.read_text(encoding="utf-8"))
         started = float(d.get("started", 0))
         timeout = float(d.get("timeout", 900))
         return (time.time() - started) < timeout
+    except Exception:
+        return False
+
+
+def any_busy_marker_fresh() -> bool:
+    """True when ANY task has a fresh busy marker.
+
+    The per-task reader above answers "is work in flight on THIS run", which is
+    all the in-flight branch needs. Every other branch is about a task that has
+    no run of its own - a completed task's documentation, the next backlog task,
+    a drift reconciliation - and the question there is "is anything in flight at
+    all", because the agent that would clear it is the one that was dispatched.
+
+    Deliberately routed through busy_marker_fresh() rather than re-reading the
+    files: one definition of fresh, and one name for a test to patch.
+
+    Fail-open: any error -> nothing is busy, which nags rather than going
+    silent."""
+    try:
+        return any(busy_marker_fresh(p.name[len("gate-"):-len(".json")])
+                   for p in state.STATE_DIR.glob("gate-*.json"))
     except Exception:
         return False
 
@@ -267,11 +308,86 @@ def debt_nags(key: str) -> int:
         return 1
 
 
-def clear_debt_nags() -> None:
-    """Forget the count once no debt is outstanding, so the next one that
-    appears gets its full budget rather than inheriting a spent one."""
+def charge(conn, r: dict, ceiling: int) -> bool:
+    """Spend one continuation on this run, and say whether the caller may block.
+
+    False means the budget is gone: the run is parked BLOCKED and the caller
+    must fall through to other work rather than blocking on it again.
+
+    EVERY branch that blocks on a RUN goes through here - that is the whole
+    invariant, and it is enforced by there being no other writer of
+    `continuations` in this file. The branches that block on something with no
+    run row cannot: `continuations` is a column of a run, and a completed task's
+    unpaid documentation or an unregistered backlog task has none. Those are
+    bounded by bounded_block() instead, on the nag file.
+
+    The counter is per STAGE, not per run: advance.py zeroes it on every stage
+    transition and approve.py --reject zeroes it too, so a stage starts with the
+    full ceiling however long the stages before it took. That is what makes it
+    safe to charge a second branch - the `ready` stage's budget is its own."""
+    cont = r["continuations"] + 1
+    if cont > ceiling:
+        state.set_fields(conn, r["task"], stage_status=state.ST_BLOCKED)
+        return False
+    state.set_fields(conn, r["task"], continuations=cont)
+    return True
+
+
+def bounded_block(key: str, subject: str, reason: str) -> int:
+    """Block with `reason`, but not forever.
+
+    The run-less counterpart of charge(): same contract, different counter,
+    because there is no run row to charge. `key` identifies the demand, so a
+    different one starts its own budget and progress restores it.
+
+    Past the ceiling it escalates ONCE, naming the card, then goes quiet. Going
+    quiet is the lesser evil only because the escalation said so out loud - an
+    unbounded block on an unsatisfiable demand is the stop loop this module's
+    docstring promises never to create."""
+    n = debt_nags(key)
+    if n > DEBT_NAG_CEILING + 1:
+        return allow()  # escalated already; the CEO owns it now
+    if n > DEBT_NAG_CEILING:
+        return block(
+            f"{subject} has survived {n - 1} stops and is not being cleared. Stop "
+            f"re-attempting it and raise it with the CEO now (AskUserQuestion): the "
+            f"situation, the options - pay it, waive it (handoff.py --waive / update.py "
+            f"--stamp --none), or change the baseline in pipeline.json - and your "
+            f"recommendation. This hook will not raise it again, so if you drop it now "
+            f"nothing else will catch it. The instruction that is not working: {reason}")
+    return block(reason)
+
+
+def clear_debt_nags(live_keys=()) -> None:
+    """Forget the count unless it belongs to a demand still outstanding, so the
+    next demand gets its full budget rather than inheriting a spent one.
+
+    Keyed rather than all-or-nothing: the file holds ONE key, and clearing only
+    when EVERY debt was absent left a spent key alive whenever any other debt
+    happened to be outstanding at the same moment. If that same key then
+    recurred - a handoff doc edited back below `min_section_chars`, say -
+    `debt_nags` resumed above the ceiling and `bounded_block` allowed
+    immediately, so the demand was never uttered even once. A stale key is a
+    spent budget for a demand nobody is making.
+
+    `live_keys` carries only the demands the caller EVALUATED, and a key is
+    cleared only when its namespace was evaluated and it was not among them.
+    An empty `live_keys` therefore means "no handoff or memory debt", never
+    "nothing is owed anywhere": the caller does not evaluate `main-handoff:`
+    (site 6), whose source costs a `git log` on every stop, and reading its
+    absence as death unlinked that key on every stop it spoke on - measured, the
+    count sat at 1 through eight stops, so it could neither escalate nor go
+    quiet. See RECONCILED_PREFIXES before adding a namespace."""
     try:
-        (state.STATE_DIR / DEBT_NAG_FILE).unlink()
+        p = state.STATE_DIR / DEBT_NAG_FILE
+        try:
+            key = json.loads(p.read_text(encoding="utf-8")).get("key")
+        except (OSError, ValueError):
+            key = None  # absent or corrupt: nothing worth preserving
+        if isinstance(key, str) and (key in live_keys
+                                     or not key.startswith(RECONCILED_PREFIXES)):
+            return
+        p.unlink()
     except OSError:
         pass
 
@@ -380,7 +496,28 @@ def decide() -> int:
         pipeline = state.load_pipeline()
         ceiling = int(pipeline.get("continuation_ceiling", 30))
 
-        # 1. Continue an in-flight, actionable run.
+        # 1. Documentation owed by COMPLETED tasks, read BEFORE anything else.
+        #
+        # Not inside the free-slot branch, which is where it used to live: that
+        # condition - "some task is waiting for the CEO" - is the normal state of
+        # a pipeline with a human in it, and it switched the only report of
+        # undocumented work off for as long as it held (task-0072). Whether a
+        # finished task is documented is true or false regardless of what is in
+        # flight.
+        #
+        # And not after the run loop below either, which is where it sat until
+        # the nag bound was added. Step 2 returns on every stop that has a run to
+        # drive, so a spent nag key was never revisited while any task was in
+        # flight: measured, a key spent to the ceiling survived three stops with
+        # an editing run in flight, and the same demand recurring afterwards was
+        # allowed without being uttered once. The count is bookkeeping, so it is
+        # reconciled on EVERY stop, before any branch can return.
+        debt = handoff_debt()
+        mem_debt = memory_debt()
+        clear_debt_nags({f"handoff:{d['task']}" for d in debt}
+                        | {f"memory:{d['task']}" for d in mem_debt})
+
+        # 2. Continue an in-flight, actionable run.
         for r in runs:
             stage, status, aw = r["stage"], r["stage_status"], r["awaiting_human"]
             if stage == "done":
@@ -403,7 +540,18 @@ def decide() -> int:
                 # nag would be a stop loop, which is the opposite failure. The
                 # only exit from `blocked` is approve.py --reject, and it clears
                 # `awaiting_human`, so the surfacing re-arms itself.
-                if not aw:
+                #
+                # The test is "was it surfaced", NOT "is anything awaited", and
+                # the difference is a silent halt. `if not aw` read any pending
+                # checkpoint as a surfacing that already happened: charge() parks
+                # the `ready` branch below while `awaiting_human` is necessarily
+                # 'commit' or 'push' (that branch cannot fire otherwise), so the
+                # run went BLOCKED with `aw` non-empty and was never raised here.
+                # Measured: two stops, both silent, no writes on the second - and
+                # since `ready` now counts as occupied, the queue was held too.
+                # An editing run still arrives with `aw` empty, so nothing about
+                # that path changes.
+                if aw != AWAITING_BLOCKED:
                     state.set_fields(conn, r["task"], awaiting_human=AWAITING_BLOCKED)
                     return block(
                         f"{r['task']} is parked BLOCKED at stage '{stage}' and nothing is "
@@ -415,8 +563,15 @@ def decide() -> int:
                         f"Do not silently move on to other work.")
                 continue
             # Approved checkpoint action still pending (commit/push the agent must do).
+            # Charged like the editing branch and for the same reason: it repeats
+            # on every stop until the git action happens, so without a counter it
+            # is unbounded. It was, until task-0018.
             if stage == "ready" and ((aw == "commit" and r["commit_approved"])
                                      or (aw == "push" and r["push_approved"])):
+                if busy_marker_fresh(r["task"]):
+                    continue
+                if not charge(conn, r, ceiling):
+                    continue
                 return block(
                     f"{r['task']} checkpoint approved (awaiting_human={aw}). Perform the "
                     f"git {aw} now, then run: python .claude/tools/pipeline/advance.py --task {r['task']}. "
@@ -432,11 +587,8 @@ def decide() -> int:
                 # goes stale.
                 if busy_marker_fresh(r["task"]):
                     continue
-                cont = r["continuations"] + 1
-                if cont > ceiling:
-                    state.set_fields(conn, r["task"], stage_status=state.ST_BLOCKED)
+                if not charge(conn, r, ceiling):
                     continue  # stuck -> blocked, fall through to other work
-                state.set_fields(conn, r["task"], continuations=cont)
                 if status == state.ST_GATE_FAILED:
                     return block(
                         f"{r['task']} stage '{stage}' gate FAILED. Fix the cause, then re-run: "
@@ -446,32 +598,43 @@ def decide() -> int:
                     f"subagent if needed), then run: python .claude/tools/pipeline/advance.py "
                     f"--task {r['task']}. Do not ask the user whether to continue.")
 
-        # 2. Documentation owed by COMPLETED tasks. Read here, BEFORE the
-        # free-slot calculation below, and deliberately not inside it.
+        # Nothing above was driveable. If ANY task has a fresh busy marker, a
+        # dispatched agent is working right now and every branch below would be
+        # talking over it: demanding a handoff doc from the agent writing it
+        # (observed on tasks 0004, 0005, 0007, 0008 and three times on 0009 -
+        # a closed loop, since the instruction was to do what was already being
+        # done), offering a new task on top of its tree, or reconciling drift
+        # underneath it.
         #
-        # `occupied` answers exactly one question - may I start NEW work - and
-        # these two once hung off it, which switched them off whenever any task
-        # was waiting for the CEO: the normal state of a pipeline with a human in
-        # it. Measured an hour after task-0067 shipped, with one run parked
-        # blocked: two done tasks undocumented, `handoff.py --check` reporting 2,
-        # and this hook allowing the stop in silence. Whether a finished task is
-        # documented is true or false regardless of what is in flight, and its
-        # documentation is not less owed because a neighbour is parked.
-        debt = handoff_debt()
-        mem_debt = memory_debt()
+        # This is NOT the mistake task-0072 fixed, and the difference is the
+        # only reason it is safe. `occupied` silenced the debt on a condition
+        # with no clock in it - a task parked on the CEO stays parked - so the
+        # silence was permanent. A marker expires (state.BUSY_TIMEOUT), so the
+        # debt is deferred by at most one marker's life and is then raised again
+        # by the branches below.
+        if any_busy_marker_fresh():
+            return allow()
 
         # 3. Nothing holding the working tree -> start the next ready backlog task.
         # Three states hold it, and a new task on top of any of them switches the
         # branch out from under someone:
         #   - an editing stage in flight;
         #   - an editing stage parked BLOCKED (a blocked task still owns its dirty
-        #     tree; it is surfaced to the CEO in step 1, not retired);
+        #     tree; it is surfaced to the CEO in step 2, not retired);
         #   - ANY run awaiting a human - the CEO may be reading the diff on that
         #     very branch. A task parked on a human is unfinished work, not a
         #     free slot, so go quiet and wait instead;
+        #   - a run at `ready`, approved or not. This one was missing until
+        #     task-0018: with every checkpoint auto-approved, `awaiting_human` is
+        #     empty and `ready` is not an editing stage, so a task holding a
+        #     dirty tree and a checked-out branch read as a free slot and the
+        #     next backlog task was started on top of it. The stage name is a
+        #     literal here as it is twice above; FR-39 (task-0020) is what reads
+        #     the stage sets from config;
         #   - a run stranded on a stage its flow does not define (see stranded()).
         occupied = any(
-            (r["stage"] in editing) or r["awaiting_human"] or stranded(r, pipeline)
+            (r["stage"] in editing) or r["stage"] == "ready" or r["awaiting_human"]
+            or stranded(r, pipeline)
             for r in runs
         )
         if not occupied:
@@ -488,7 +651,9 @@ def decide() -> int:
                 # absorption - see tools/pipeline/handoff.py).
                 if debt:
                     d = debt[0]
-                    return block(
+                    return bounded_block(
+                        f"handoff:{d['task']}",
+                        f"Handoff debt on completed task {d['task']}",
                         f"Before starting {t['id']}: completed task {d['task']} has no valid "
                         f"handoff doc ({d['reason']}). Dispatch {t['id']}'s assignee (see its "
                         f"frontmatter) to scaffold it: python .claude/tools/pipeline/handoff.py "
@@ -501,7 +666,9 @@ def decide() -> int:
                 # memory store BEFORE new work (tools/memory/update.py).
                 if mem_debt:
                     d = mem_debt[0]
-                    return block(
+                    return bounded_block(
+                        f"memory:{d['task']}",
+                        f"Memory debt on completed task {d['task']}",
                         f"Before starting {t['id']}: completed task {d['task']} has not been "
                         f"distilled into the memory store. From its handoff doc, record one row "
                         f"per item with python .claude/tools/memory/memory.py --record: Gotchas "
@@ -520,7 +687,14 @@ def decide() -> int:
                 if len(ready) == 1:
                     latest = latest_undocumented()
                     if latest:
-                        return block(
+                        # Its OWN namespace, not `handoff:`. This demand comes
+                        # from latest_undocumented(), which the reconciliation
+                        # above does not call, so a `handoff:` key here would be
+                        # cleared on every stop as an unevaluated stranger and
+                        # its count would never leave 1.
+                        return bounded_block(
+                            f"main-handoff:{latest['task']}",
+                            f"Handoff debt on merged task {latest['task']}",
                             f"Before starting {t['id']} (the only ready task): the latest "
                             f"task commit on main - {latest['task']} "
                             f"({latest['sha'][:12]}) - has {latest['reason']}. Dispatch "
@@ -558,12 +732,12 @@ def decide() -> int:
         #     stop prints nothing at all, so "report without blocking" is not a
         #     softer block, it is silence - which is the failure this branch
         #     exists to end.
-        #   - It cannot fight edit-serialization. Step 1 returns first for every
+        #   - It cannot fight edit-serialization. Step 2 returns first for every
         #     run that is actually being driven, so nothing reaching here is
         #     mid-advance, and paying the debt writes to
         #     .agentry/tasks/handoffs/ and the memory store, never to the
         #     working tree a parked task still owns.
-        #   - It may repeat where the surfacing of a BLOCKED run may not (step 1
+        #   - It may repeat where the surfacing of a BLOCKED run may not (step 2
         #     raises that one ONCE), because the agent reading this message can
         #     clear the debt itself - write the doc, record the rows, or --waive
         #     it with the CEO's approval - while a blocked run is clearable only
@@ -579,26 +753,16 @@ def decide() -> int:
         # After the drift reconciliation above, not before: moving a merged task
         # into done/ is what CREATES debt, so paying first would only raise it
         # again on the next stop.
-        pending = ("handoff", debt[0]) if debt else (("memory", mem_debt[0]) if mem_debt else None)
-        if pending is None:
-            clear_debt_nags()
-        else:
-            kind, d = pending
-            nags = debt_nags(f"{kind}:{d['task']}")
-            if nags > DEBT_NAG_CEILING + 1:
-                return allow()  # escalated already; the CEO owns it now
-            if nags > DEBT_NAG_CEILING:
-                return block(
-                    f"{kind.capitalize()} debt on completed task {d['task']} has survived "
-                    f"{nags - 1} stops and is not being cleared ({d['reason']}). Stop "
-                    f"re-attempting it and raise it with the CEO now (AskUserQuestion): the "
-                    f"situation, the options - pay it, waive it (handoff.py --waive / "
-                    f"update.py --stamp --none), or change the baseline in pipeline.json - "
-                    f"and your recommendation. This hook will not raise it again, so if you "
-                    f"drop it now nothing else will catch it.")
+        #
+        # Same bound as the step 3 copies of these two demands, through the same
+        # key: it is one debt, and which branch happens to raise it depends only
+        # on whether a backlog task existed to gate. Two budgets for one demand
+        # would mean paying twice as many stops to escalate it.
         if debt:
             d = debt[0]
-            return block(
+            return bounded_block(
+                f"handoff:{d['task']}",
+                f"Handoff debt on completed task {d['task']}",
                 f"Documentation debt is outstanding and there is no other work to drive: "
                 f"completed task {d['task']} has no valid handoff doc ({d['reason']}). "
                 f"Nothing else in the harness reports this - the supervisor does not read "
@@ -610,7 +774,9 @@ def decide() -> int:
                 f"{d['task']} --reason \"...\". Do not ask the user whether to write it.")
         if mem_debt:
             d = mem_debt[0]
-            return block(
+            return bounded_block(
+                f"memory:{d['task']}",
+                f"Memory debt on completed task {d['task']}",
                 f"Memory debt is outstanding and there is no other work to drive: completed "
                 f"task {d['task']} has not been distilled into the memory store. From "
                 f".agentry/tasks/handoffs/{d['task']}.md record one row per item with python "
