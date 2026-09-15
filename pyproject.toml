@@ -33,6 +33,7 @@ select = ["E", "F", "I", "W", "UP", "FURB", "RUF", "DTZ", "PIE", "ISC"]
 # extended before the import can resolve, so the import cannot sit at the top of
 # the file.
 ".claude/tools/tests/test_approvals.py" = ["E402"]
+".claude/tools/tests/test_approvals_level.py" = ["E402"]
 ".claude/tools/tests/test_pretool_gate.py" = ["E402"]
 ".claude/tools/tests/test_pretool_gate_git.py" = ["E402"]
 ".claude/tools/tests/test_conveyor_gaps.py" = ["E402"]

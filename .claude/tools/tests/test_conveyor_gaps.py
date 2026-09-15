@@ -48,6 +48,7 @@ sys.path.insert(0, str(MEMORY_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
 import advance
+import approvals
 import approve
 import gate as gate_module
 import git_state
@@ -1315,6 +1316,17 @@ class SoloCheckpointTest(unittest.TestCase):
         p = unittest.mock.patch.object(
             state, "load_pipeline",
             side_effect=lambda: {**BUILD_PIPELINE, "workflow": {"mode": self.mode}})
+        p.start()
+        self.addCleanup(p.stop)
+        # The approvals level is pinned, and it is not cosmetic: approvals.read()
+        # reads .agentry/state/approvals from the LIVE workspace, so without this
+        # these tests assert solo-mode behaviour only while the CEO happens to
+        # have the dial at `manual`. It went unnoticed because advance.py could
+        # not act on the level at all (task-0083); the moment it could, the
+        # workspace sitting at `assisted` auto-approved the commit inside
+        # test_solo_mode_does_not_close_a_task_whose_commit_was_never_approved
+        # and the assertion read 1. Solo mode is the subject here, the dial is not.
+        p = unittest.mock.patch.object(approvals, "read", return_value=approvals.MANUAL)
         p.start()
         self.addCleanup(p.stop)
         self.addCleanup(self._clean)

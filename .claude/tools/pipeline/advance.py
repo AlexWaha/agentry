@@ -452,10 +452,13 @@ def main() -> int:
                              stage_status=state.ST_GATE_PASSED)
         else:
             fields = {"awaiting_human": pending}
-            # auto_approve proposes, approvals.granted() disposes: NEVER_GRANTED
-            # refuses the push at every level and for every stage list, so the
-            # config key cannot re-grant it.
-            if pending in auto and approvals.granted(pending, sorted(auto)):
+            # approvals.granted() answers the whole question: the level's GRANTS
+            # set OR the stage list approves, and NEVER_GRANTED refuses the push
+            # ahead of both. Do NOT re-test `pending in auto` in front of it -
+            # that made the stage list mandatory, so the level dial could never
+            # approve anything on its own and manual/assisted/auto behaved
+            # identically at `ready` with the shipped (empty) config.
+            if approvals.granted(pending, sorted(auto)):
                 fields[APPROVAL_FIELD[pending]] = 1
             state.set_fields(conn, args.task, **fields)
         run = state.get_run(conn, args.task)
@@ -468,9 +471,10 @@ def main() -> int:
                         "closes it." if solo else
                         "re-run advance.py for the push checkpoint.")
         msgs = {
-            "commit": ("Checkpoint 'commit' auto-approved (auto_approve in pipeline.json). "
+            "commit": ("Checkpoint 'commit' auto-approved (approvals level, or auto_approve "
+                       "in pipeline.json). "
                        f"Stage files and perform the git commit now, then {after_commit}"
-                       if "commit" in auto else
+                       if approvals.granted(approvals.COMMIT, sorted(auto)) else
                        "Review passed. Stage files, surface the full diff, and wait for "
                        "CEO commit approval (approve.py --gate commit). git commit is "
                        f"hook-blocked until then. After the commit: {after_commit}"),

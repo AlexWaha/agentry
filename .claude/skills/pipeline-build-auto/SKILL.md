@@ -26,6 +26,10 @@ commit checkpoint in `solo` mode, where the local merge follows (`advance.py`
 
 Today this level differs from `assisted` in intent only: `approvals.GRANTS` gives
 both the same `{take, commit}` set, so the two behave identically until the
-difference is made real or the levels are merged (task-0050).
+difference is made real or the levels are merged (task-0050). Both do now differ
+from `manual`, which they did not until task-0083: `advance.py` required the
+checkpoint to appear in the stage's `auto_approve` list BEFORE it consulted
+`approvals.granted()`, and that list ships empty, so all three levels parked on
+the CEO at `ready`. The level alone is enough now.
 
 Full contract: `.claude/skills/pipeline/SKILL.md`.
