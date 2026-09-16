@@ -17,9 +17,11 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import subprocess
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 PIPELINE_DIR = Path(__file__).resolve().parents[1] / "pipeline"
@@ -1012,6 +1014,30 @@ class TrunkMergeTest(unittest.TestCase):
                         self.assertEqual(
                             pretool_gate.handle_bash(command, cwd=repo.path), 0)
 
+    def test_a_pull_of_an_unapproved_branch_into_the_trunk_is_refused(self):
+        # task-0090 review: `git pull . <branch>` merges that branch into HEAD
+        # with no `merge` token in the argv, so a gate resolving only
+        # sub == "merge" let an unreviewed branch onto the trunk in solo mode.
+        # The repository positional (`.`) must not be read as the source, or
+        # the refusal names the wrong thing.
+        with contextlib.ExitStack() as stack:
+            path = self.trunk_repo(stack)
+            with gate_state(mode="solo", runs={self.TASK: {"commit_approved": 0}}):
+                code, err = denial_reason(f"git pull . {self.BRANCH}", path)
+        self.assertEqual(code, 2)
+        self.assertIn("condition 3 of 3", err)
+        self.assertIn(self.TASK, err)
+
+    def test_a_pull_of_an_approved_task_branch_into_the_trunk_is_allowed(self):
+        # The control: the pull arm gates the same three conditions as merge,
+        # it does not blanket-refuse the solo-mode local integration.
+        with contextlib.ExitStack() as stack:
+            path = self.trunk_repo(stack)
+            with gate_state(mode="solo", runs={self.TASK: {"commit_approved": 1}}):
+                code = pretool_gate.handle_bash(
+                    f"git pull --no-rebase . {self.BRANCH}", cwd=path)
+        self.assertEqual(code, 0)
+
     def test_merge_into_a_work_branch_is_untouched_in_both_modes(self):
         for mode in ("pr", "solo"):
             with self.subTest(mode=mode):
@@ -1105,6 +1131,58 @@ class StdinDecodeTest(unittest.TestCase):
     def test_en_dash_is_still_refused(self):
         proc = self.run_hook("pretool_gate.py", "Range 1" + chr(0x2013) + "2")
         self.assertEqual(proc.returncode, 2)
+
+
+class UnattendedPullTest(unittest.TestCase):
+    """task-0090 review: the unattended refusal resolved only `sub == "merge"`,
+    so an unwatched session could integrate a branch with `git pull` - the one
+    step whose whole point is that a human reads the trunk first."""
+
+    def test_an_unattended_pull_is_denied_and_the_reason_names_the_pull(self):
+        with TempRepo() as repo:
+            repo.commit()
+            with unittest.mock.patch.dict(
+                    os.environ, {pretool_gate.UNATTENDED_ENV: "1"}):
+                code, err = denial_reason("git pull . bugfix/task-0090", repo.path)
+        self.assertEqual(code, 2)
+        self.assertIn("UNATTENDED", err)
+        self.assertIn("a pull", err)
+
+    def test_the_same_pull_is_not_denied_by_the_mark_when_unmarked(self):
+        env = {k: v for k, v in os.environ.items()
+               if k != pretool_gate.UNATTENDED_ENV}
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(
+                0, pretool_gate.check_unattended("git pull . bugfix/task-0090"))
+
+
+class EnvironmentHermeticityTest(unittest.TestCase):
+    """The suite must give the same verdict whoever ran it.
+
+    It did not: a supervisor-spawned session exports AGENTRY_UNATTENDED=1, which
+    makes pretool_gate refuse a merge, a push and approve.py, and 26 tests in
+    this file then read that refusal instead of the one they assert on
+    (task-0090). Since the `test` exit gate IS this suite and inherits the
+    session environment, a relaunched task would have parked blocked on failures
+    that say nothing about the code. tests/__init__.py clears the mark; this
+    drives the suite in a child process WITH the mark set to prove it stays
+    cleared."""
+
+    ROOT = Path(__file__).resolve().parents[3]
+    # One of the 26 that turned red, run by name: enough to detect the leak, and
+    # cheap enough that the guard costs a couple of seconds.
+    CANARY = "test_solo_mode_allows_merge_of_an_approved_task_branch"
+
+    def test_the_suite_ignores_an_inherited_unattended_mark(self):
+        proc = subprocess.run(
+            [sys.executable, "-m", "unittest", "discover", "-s", ".claude/tools",
+             "-p", "test_pretool_gate_git.py", "-k", self.CANARY],
+            cwd=str(self.ROOT), capture_output=True, text=True, timeout=120,
+            env={**os.environ, pretool_gate.UNATTENDED_ENV: "1"})
+        err = proc.stdout + proc.stderr
+        self.assertIn("Ran 1 test", err, err)
+        self.assertEqual(0, proc.returncode, err)
+        self.assertNotIn("UNATTENDED", err, err)
 
 
 if __name__ == "__main__":

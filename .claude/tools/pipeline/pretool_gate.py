@@ -10,10 +10,10 @@ Wired to Claude Code's `PreToolUse` event (matchers: Bash, Edit|Write). It denie
   - `git push` runs while push is not approved, or targets ANY protected branch
     (main and master always, plus the configured trunk and pipeline.json
     "protected_branches" - default staging / production);
-  - `git merge` runs while HEAD sits on a protected branch, unless the project
-    is in `solo` workflow mode AND the source is an approved task branch - see
-    check_trunk_merge();
-  - `git merge`, `git push` or an approve.py invocation runs inside a session
+  - `git merge` or `git pull` runs while HEAD sits on a protected branch, unless
+    the project is in `solo` workflow mode AND the source is an approved task
+    branch - see check_trunk_merge();
+  - `git merge`, `git pull`, `git push` or an approve.py invocation runs in a session
     the supervisor spawned unattended (env AGENTRY_UNATTENDED) - see
     check_unattended(), which holds at every approvals level and in both
     workflow modes;
@@ -667,6 +667,24 @@ def merge_invocations(command: str) -> list:
     return [args for sub, args in git_invocations(command) if sub == "merge"]
 
 
+def pull_invocations(command: str) -> list:
+    """Argv of every `git pull` call in `command`.
+
+    A pull IS a merge - `git pull . bugfix/task-0090` merges that branch into
+    HEAD with no `merge` token anywhere in the argv, so a gate that resolves
+    only `sub == "merge"` lets an unreviewed branch onto the trunk."""
+    return [args for sub, args in git_invocations(command) if sub == "pull"]
+
+
+def pull_sources(args: list) -> list:
+    """Commit-ish positional arguments of a `git pull` argv.
+
+    Same shape as a merge argv with ONE extra leading positional: the
+    repository (`.`, a remote name, a URL). Dropping it is what keeps the
+    refusal naming the branch the caller asked for rather than the repo."""
+    return merge_sources(args)[1:]
+
+
 def check_merge_source(source: str, trunk: str) -> int:
     """The three conditions a source branch must meet to reach the trunk. Each
     failure names WHICH condition failed: repeating the generic branch-name
@@ -722,6 +740,7 @@ def check_trunk_merge(command: str, trunk: str) -> int:
             f"'{WORKFLOW_SOLO}' in .agentry/pipeline.json to merge locally instead. "
             f"See .claude/rules/git-workflow.md.")
     sources = [src for args in merge_invocations(command) for src in merge_sources(args)]
+    sources += [src for args in pull_invocations(command) for src in pull_sources(args)]
     if not sources:
         return deny(
             f"Merge into protected branch '{trunk}' refused - condition 1 of 3 failed "
@@ -746,15 +765,17 @@ def check_trunk_merge(command: str, trunk: str) -> int:
 # leaves the machine, but the CEO reads the trunk before it moves and that is
 # the point.
 #
-# The spawn therefore marks itself, and these three steps are refused for as
+# The spawn therefore marks itself, and these steps are refused for as
 # long as the mark is set, at every approvals level and in every workflow mode.
+# A pull counts as a merge here: `git pull . <branch>` writes the trunk exactly
+# as `git merge <branch>` does, and carries no `merge` token to resolve.
 # The name must stay equal to supervisor.UNATTENDED_ENV (pinned by a test).
 UNATTENDED_ENV = "AGENTRY_UNATTENDED"
 APPROVE_SCRIPT_RE = re.compile(r"\bapprove\.py\b", re.IGNORECASE)
 
 
 def check_unattended(command: str) -> int:
-    """Deny the three irreversible steps inside a supervisor-spawned session.
+    """Deny the irreversible steps inside a supervisor-spawned session.
 
     Not merge_invokes-by-substring: `git merge-base --is-ancestor` is the
     read-only base check every task runs, so the merge question goes through
@@ -762,6 +783,7 @@ def check_unattended(command: str) -> int:
     if not os.environ.get(UNATTENDED_ENV):
         return allow()
     step = ("a merge" if merge_invocations(command)
+            else "a pull" if git_invokes(command, "pull")
             else "a push" if git_invokes(command, "push")
             else "recording a checkpoint approval" if APPROVE_SCRIPT_RE.search(command)
             else "")
@@ -1140,7 +1162,9 @@ def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
     # Not git_invokes(command, "merge"): its substring safety net would match
     # `git merge-base --is-ancestor main HEAD`, the read-only base check every
     # task runs. Argv resolution tells the two subcommand tokens apart.
-    is_merge = bool(merge_invocations(command))
+    # A pull merges too, and carries no `merge` token: without it here a
+    # `git pull . <branch>` on the trunk never reaches check_trunk_merge().
+    is_merge = bool(merge_invocations(command) or pull_invocations(command))
     if not (is_commit or is_push or is_merge):
         return allow()
 

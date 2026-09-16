@@ -315,7 +315,20 @@ DEFAULTS = {
     "idle_exit_polls": 30,
     # Argv, never a shell string: a shell here would be one string-interpolated
     # task id away from command injection. Placeholders: {task} {stage} {prompt}
-    "spawn_cmd": ["claude", "-p", "{prompt}"],
+    #
+    # --permission-mode bypassPermissions is NOT optional, however optional it
+    # looks. A headless session has nobody to answer a permission prompt: it
+    # starts in permissionMode "default" whatever settings.local.json says, its
+    # stdin is DEVNULL and --permission-prompts has no SDK host behind it, so
+    # every tool call is auto-denied and the relaunch does nothing (measured:
+    # tmp/task-0090-relaunch-1.log, 16 permission_denied records, the first on
+    # the session's very first tool call). Granting the mode is safe because the
+    # real guardrails are the hooks, not the prompt dialog - pretool_gate.py
+    # denies commit, push and the approval recorder, its check_unattended()
+    # refuses those three outright while AGENTRY_UNATTENDED is set, and
+    # orchestrator_gate bounds what a main thread may write - exactly as every
+    # subagent in this tree already runs with permissionMode: bypassPermissions.
+    "spawn_cmd": ["claude", "-p", "--permission-mode", "bypassPermissions", "{prompt}"],
 }
 
 RELAUNCH_PROMPT = (

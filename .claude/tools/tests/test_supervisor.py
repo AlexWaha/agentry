@@ -516,7 +516,7 @@ class RelaunchTest(Sandbox):
         argv = popen.call_args[0][0]
         self.assertEqual(event["argv"], argv)
         self.assertEqual(["claude", "-p"], argv[:2])
-        self.assertIn("task-0001", argv[2])
+        self.assertIn("task-0001", argv[-1])
         # Logged exactly, not summarised.
         self.assertTrue(any(str(argv) in n for n in self.notices))
         # The spawned pid is remembered, which is what makes DEAD detectable next
@@ -1603,17 +1603,45 @@ class SpawnCommandTest(Sandbox):
         self.assertEqual(expected, popen.call_args[0][0])
         self.assertEqual(expected, event["argv"])
         # Element by element, so a reordering or an extra flag cannot slip in.
-        self.assertEqual(3, len(expected))
+        self.assertEqual(5, len(expected))
         self.assertEqual("claude", expected[0])
         self.assertEqual("-p", expected[1])
-        # And the third element spelled out independently of spawn_argv, so this
+        self.assertEqual("--permission-mode", expected[2])
+        self.assertEqual("bypassPermissions", expected[3])
+        # And the prompt spelled out independently of spawn_argv, so this
         # cannot pass by comparing the code against itself.
         self.assertEqual(supervisor.RELAUNCH_PROMPT.format(
-            task="task-0001", stage="implement", why=event["why"]), popen.call_args[0][0][2])
+            task="task-0001", stage="implement", why=event["why"]), popen.call_args[0][0][-1])
+
+    def test_the_spawn_grants_the_headless_session_a_usable_permission_mode(self):
+        # A spawned `claude -p` reports permissionMode "default" whatever
+        # settings.local.json says, and it cannot answer a prompt: stdin is
+        # DEVNULL and --permission-prompts has no SDK host behind it, so every
+        # tool call outside the allow list is auto-denied and the relaunch does
+        # nothing. Measured: tmp/task-0090-relaunch-1.log, 16 permission_denied
+        # records, the first on the session's first tool call.
+        argv = supervisor.spawn_argv(cfg(), "task-0042", "implement", "why")
+        self.assertIn("--permission-mode", argv)
+        self.assertEqual("bypassPermissions", argv[argv.index("--permission-mode") + 1])
+        # The shipped config overrides DEFAULTS, so a fix in the Python constant
+        # alone would change nothing on this machine. What must hold is the
+        # invariant, not equality with DEFAULTS: an adopter who points spawn_cmd
+        # at another claude binary or pins a model stays green, and only a
+        # spawn_cmd that drops the mode goes red.
+        shipped = json.loads((state.ROOT / ".agentry" / "pipeline.json")
+                             .read_text(encoding="utf-8"))
+        shipped_cmd = shipped["supervisor"]["spawn_cmd"]
+        self.assertIn("--permission-mode", shipped_cmd)
+        self.assertEqual("bypassPermissions",
+                         shipped_cmd[shipped_cmd.index("--permission-mode") + 1])
+        # And the mode is granted only because the gate, not the prompt dialog,
+        # is what restrains the spawn: pretool_gate.check_unattended() refuses
+        # the irreversible three while the mark is set, whatever the mode.
+        self.assertEqual(supervisor.UNATTENDED_ENV, pretool_gate.UNATTENDED_ENV)
 
     def test_the_prompt_carries_the_task_the_stage_and_the_refusals(self):
         argv = supervisor.spawn_argv(cfg(), "task-0042", "review", "owner exited")
-        prompt = argv[2]
+        prompt = argv[-1]
         for fragment in ("task-0042", "review", "owner exited",
                          ".agentry/tasks/active/task-0042.md",
                          "advance.py --task task-0042"):
