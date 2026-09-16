@@ -30,6 +30,8 @@ sys.path.insert(0, str(PIPELINE_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
 import agent_gate
+import approvals
+import approve
 import pretool_gate
 import state
 import tmproot
@@ -42,14 +44,16 @@ def run_git(args: list, cwd: str) -> subprocess.CompletedProcess:
 
 @contextlib.contextmanager
 def gate_state(mode: str | None = None, push_approval: bool | None = None,
-               runs: dict | None = None, db_is_dir: bool = False):
+               runs: dict | None = None, db_is_dir: bool = False,
+               main_branch: str | None = None):
     """Swap pipeline.json config and run.db for throwaway ones.
 
     The live `.agentry/state/run.db` and the project's own pipeline.json are
     never read, so a test asserts the shipped DEFAULT rather than whatever this
     repository happens to be configured as. `mode=None` means "no workflow
     block at all" - the adopter's case. `db_is_dir` makes run.db unopenable, to
-    drive the fail-closed path.
+    drive the fail-closed path. `main_branch` renames the configured trunk, for
+    the projects whose trunk is neither 'main' nor 'master'.
     """
     original = (state.load_pipeline, state.DB_PATH, state.STATE_DIR)
     workflow = {}
@@ -58,6 +62,8 @@ def gate_state(mode: str | None = None, push_approval: bool | None = None,
     if push_approval is not None:
         workflow["push_needs_approval"] = push_approval
     cfg = {"workflow": workflow} if workflow else {}
+    if main_branch is not None:
+        cfg["main_branch"] = main_branch
     # The state directory is project-local, which also means the supervisor's
     # lock path (state.STATE_DIR / supervisor*.lock) can never be written into
     # the user profile from here - the leak task-0069 was raised for.
@@ -1183,6 +1189,180 @@ class EnvironmentHermeticityTest(unittest.TestCase):
         self.assertIn("Ran 1 test", err, err)
         self.assertEqual(0, proc.returncode, err)
         self.assertNotIn("UNATTENDED", err, err)
+
+
+class TrunkPushApprovalTest(unittest.TestCase):
+    """task-0092: in solo mode the trunk is written only by the gated local
+    merge, so a push OF the trunk is the only way its commits reach the remote.
+    It is allowed by a recorded, one-shot CEO approval and by nothing else."""
+
+    SPELLINGS = ("git push origin main", "git push origin HEAD:main",
+                 "git push -u origin main", "git push")
+
+    def approve(self, trunk: str = "main") -> Path:
+        path = pretool_gate.trunk_push_marker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"trunk": trunk, "lane": state.LANE,
+                                    "approved": "2026-09-16T00:00:00+00:00"}),
+                        encoding="utf-8")
+        return path
+
+    @contextlib.contextmanager
+    def on_trunk(self):
+        with TempRepo() as repo:
+            repo.commit()
+            yield repo.path
+
+    def test_solo_with_the_marker_allows_the_push_in_every_spelling(self):
+        for command in self.SPELLINGS:
+            with self.subTest(command=command):
+                with self.on_trunk() as path, gate_state(mode="solo"):
+                    self.approve()
+                    self.assertEqual(0, pretool_gate.handle_bash(command, cwd=path))
+
+    def test_the_approval_is_consumed_by_the_push_it_allows(self):
+        with self.on_trunk() as path, gate_state(mode="solo"):
+            marker = self.approve()
+            self.assertEqual(0, pretool_gate.handle_bash("git push origin main", cwd=path))
+            self.assertFalse(marker.exists())
+            code, err = denial_reason("git push origin main", path)
+        self.assertEqual(2, code)
+        self.assertIn("forbidden", err)
+
+    def test_solo_without_the_marker_is_refused_with_the_existing_message(self):
+        with self.on_trunk() as path, gate_state(mode="solo"):
+            code, err = denial_reason("git push origin main", path)
+        self.assertEqual(2, code)
+        self.assertIn("Push to protected branch 'main' is forbidden", err)
+
+    def test_pr_mode_ignores_the_marker_entirely(self):
+        for mode in (None, "pr"):
+            with self.subTest(mode=mode):
+                with self.on_trunk() as path, gate_state(mode=mode):
+                    self.approve()
+                    code, err = denial_reason("git push origin main", path)
+                self.assertEqual(2, code)
+                self.assertIn("Push to protected branch 'main' is forbidden", err)
+
+    def test_an_unattended_session_is_refused_whatever_the_marker_says(self):
+        with self.on_trunk() as path, gate_state(mode="solo"):
+            self.approve()
+            with unittest.mock.patch.dict(
+                    os.environ, {pretool_gate.UNATTENDED_ENV: "1"}):
+                code, err = denial_reason("git push origin main", path)
+            self.assertTrue(pretool_gate.trunk_push_marker_path().exists())
+        self.assertEqual(2, code)
+        self.assertIn("UNATTENDED", err)
+
+    def test_a_marker_naming_another_trunk_or_a_malformed_one_is_ignored(self):
+        for payload in ('{"trunk": "master"}', "not json", "[]"):
+            with self.subTest(payload=payload):
+                with self.on_trunk() as path, gate_state(mode="solo"):
+                    p = pretool_gate.trunk_push_marker_path()
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(payload, encoding="utf-8")
+                    code, _ = denial_reason("git push origin main", path)
+                self.assertEqual(2, code)
+
+    # A rewrite or a deletion of the trunk is not what the CEO approved when he
+    # approved publishing it, and all six spellings below were denied
+    # unconditionally before the approval existed. They stay denied, and the
+    # approval stays unspent for the push it was actually meant for.
+    DESTRUCTIVE = ("git push --force origin main",
+                   "git push -f origin main",
+                   "git push --force-with-lease origin main",
+                   "git push --force-with-lease=main origin main",
+                   "git push -fu origin main",
+                   "git push --mirror origin",
+                   "git push --delete origin main",
+                   "git push -d origin main",
+                   "git push origin :main",
+                   "git push origin +:main")
+
+    def test_a_force_or_delete_push_is_refused_even_with_the_marker(self):
+        for command in self.DESTRUCTIVE:
+            with self.subTest(command=command):
+                with self.on_trunk() as path, gate_state(mode="solo"):
+                    marker = self.approve()
+                    code, err = denial_reason(command, path)
+                    self.assertTrue(marker.exists())
+                self.assertEqual(2, code)
+                self.assertIn("Push to protected branch 'main' is forbidden", err)
+
+    def test_a_later_refusal_leaves_the_approval_unspent(self):
+        """The marker is spent by the push it allows, and a push the gate goes
+        on to refuse for another reason is not that push."""
+        with TempRepo() as repo, gate_state(mode="solo"):
+            repo.commit()
+            repo.checkout_new("bugfix/task-0092")
+            marker = self.approve()
+            code, err = denial_reason("git push origin main", repo.path)
+            self.assertEqual(2, code)
+            self.assertIn("no row in the run store", err)
+            self.assertTrue(marker.exists())
+
+            run_git(["checkout", "-q", "main"], repo.path)
+            self.assertEqual(0, pretool_gate.handle_bash("git push origin main",
+                                                        cwd=repo.path))
+            self.assertFalse(marker.exists())
+
+    def test_an_unapproved_protected_target_denies_without_burning_the_marker(self):
+        with self.on_trunk() as path, gate_state(mode="solo"):
+            marker = self.approve()
+            code, _ = denial_reason("git push origin main production", path)
+            self.assertTrue(marker.exists())
+        self.assertEqual(2, code)
+
+
+class ApproveTrunkPushTest(unittest.TestCase):
+    """task-0092: approve.py --trunk-push writes that marker, and only in solo
+    mode - in pr mode it refuses and names the mode rather than recording an
+    approval no push could ever legitimately use."""
+
+    def run_cli(self) -> tuple:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            with unittest.mock.patch.object(sys, "argv",
+                                            ["approve.py", "--trunk-push"]):
+                code = approve.main()
+        return code, json.loads(out.getvalue())
+
+    def test_solo_mode_writes_the_marker_with_trunk_lane_and_timestamp(self):
+        with gate_state(mode="solo"):
+            code, payload = self.run_cli()
+            marker = pretool_gate.trunk_push_marker_path()
+            self.assertTrue(marker.exists())
+            data = json.loads(marker.read_text(encoding="utf-8"))
+        self.assertEqual(0, code)
+        self.assertTrue(payload["ok"])
+        self.assertEqual("main", data["trunk"])
+        self.assertEqual(state.LANE, data["lane"])
+        self.assertTrue(data["approved"])
+
+    def test_pr_mode_refuses_and_names_the_mode(self):
+        for mode in (None, "pr"):
+            with self.subTest(mode=mode):
+                with gate_state(mode=mode):
+                    code, payload = self.run_cli()
+                    self.assertFalse(pretool_gate.trunk_push_marker_path().exists())
+                self.assertEqual(2, code)
+                self.assertIn(f"workflow mode is '{pretool_gate.WORKFLOW_PR}'",
+                              payload["error"])
+
+    def test_a_trunk_that_is_neither_main_nor_master_is_refused(self):
+        """The gate honours the marker for 'main' / 'master' only, so recording
+        one for a differently named trunk would approve a push nothing can use."""
+        with gate_state(mode="solo", main_branch="trunk"):
+            code, payload = self.run_cli()
+            self.assertFalse(pretool_gate.trunk_push_marker_path().exists())
+        self.assertEqual(2, code)
+        self.assertIn("the configured trunk is 'trunk'", payload["error"])
+
+    def test_no_approvals_level_can_ever_grant_it(self):
+        self.assertIn(approvals.TRUNK_PUSH, approvals.NEVER_GRANTED)
+        for level in approvals.LEVELS:
+            with self.subTest(level=level):
+                self.assertNotIn(approvals.TRUNK_PUSH, approvals.GRANTS[level])
 
 
 if __name__ == "__main__":

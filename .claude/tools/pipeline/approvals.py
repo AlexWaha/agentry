@@ -59,6 +59,7 @@ TAKE = "take"              # move a task out of the queue into work
 COMMIT = "commit"
 PUSH = "push"
 PLAN_APPROVAL = "approval"  # the CEO signs off a plan
+TRUNK_PUSH = "trunk_push"   # solo mode: publish the trunk itself, once
 
 GRANTS = {
     MANUAL: frozenset(),
@@ -69,7 +70,10 @@ GRANTS = {
 # Checkpoints no level and no per-stage auto_approve may ever grant. The push
 # was in GRANTS[AUTO] while git-workflow.md forbade it - the rule was written
 # and not enforced, so the orchestrator followed the permissive document.
-NEVER_GRANTED = frozenset({PUSH})
+# TRUNK_PUSH joins it for the same reason and one more: it is the one step that
+# publishes the trunk, so it is recorded per push by the CEO in chat
+# (approve.py --trunk-push), never handed over wholesale by a level.
+NEVER_GRANTED = frozenset({PUSH, TRUNK_PUSH})
 
 DESCRIPTIONS = {
     MANUAL: "ask at every checkpoint: which task, the commit, the push",
