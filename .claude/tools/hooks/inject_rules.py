@@ -20,6 +20,20 @@ ensure_ascii=True on purpose: a cp1252 stdout on Windows raises
 UnicodeEncodeError on the arrows and Cyrillic the rule files contain, and that
 error would die in main()'s blanket handler as a silent, permanent no-op.
 
+CHUNKED, and the number that forces it. Build 2.1.269 runs a hook's
+additionalContext through the SAME persist path as its stdout - a single
+`Zhe(text, id, label, {threshold: NEr})` with `NEr = 1e4`, called as
+`Zhe(hook.additionalContext, id, "additionalContext")` - so a block over 10000
+CHARACTERS is written to `hook-<id>-<n>-additionalContext.txt` and replaced by a
+2000-char preview (`w2e`). There is no separate cap for SubagentStart and no
+8000-char variant anywhere in the build. Every agent declaring more than 10000
+chars of rules therefore received a preview, not its rules, from task-0014 until
+task-0091. Delivery is now one SubagentStart entry per chunk (`--chunk N`) under
+CHUNK_BUDGET, plus an `--index` entry printing the K-of-K line, the same shape
+main_thread_rules.py uses on SessionStart. The number of entries wired in
+settings.json is set by the LARGEST declaring agent (reviewer today), so adding a
+rule to any agent can require more entries - ChunkBudgetTest fails when it does.
+
 No byte budget, per decision D4 of the contract. After FR-29 this block is a
 strict subset of what leaves the core @import set, so it cannot raise any
 agent's context. A runtime cap would drop a whole policy at the moment it is
@@ -43,6 +57,16 @@ HERE = Path(__file__).resolve()
 ROOT = HERE.parents[3]                # project root, as in session_start.py
 AGENTS_DIR = ROOT / ".claude" / "agents"
 RULES_DIR = ROOT / ".claude" / "rules"
+
+# Own directory only - one entry, so there is no LIFO ordering to get wrong.
+# main_thread_rules.py owns the deterministic splitter; duplicating it would let
+# the two budgets drift.
+sys.path.insert(0, str(HERE.parent))
+from main_thread_rules import pack  # noqa: E402
+
+# Chars, not bytes, and per hook command: NEr = 1e4. 10 percent margin, the same
+# number main_thread_rules.py uses for the identical threshold on SessionStart.
+CHUNK_BUDGET = 9000
 
 # This module imports no sibling and inserts nothing into sys.path, so it has no
 # LIFO ordering to get wrong. If a later change needs state.py, copy
@@ -190,10 +214,28 @@ def render(name: str, agents_dir: Path, rules_dir: Path) -> str:
     return "\n\n".join([head, *failures, *sections])
 
 
+def render_chunks(name: str, agents_dir: Path, rules_dir: Path) -> list[str]:
+    """The agent's block split into pieces of at most CHUNK_BUDGET chars.
+
+    Every piece is headed with its part number, because the pieces arrive as
+    separate attachments in an order nothing else guarantees, and a rule body cut
+    across two of them is unreadable without the marker. Empty block, no chunks:
+    an agent without the key still injects nothing.
+    """
+    block = render(name, agents_dir, rules_dir)
+    if not block:
+        return []
+    pieces = pack(block, CHUNK_BUDGET - 80)
+    return [f"[agent-rules part {i} of {len(pieces)}]\n{piece.rstrip()}\n"
+            for i, piece in enumerate(pieces, 1)]
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Inject an agent's declared rule files")
     parser.add_argument("--agents-dir", default="", help="test seam; defaults to .claude/agents")
     parser.add_argument("--rules-dir", default="", help="test seam; defaults to .claude/rules")
+    parser.add_argument("--chunk", type=int, default=0, help="1-based chunk to inject")
+    parser.add_argument("--index", action="store_true", help="inject the K-of-K line")
     args = parser.parse_args(argv)
 
     try:
@@ -214,9 +256,23 @@ def main(argv=None) -> int:
         if not AGENT_NAME_RE.match(name):
             sys.stderr.write(f"inject_rules: ignoring unusable agent name {name!r}\n")
             return 0
-        block = render(name,
-                       Path(args.agents_dir) if args.agents_dir else AGENTS_DIR,
-                       Path(args.rules_dir) if args.rules_dir else RULES_DIR)
+        agents_dir = Path(args.agents_dir) if args.agents_dir else AGENTS_DIR
+        rules_dir = Path(args.rules_dir) if args.rules_dir else RULES_DIR
+        if args.chunk or args.index:
+            parts = render_chunks(name, agents_dir, rules_dir)
+            if not parts:
+                return 0  # nothing declared; every chunk entry stays silent
+            if args.index:
+                block = f"[agent-rules] delivered {len(parts)} of {len(parts)} chunks"
+            elif 1 <= args.chunk <= len(parts):
+                block = parts[args.chunk - 1]
+            else:
+                return 0  # this agent has fewer chunks than the wired entries
+        else:
+            # Unchunked, for a by-hand run and the unit tests. NEVER wire this
+            # form in settings.json: over 10000 chars it is persisted, not
+            # delivered, which is the bug task-0091 fixed.
+            block = render(name, agents_dir, rules_dir)
         if block:
             print(json.dumps({"hookSpecificOutput": {
                 "hookEventName": "SubagentStart",
