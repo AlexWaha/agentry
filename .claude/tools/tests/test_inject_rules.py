@@ -679,6 +679,42 @@ class RealTreeTest(unittest.TestCase):
                                  f"agent, so declaring one only pays for it again")
 
     @unittest.skipUnless(RULES_DIR.is_dir(), "shipped rules directory not present")
+    def test_every_chunk_is_under_the_hook_stdout_persist_threshold(self):
+        # The number that forced chunking, read out of the 2.1.269 binary:
+        # `Zhe(ms.stdout.trim(), hookId, "stdout")` persists a hook command's
+        # stdout and replaces it with a 2000-char preview when
+        # `e.length > s`, `s = NEr = 1e4`. Characters, per hook command. One
+        # entry carrying both files was 52514 and spilled, delivering a
+        # fraction of the rules while reading like success. A rule that grows
+        # past the budget must turn this red instead of repeating that.
+        persist_threshold = 10_000
+        self.assertLess(main_thread_rules.CHUNK_BUDGET, persist_threshold)
+        for i, chunk in enumerate(main_thread_rules.chunks(RULES_DIR), 1):
+            with self.subTest(chunk=i):
+                self.assertLess(len(chunk), persist_threshold,
+                                f"chunk {i} is {len(chunk)} chars and will be "
+                                f"persisted to a file instead of delivered")
+
+    @unittest.skipUnless(SETTINGS.is_file(), "shipped settings.json not present")
+    def test_settings_wires_every_chunk_exactly_once(self):
+        # Completeness. Chunk count is derived from the rule files, so a rule
+        # growing by one section adds a chunk that nothing delivers until this
+        # test says so - the silent half-delivery again, one chunk instead of
+        # four fifths of the set.
+        commands = [h.get("command", "")
+                    for group in json.loads(SETTINGS.read_text(encoding="utf-8"))
+                    .get("hooks", {}).get("SessionStart", [])
+                    for h in group.get("hooks", [])
+                    if "main_thread_rules.py" in h.get("command", "")]
+        wired = sorted(int(m.group(1))
+                       for m in (re.search(r"--chunk (\d+)$", c) for c in commands) if m)
+        expected = list(range(1, len(main_thread_rules.chunks(RULES_DIR)) + 1))
+        self.assertEqual(wired, expected,
+                         f"SessionStart wires chunks {wired}, the rules produce {expected}")
+        self.assertEqual(sum(c.endswith("--index") for c in commands), 1,
+                         "exactly one --index entry reports the delivered count")
+
+    @unittest.skipUnless(RULES_DIR.is_dir(), "shipped rules directory not present")
     def test_every_shipped_rule_resolves_when_declared(self):
         for path in sorted(RULES_DIR.glob("*.md")):
             with self.subTest(rule=path.name):

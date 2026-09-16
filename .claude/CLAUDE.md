@@ -361,7 +361,12 @@ receives it (measured, task-0088). They are therefore NOT in the `@rules/` list
 above and ARE named in `claudeMdExcludes` - the orchestrator gets them, every
 agent dispatch saves their 52,259 bytes. A rule moved here must be added to
 `RULES` in that hook, to the table below, and to `claudeMdExcludes`, or
-`RealTreeTest` goes red.
+`RealTreeTest` goes red. The hook delivers in chunks, one `SessionStart` entry
+per `--chunk N` plus a final `--index`: build 2.1.269 persists a hook command's
+stdout to a file and leaves a 2000-char preview once it passes 10,000
+characters (`NEr`), and one entry carrying both files was 52,514. Changing a
+rule's size can change the chunk count, so re-run `--index` and re-wire
+`settings.json` to match - `RealTreeTest` fails on the mismatch.
 
 | Rule | Why the main thread needs it (FR-30) |
 |---|---|
