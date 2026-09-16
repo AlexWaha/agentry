@@ -45,7 +45,9 @@
     "**/.claude/rules/architecture.md",
     "**/.claude/rules/testing.md",
     "**/.claude/rules/security.md",
-    "**/.claude/rules/coding-style.md"
+    "**/.claude/rules/coding-style.md",
+    "**/.claude/rules/git-workflow.md",
+    "**/.claude/rules/orchestration.md"
   ],
   "hooks": {
     "SessionStart": [
@@ -62,6 +64,60 @@
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/supervisor.py\" --ensure-running",
             "timeout": 20,
             "statusMessage": "Starting the pipeline supervisor if it is not already running..."
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 1",
+            "timeout": 20,
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 1 of 8..."
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 2",
+            "timeout": 20,
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 2 of 8..."
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 3",
+            "timeout": 20,
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 3 of 8..."
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 4",
+            "timeout": 20,
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 4 of 8..."
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 5",
+            "timeout": 20,
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 5 of 8..."
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 6",
+            "timeout": 20,
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 6 of 8..."
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 7",
+            "timeout": 20,
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 7 of 8..."
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 8",
+            "timeout": 20,
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 8 of 8..."
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --index",
+            "timeout": 20,
+            "statusMessage": "Orchestrator-only rules: completeness index..."
           }
         ]
       }

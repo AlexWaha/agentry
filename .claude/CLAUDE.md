@@ -316,7 +316,7 @@ The `.claude/` system (rules, agents, skills) must self-improve over time.
 
 ## Rules
 
-The list at the bottom of this section is the core set: the rules every context
+The `@rules/` list below is the core set: the rules every context
 gets, main thread included. Claude Code loads them by walking `.claude/rules/`
 at session start (build 2.1.269; design record
 `.agentry/plans/2026-09-14-task-0014-rules-split-matrix.md`), and the `@rules/`
@@ -340,18 +340,35 @@ the only check that a repo-specific rule has not crept into the core set.
 |---|---|
 | `quality-standard.md` | The orchestrator runs the exit gates, records approvals, commits and merges; the verification discipline, the em-dash ban, the NUL cleanup and the AI-authorship ban bind it directly. |
 | `communication.md` | The checkpoint-must-be-a-card rule, the response-language rule and the subagent report format govern the orchestrator's own turns and what it pays for in every dispatch. |
-| `git-workflow.md` | The orchestrator is the only thread that branches, commits, merges (solo mode) and pushes; the pre-commit gate order, the branch-base check, the push-approval rule and the deploy-actions report are its procedure. |
 | `task-creation.md` | Mandated by FR-30; the orchestrator formalizes the CEO's ask into task files and runs the cross-layer impact check itself. |
 | `code-retrieval.md` | 2,114 bytes; the orchestrator answers codebase questions between dispatches, and rule 2 (N-of-N reading of the `.claude` tree) governs how it reads the roster and the task folders. |
 | `self-learning.md` | Mandated by FR-30; the distill-and-stamp loop after every task and lesson capture from agent reports are the orchestrator's and cannot be delegated. |
 | `pipeline.md` | The stage map the orchestrator drives with `advance.py`, and the context-absorption order it must write into every dispatch prompt; every agent's workflow step 1 cites it too, so core is its cheapest home. |
-| `orchestration.md` | The orchestrator's operating loop itself (hooks, busy marker, force majeure, steering, checkpoint advice); no agent needs it, and no other channel reaches the main thread. |
 
 @rules/quality-standard.md
 @rules/communication.md
-@rules/git-workflow.md
 @rules/task-creation.md
 @rules/code-retrieval.md
 @rules/self-learning.md
 @rules/pipeline.md
-@rules/orchestration.md
+
+### Delivered to the main thread only
+
+`.claude/tools/hooks/main_thread_rules.py` prints the two rules below on
+`SessionStart`, which is a main-thread-only channel: its stdout is pushed into
+the opening message list and re-fires on `/compact`, and no subagent ever
+receives it (measured, task-0088). They are therefore NOT in the `@rules/` list
+above and ARE named in `claudeMdExcludes` - the orchestrator gets them, every
+agent dispatch saves their 52,259 bytes. A rule moved here must be added to
+`RULES` in that hook, to the table below, and to `claudeMdExcludes`, or
+`RealTreeTest` goes red. The hook delivers in chunks, one `SessionStart` entry
+per `--chunk N` plus a final `--index`: build 2.1.269 persists a hook command's
+stdout to a file and leaves a 2000-char preview once it passes 10,000
+characters (`NEr`), and one entry carrying both files was 52,514. Changing a
+rule's size can change the chunk count, so re-run `--index` and re-wire
+`settings.json` to match - `RealTreeTest` fails on the mismatch.
+
+| Rule | Why the main thread needs it (FR-30) |
+|---|---|
+| `git-workflow.md` | The orchestrator is the only thread that branches, commits, merges (solo mode) and pushes; the pre-commit gate order, the branch-base check, the push-approval rule and the deploy-actions report are its procedure. |
+| `orchestration.md` | The orchestrator's operating loop itself (hooks, busy marker, force majeure, steering, checkpoint advice); no agent needs any of it. |

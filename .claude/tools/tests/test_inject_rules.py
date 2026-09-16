@@ -38,6 +38,7 @@ sys.path.insert(0, str(TOOLS_DIR / "hooks"))
 sys.path.insert(0, str(TESTS_DIR))
 
 import inject_rules  # noqa: E402 - path set above
+import main_thread_rules  # noqa: E402 - same
 import tmproot  # noqa: E402 - same
 
 AGENTS_DIR = inject_rules.AGENTS_DIR
@@ -65,15 +66,35 @@ REASON_RE = re.compile(r"^\| *`([A-Za-z0-9._/-]+\.md)` *\| *(.+?) *\|$", re.MULT
 EXCLUDE_RE = re.compile(r"^\*\*/\.claude/rules/([A-Za-z0-9._/-]+\.md)$")
 
 
+# The subsection holding the main-thread-only table. Both halves of the section
+# use the same row and heading shapes, so this split is what keeps a row in one
+# table out of the other's reader.
+MAIN_THREAD_HEADING = "\n### Delivered to the main thread only\n"
+
+
 def rules_section() -> str:
-    """The `## Rules` section of .claude/CLAUDE.md, to the end of the file.
+    """The core half of the `## Rules` section of .claude/CLAUDE.md.
 
     Scoped so a table elsewhere in the document cannot donate a row to the FR-30
-    record, and so the core list is read where it is declared.
+    record, and so the core list is read where it is declared. Stops at the
+    main-thread subsection: a rule delivered by the hook is not a core entry and
+    must not read as one.
     """
     text = CLAUDE_MD.read_text(encoding="utf-8")
     head = text.index("\n## Rules\n")
-    return text[head:]
+    return text[head:text.index(MAIN_THREAD_HEADING, head)]
+
+
+def main_thread_section() -> str:
+    """The `### Delivered to the main thread only` subsection, to end of file."""
+    text = CLAUDE_MD.read_text(encoding="utf-8")
+    return text[text.index(MAIN_THREAD_HEADING):]
+
+
+def main_thread_reasons() -> dict[str, str]:
+    """The main-thread table: rule -> recorded reason. Same row shape as the
+    FR-30 table, read from the other half of the section."""
+    return dict(REASON_RE.findall(main_thread_section()))
 
 
 def core_rules() -> list[str]:
@@ -592,14 +613,16 @@ class RealTreeTest(unittest.TestCase):
         # FR-29, counted rather than sampled.
         core = set(core_rules())
         declared = set().union(*declarations().values()) if AGENTS_DIR.is_dir() else set()
+        main_thread = set(main_thread_rules.RULES)
+        delivered = core | declared | main_thread
         shipped = shipped_rules()
-        self.assertEqual(len(shipped), len(core | declared))
-        self.assertEqual(shipped, core | declared,
-                         f"orphaned or dangling: {sorted(shipped ^ (core | declared))}")
+        self.assertEqual(len(shipped), len(delivered))
+        self.assertEqual(shipped, delivered,
+                         f"orphaned or dangling: {sorted(shipped ^ delivered)}")
         self.assertLessEqual(core, shipped, f"core names a missing file: {core - shipped}")
-        self.assertLessEqual(shipped - core, declared,
-                             f"removed from the core list and declared by nobody: "
-                             f"{sorted((shipped - core) - declared)}")
+        self.assertLessEqual(shipped - core, declared | main_thread,
+                             f"off the core list and reached by no other channel: "
+                             f"{sorted((shipped - core) - (declared | main_thread))}")
 
     def test_claude_md_excludes_is_the_complement_of_the_core_set(self):
         excluded = excluded_rules()
@@ -620,6 +643,76 @@ class RealTreeTest(unittest.TestCase):
             with self.subTest(rule=rule):
                 self.assertTrue(reason.strip(), rule)
         self.assertLessEqual({"self-learning.md", "task-creation.md"}, core)
+
+    def test_main_thread_channel_delivers_what_the_table_names(self):
+        # FR-30 for the third channel. The hook's RULES tuple is the delivery
+        # and the table is the reason; a move that edits one and not the other
+        # either drops a rule for the orchestrator or keeps charging every
+        # dispatch for it, and neither is visible from the other file.
+        named = set(main_thread_rules.RULES)
+        reasons = main_thread_reasons()
+        self.assertEqual(len(main_thread_rules.RULES), len(named), main_thread_rules.RULES)
+        self.assertEqual(set(reasons), named,
+                         f"the main-thread table and main_thread_rules.RULES disagree: "
+                         f"{sorted(set(reasons) ^ named)}")
+        for rule, reason in reasons.items():
+            with self.subTest(rule=rule):
+                self.assertTrue(reason.strip(), rule)
+                self.assertIsNotNone(inject_rules.resolve_rule(rule, RULES_DIR),
+                                     f"{rule} is delivered to the main thread but does "
+                                     f"not resolve under .claude/rules/")
+        self.assertFalse(named & set(core_rules()),
+                         "a rule on both channels reaches the main thread twice")
+
+    @unittest.skipUnless(AGENTS_DIR.is_dir(), "shipped agents directory not present")
+    def test_no_agent_declares_a_main_thread_rule(self):
+        # The point of the channel: these describe orchestrator-only work, and
+        # an agent that declares one puts all of it back into the dispatch this
+        # task took it out of.
+        named = set(main_thread_rules.RULES)
+        for agent, entries in declarations().items():
+            with self.subTest(agent=agent):
+                overlap = sorted(set(entries) & named)
+                self.assertFalse(overlap,
+                                 f"{agent} declares main-thread-only rule(s) {overlap}: "
+                                 f"they are delivered on SessionStart and reach no "
+                                 f"agent, so declaring one only pays for it again")
+
+    @unittest.skipUnless(RULES_DIR.is_dir(), "shipped rules directory not present")
+    def test_every_chunk_is_under_the_hook_stdout_persist_threshold(self):
+        # The number that forced chunking, read out of the 2.1.269 binary:
+        # `Zhe(ms.stdout.trim(), hookId, "stdout")` persists a hook command's
+        # stdout and replaces it with a 2000-char preview when
+        # `e.length > s`, `s = NEr = 1e4`. Characters, per hook command. One
+        # entry carrying both files was 52514 and spilled, delivering a
+        # fraction of the rules while reading like success. A rule that grows
+        # past the budget must turn this red instead of repeating that.
+        persist_threshold = 10_000
+        self.assertLess(main_thread_rules.CHUNK_BUDGET, persist_threshold)
+        for i, chunk in enumerate(main_thread_rules.chunks(RULES_DIR), 1):
+            with self.subTest(chunk=i):
+                self.assertLess(len(chunk), persist_threshold,
+                                f"chunk {i} is {len(chunk)} chars and will be "
+                                f"persisted to a file instead of delivered")
+
+    @unittest.skipUnless(SETTINGS.is_file(), "shipped settings.json not present")
+    def test_settings_wires_every_chunk_exactly_once(self):
+        # Completeness. Chunk count is derived from the rule files, so a rule
+        # growing by one section adds a chunk that nothing delivers until this
+        # test says so - the silent half-delivery again, one chunk instead of
+        # four fifths of the set.
+        commands = [h.get("command", "")
+                    for group in json.loads(SETTINGS.read_text(encoding="utf-8"))
+                    .get("hooks", {}).get("SessionStart", [])
+                    for h in group.get("hooks", [])
+                    if "main_thread_rules.py" in h.get("command", "")]
+        wired = sorted(int(m.group(1))
+                       for m in (re.search(r"--chunk (\d+)$", c) for c in commands) if m)
+        expected = list(range(1, len(main_thread_rules.chunks(RULES_DIR)) + 1))
+        self.assertEqual(wired, expected,
+                         f"SessionStart wires chunks {wired}, the rules produce {expected}")
+        self.assertEqual(sum(c.endswith("--index") for c in commands), 1,
+                         "exactly one --index entry reports the delivered count")
 
     @unittest.skipUnless(RULES_DIR.is_dir(), "shipped rules directory not present")
     def test_every_shipped_rule_resolves_when_declared(self):
