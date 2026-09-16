@@ -19,7 +19,7 @@ coordination. The shape of the project is therefore config, not prose:
 |---|---|---|
 | Trunk commits | none - the trunk is written only by a merged PR | a local `git merge` of an approved task branch |
 | Who merges | the human, in the web UI | the pipeline, locally |
-| Push to a protected branch | forbidden | forbidden (unchanged) |
+| Push to a protected branch | forbidden | forbidden, except the trunk itself by recorded CEO approval |
 | Push approval | `workflow.push_needs_approval` | `workflow.push_needs_approval` |
 | Checkpoints at `ready` | commit, then push | commit only - no push happens |
 
@@ -36,6 +36,11 @@ task has a row in `run.db`, and its commit checkpoint was approved. Those guard
 against merging unreviewed work, which has nothing to do with working alone, so
 they hold in both modes.
 
+Publishing the trunk is the one push `solo` mode allows, since that merge is its
+only writer: `approve.py --trunk-push` records the CEO's chat approval and the
+next push of the trunk consumes it - one push per approval, never granted by an
+approvals level, refused in an unattended session and in `pr` mode.
+
 `workflow.push_needs_approval` (default `true`) is independent of the mode.
 Working alone says nothing about whether an unattended run may write to the
 remote, and conflating the two is how something gets published at four in the
@@ -48,7 +53,7 @@ Every PR" and the PR sections of "Task-Branch Integration" apply to `pr` mode
 only; in `solo` mode the task file's step 6 is the local merge instead. And
 "ALL changes reach `main` through Pull Requests" below is the `pr`-mode rule; in
 `solo` mode the trunk is reached by the gated local merge, never by a direct
-commit and never by a push.
+commit - and the only push of it is the approved, one-shot publication above.
 
 ---
 

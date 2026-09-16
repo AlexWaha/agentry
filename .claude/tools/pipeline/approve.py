@@ -13,23 +13,75 @@ CLI:
     python approve.py --task task-0007 --gate commit
     python approve.py --task task-0007 --gate push
     python approve.py --task task-0007 --reject
+    python approve.py --trunk-push
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timezone
 
+import pretool_gate
 import state
+
+
+def trunk_name() -> str:
+    """The configured trunk, with the template placeholder resolved - read the
+    same way pretool_gate.push_protected_branches() reads it."""
+    name = str(state.load_pipeline().get("main_branch") or "main")
+    return "main" if name.startswith("{{") else name
+
+
+def record_trunk_push() -> int:
+    """Record the CEO's approval to publish the trunk once.
+
+    Solo mode only. In `pr` mode the trunk is reached by a pull request, so a
+    marker there would be an approval for a step that has no legitimate
+    spelling - it is refused at write time rather than written and ignored."""
+    mode = pretool_gate.workflow_mode()
+    if mode != pretool_gate.WORKFLOW_SOLO:
+        print(json.dumps({"error": (
+            f"workflow mode is '{mode}' - a push to the trunk is refused there in every "
+            f"case, because the trunk is reached by a pull request. Only "
+            f"'{pretool_gate.WORKFLOW_SOLO}' mode can publish the trunk by push.")}))
+        return 2
+    trunk = trunk_name()
+    if trunk not in pretool_gate.PUSH_PROTECTED_ALWAYS:
+        print(json.dumps({"error": (
+            f"the configured trunk is '{trunk}', and the gate grants this approval for "
+            f"{' / '.join(pretool_gate.PUSH_PROTECTED_ALWAYS)} only. Writing the marker "
+            f"would record an approval no push can ever use.")}))
+        return 2
+    path = pretool_gate.trunk_push_marker_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "trunk": trunk,
+        "lane": state.LANE,
+        "approved": datetime.now(timezone.utc).isoformat(),
+    }), encoding="utf-8")
+    print(json.dumps({"ok": True, "message": (
+        f"trunk push approved - ONE push to '{trunk}' is now permitted in lane "
+        f"'{state.LANE or 'default'}'; that push consumes the approval."), "marker": str(path)},
+        indent=2))
+    return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Record a checkpoint decision")
-    parser.add_argument("--task", required=True)
+    parser.add_argument("--task")
     parser.add_argument("--gate", choices=["commit", "push"])
     parser.add_argument("--reject", action="store_true",
                         help="send the task back to implement, clearing approvals")
+    parser.add_argument("--trunk-push", action="store_true",
+                        help="solo mode only: allow ONE push of the trunk to the remote")
     args = parser.parse_args()
+
+    if args.trunk_push:
+        return record_trunk_push()
+    if not args.task:
+        print(json.dumps({"error": "need --task task-XXXX (or --trunk-push)"}))
+        return 2
 
     conn = state.connect()
     run = state.get_run(conn, args.task)
