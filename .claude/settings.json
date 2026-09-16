@@ -180,8 +180,139 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/inject_rules.py\"",
-            "timeout": 10
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/inject_rules.py\" --chunk 1",
+            "timeout": 10,
+            "statusMessage": "Agent rules, chunk 1 of 13..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/inject_rules.py\" --chunk 2",
+            "timeout": 10,
+            "statusMessage": "Agent rules, chunk 2 of 13..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/inject_rules.py\" --chunk 3",
+            "timeout": 10,
+            "statusMessage": "Agent rules, chunk 3 of 13..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/inject_rules.py\" --chunk 4",
+            "timeout": 10,
+            "statusMessage": "Agent rules, chunk 4 of 13..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/inject_rules.py\" --chunk 5",
+            "timeout": 10,
+            "statusMessage": "Agent rules, chunk 5 of 13..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/inject_rules.py\" --chunk 6",
+            "timeout": 10,
+            "statusMessage": "Agent rules, chunk 6 of 13..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/inject_rules.py\" --chunk 7",
+            "timeout": 10,
+            "statusMessage": "Agent rules, chunk 7 of 13..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/inject_rules.py\" --chunk 8",
+            "timeout": 10,
+            "statusMessage": "Agent rules, chunk 8 of 13..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/inject_rules.py\" --chunk 9",
+            "timeout": 10,
+            "statusMessage": "Agent rules, chunk 9 of 13..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/inject_rules.py\" --chunk 10",
+            "timeout": 10,
+            "statusMessage": "Agent rules, chunk 10 of 13..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/inject_rules.py\" --chunk 11",
+            "timeout": 10,
+            "statusMessage": "Agent rules, chunk 11 of 13..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/inject_rules.py\" --chunk 12",
+            "timeout": 10,
+            "statusMessage": "Agent rules, chunk 12 of 13..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/inject_rules.py\" --chunk 13",
+            "timeout": 10,
+            "statusMessage": "Agent rules, chunk 13 of 13..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/inject_rules.py\" --index",
+            "timeout": 10,
+            "statusMessage": "Agent rules: completeness index..."
           }
         ]
       },

@@ -725,3 +725,78 @@ class RealTreeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChunkBudgetTest(unittest.TestCase):
+    """FR-29 - no injected chunk may cross the build's persistence threshold.
+
+    Build 2.1.269 runs a hook's additionalContext through the same persist path
+    as its stdout (`Zhe(text, id, "additionalContext", {threshold: NEr})`,
+    `NEr = 1e4`), so anything over PERSIST_THRESHOLD chars reaches the agent as a
+    2000-char preview and a file path. Measured on the real tree: reviewer's
+    block is 97187 chars and was never delivered between task-0014 and
+    task-0091.
+    """
+
+    PERSIST_THRESHOLD = 10000
+
+    def chunk_map(self) -> dict:
+        """Every declaring agent in the shipped tree mapped to its chunks."""
+        out = {}
+        for agent in sorted(AGENTS_DIR.glob("*.md")):
+            parts = inject_rules.render_chunks(agent.stem, AGENTS_DIR, RULES_DIR)
+            if parts:
+                out[agent.stem] = parts
+        return out
+
+    def wired_chunks(self) -> list:
+        """The `--chunk N` numbers wired as SubagentStart entries, in order."""
+        hooks = json.loads(SETTINGS.read_text(encoding="utf-8"))["hooks"]["SubagentStart"]
+        return [int(m.group(1))
+                for entry in hooks for hook in entry["hooks"]
+                for m in [re.search(r"inject_rules\.py\" --chunk (\d+)",
+                                    hook.get("command", ""))] if m]
+
+    def test_no_agent_chunk_crosses_the_persistence_threshold(self):
+        chunks = self.chunk_map()
+        self.assertTrue(chunks, "no agent declares rules; the hook cannot be verified")
+        for name, parts in chunks.items():
+            for i, part in enumerate(parts, 1):
+                self.assertLess(len(part), self.PERSIST_THRESHOLD,
+                                f"{name} chunk {i} of {len(parts)} is {len(part)} chars; "
+                                f"over {self.PERSIST_THRESHOLD} it is persisted, not delivered")
+                self.assertLessEqual(len(part), inject_rules.CHUNK_BUDGET,
+                                     f"{name} chunk {i} exceeds CHUNK_BUDGET")
+
+    def test_the_split_loses_nothing_from_any_agent_block(self):
+        for name, parts in self.chunk_map().items():
+            stripped = "".join(re.sub(r"^\[agent-rules part \d+ of \d+\]\n", "", p)
+                               for p in parts)
+            whole = inject_rules.render(name, AGENTS_DIR, RULES_DIR)
+            self.assertEqual("".join(whole.split()), "".join(stripped.split()),
+                             f"{name}: chunking dropped or reordered content")
+
+    def test_settings_wires_one_entry_per_chunk_of_the_largest_agent(self):
+        needed = max(len(p) for p in self.chunk_map().values())
+        wired = self.wired_chunks()
+        self.assertEqual(wired, list(range(1, len(wired) + 1)),
+                         f"--chunk entries must be 1..N with no gaps, got {wired}")
+        self.assertGreaterEqual(
+            len(wired), needed,
+            f"the largest declaring agent needs {needed} chunks but settings.json wires "
+            f"{len(wired)}; add SubagentStart entries - the count follows the largest "
+            f"declaring agent, so adding a rule to one agent can require more entries")
+        self.assertTrue(
+            any("inject_rules.py\" --index" in hook.get("command", "")
+                for entry in json.loads(SETTINGS.read_text(encoding="utf-8"))
+                ["hooks"]["SubagentStart"] for hook in entry["hooks"]),
+            "no --index entry: nothing prints the K-of-K completeness line")
+
+    def test_an_agent_with_fewer_chunks_stays_silent_on_a_high_chunk_number(self):
+        chunks = self.chunk_map()
+        smallest = min(chunks, key=lambda n: len(chunks[n]))
+        out = io.StringIO()
+        with redirect_stdout(out), unittest.mock.patch.object(
+                sys, "stdin", io.StringIO(json.dumps({"agent_type": smallest}))):
+            inject_rules.main(["--chunk", str(len(chunks[smallest]) + 1)])
+        self.assertEqual(out.getvalue(), "")
