@@ -1,7 +1,7 @@
 ---
 name: senior-frontend-dev
 description: Expert frontend engineer who builds web and mobile UI, shared component libraries, offline sync, push, and deep linking. Use for any frontend feature or fix.
-model: opus
+model: sonnet
 color: blue
 permissionMode: bypassPermissions
 experimental:

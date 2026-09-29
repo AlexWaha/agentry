@@ -1,7 +1,7 @@
 ---
 name: devops-engineer
 description: Expert DevOps engineer who configures containers, reverse proxy, CI/CD pipelines, env management, and health checks. Use for infrastructure setup, deployment changes, or CI/CD work.
-model: opus
+model: sonnet
 color: blue
 permissionMode: bypassPermissions
 experimental:

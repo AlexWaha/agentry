@@ -26,7 +26,12 @@ AGENT_COUNT = 31
 # Claude Code subagent color palette.
 COLORS = {"red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"}
 EFFORTS = {"low", "medium", "high", "xhigh", "max"}
-MODELS = {"fable", "opus", "sonnet"}
+# Routing rule, CEO decision 2026-09-29 (.agentry/project/token-policy.md,
+# "Routing"): every agent defaults to sonnet; the only named exception is
+# architect (opus). fable is not an accepted model anywhere (task-0093).
+MODELS = {"opus", "sonnet"}
+DEFAULT_MODEL = "sonnet"
+MODEL_EXCEPTIONS = {"architect": "opus"}
 # rules/communication.md: an agent that inherits a prompting session mode routes
 # its permission prompts through the main conversation, where they read as the
 # orchestrator interrupting the CEO. Recorded incident, so the value is pinned.
@@ -56,7 +61,11 @@ CACHE_TTL_AGENTS = {
 
 
 def _phase_5() -> dict[str, tuple[str, str]]:
-    """FR-56: the Model and Effort columns of the plan's Phase 5 table."""
+    """The Model and Effort columns of the plan's Phase 5 table.
+
+    The Model column is superseded by the routing rule (task-0093) and is no
+    longer asserted against; only the Effort column is still authoritative.
+    """
     text = PLAN.read_text(encoding="utf-8")
     section = re.search(r"^## Phase 5\b.*?(?=^## )", text, re.MULTILINE | re.DOTALL)
     assert section, f"no Phase 5 section in {PLAN}"
@@ -138,15 +147,33 @@ class AgentFrontmatterTest(unittest.TestCase):
             with self.subTest(agent=name):
                 self.assertEqual(_scalar(text, "permissionMode"), PERMISSION_MODE)
 
+    def test_model_matches_the_routing_rule(self):
+        """FR-56 (task-0093): sonnet by default, architect is the one exception.
+
+        Walks a fresh Glob of AGENTS_DIR rather than trusting self.agents, so a
+        filtering bug that silently drops a file cannot hide a missed check -
+        the count of files checked must equal the count on disk (N of N).
+        """
+        on_disk = sorted(AGENTS_DIR.glob("*.md"))
+        checked = 0
+        for path in on_disk:
+            name = path.stem
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(agent=name):
+                model = _scalar(text, "model")
+                self.assertIn(model, MODELS)
+                self.assertEqual(model, MODEL_EXCEPTIONS.get(name, DEFAULT_MODEL))
+            checked += 1
+        self.assertEqual(checked, len(on_disk))
+
     @unittest.skipUnless(PLAN.exists(), "Phase 5 plan is project work product, gitignored")
-    def test_model_and_effort_match_the_plan(self):
+    def test_effort_matches_the_plan(self):
         phase_5 = _phase_5()
         for name, text in self.agents.items():
             with self.subTest(agent=name):
-                model, effort = _scalar(text, "model"), _scalar(text, "effort")
-                self.assertIn(model, MODELS)
+                effort = _scalar(text, "effort")
                 self.assertIn(effort, EFFORTS)
-                self.assertEqual((model, effort), phase_5[name])
+                self.assertEqual(effort, phase_5[name][1])
 
     def test_no_pinned_model_identifiers(self):
         for name, text in self.agents.items():

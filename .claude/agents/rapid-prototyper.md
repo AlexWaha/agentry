@@ -1,7 +1,7 @@
 ---
 name: rapid-prototyper
 description: Specialist in ultra-fast proof-of-concept development and MVP creation using efficient tools and frameworks. Use for validating an idea with a working prototype in days, not weeks.
-model: opus
+model: sonnet
 color: blue
 permissionMode: bypassPermissions
 experimental:
