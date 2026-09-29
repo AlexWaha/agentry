@@ -229,11 +229,12 @@ def _merge_wait(task: str, run: dict, waiting: str) -> dict:
 def finish_or_wait_for_merge(task: str, run: dict) -> int:
     """A task is done when the main branch carries it, not when it was pushed.
 
-    Pushing is the last thing the agent can do on its own; merging is the CEO's,
-    in the web UI. Treating the push as completion is how a branch sat unmerged
-    for a day while the task file said done. So the file only moves to done/
-    once git confirms the merge - and until then the task keeps saying it is
-    waiting for one."""
+    Who merges follows `workflow.mode`: in `pr` mode the human, in the web UI,
+    after the agent pushes; in `solo` mode the pipeline, locally, once the
+    commit is approved. Treating the push as completion is how a branch sat
+    unmerged for a day while the task file said done. So the file only moves to
+    done/ once git confirms the merge - and until then the task keeps saying it
+    is waiting for one."""
     declared = _task_frontmatter(task).get("branch", "")
     report = git_state.task_report(task, branch=declared)
 
@@ -258,9 +259,12 @@ def finish_or_wait_for_merge(task: str, run: dict) -> int:
     if unmerged:
         where = ", ".join(f"{r['repo']} ({r['branch'] or 'no branch'})" for r in unmerged)
         run = _merge_wait(task, run, "merge")
+        who = ("Merge the approved branch into the trunk locally (solo workflow mode)"
+               if pretool_gate.workflow_mode() == pretool_gate.WORKFLOW_SOLO else
+               "The CEO merges the PR in the web UI")
         return result("park", task, run,
-                      f"Pushed, but the main branch does not carry this task yet: {where}. "
-                      f"The CEO merges the MR; re-run advance.py afterwards and the file "
+                      f"The main branch does not carry this task yet: {where}. "
+                      f"{who}; re-run advance.py afterwards and the file "
                       f"moves to tasks/done/. Do not call this task done meanwhile.")
 
     moved = state.move_task(task, "done")
@@ -292,7 +296,8 @@ def stage_checkpoints(stage_def: dict) -> list:
 
     Only the push is dropped. push_needs_approval is untouched: if a push does
     happen in solo mode it still needs its recorded approval, and a push to a
-    protected branch is still refused outright.
+    protected branch is still refused, except the trunk itself under the
+    one-shot approval recorded by approve.py --trunk-push.
 
     Every declared checkpoint is returned, in any pipeline. This used to filter
     to the names in APPROVAL_FIELD, which silently dropped the plan flow's `plan`

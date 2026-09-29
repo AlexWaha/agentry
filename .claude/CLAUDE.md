@@ -375,7 +375,8 @@ the only check that a repo-specific rule has not crept into the core set.
 the opening message list and re-fires on `/compact`, and no subagent ever
 receives it (measured, task-0088). They are therefore NOT in the `@rules/` list
 above and ARE named in `claudeMdExcludes` - the orchestrator gets them, every
-agent dispatch saves their 52,259 bytes. A rule moved here must be added to
+agent dispatch saves their size (measure it with `wc -c` on the two files; it
+changes with every edit to either). A rule moved here must be added to
 `RULES` in that hook, to the table below, and to `claudeMdExcludes`, or
 `RealTreeTest` goes red. The hook delivers in chunks, one `SessionStart` entry
 per `--chunk N` plus a final `--index`: build 2.1.269 persists a hook command's

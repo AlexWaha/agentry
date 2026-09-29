@@ -17,19 +17,28 @@ Levels, each a superset of the one before:
 
 What no level ever grants:
 
-  - the push. The CEO asked for that decision to stay his, every time, at every
-    level (rules/git-workflow.md, "Push is never automatic"). A push is the
-    moment work leaves the machine.
-  - merging into the main branch. That happens in the web UI, by a human. The
-    agent stops at a pushed branch and a merge-request link, always.
-  - moving a task to done. That needs the merge above, so it needs the human.
+  - the push, including the one-shot trunk push of `solo` mode. The CEO asked
+    for that decision to stay his, every time, at every level
+    (rules/git-workflow.md, "Push is never automatic"). A push is the moment
+    work leaves the machine.
+  - the merge into the main branch. No level grants it; who performs it follows
+    `workflow.mode`. In `pr` mode the agent stops at a pushed branch; the CEO
+    opens and merges the PR in the web UI. In `solo` mode the pipeline merges
+    locally once the commit is approved; the approved commit permits that
+    merge, not the level. At `assisted` and `auto` the level sets the commit
+    approval that permits the solo local merge (rules/git-workflow.md,
+    "Workflow modes").
+  - moving a task to done. That follows the merge above and is confirmed by git,
+    not by an approval: the human's merge in `pr` mode, the local merge in `solo`.
   - approving a plan, which is what lets the breakdown into tasks begin.
   - answering the questions raised while planning. That information exists only
     in the CEO's head.
 
 Because of these, an overnight run is bounded by the dependency chain:
 independent tasks run all night, a chain of dependent ones advances by exactly
-one, since the next task needs its predecessor in the main branch.
+one, since the next task needs its predecessor in the main branch. In `solo`
+mode an unattended session is refused the local merge (`check_unattended`), so
+the bound is the same.
 
 A per-stage `auto_approve` list in pipeline.json is layered on top and wins for
 every checkpoint EXCEPT the ones in NEVER_GRANTED - listing `push` there does

@@ -41,9 +41,11 @@ things specifically:
   `status:` field to drift out of sync with reality.
 - **Forced context handoff.** Before a new task can start, the previous
   completed task must have a handoff document in `.agentry/tasks/handoffs/`,
-  written by the next task's own assignee from the merged diff and the gate
-  log. `advance.py` and the `Stop` hook both refuse to proceed without it, so
-  reading the prior task's decisions is not optional.
+  written by the next task's own assignee, who is instructed to write it in its
+  own words from the merged diff and the gate log. `advance.py` and the `Stop`
+  hook both refuse to proceed without a valid doc, but validation checks
+  structure only (six headings, minimum lengths, no scaffold marker), not
+  authorship: a pasted task description that meets those checks passes.
 
 The Claude Code `PreToolUse`, `Stop`, `SubagentStart`, and `SubagentStop`
 hooks wire this into every session: they deny writes outside an agent's
@@ -177,8 +179,11 @@ manifest) is planned - see [Roadmap](#roadmap) - and is not shipped today.
 Two things no level ever grants, whatever `pipeline.json` says: **the push** and
 **merging into the main branch**. `approvals.NEVER_GRANTED` refuses the push
 before the level and before any per-stage `auto_approve` entry is consulted, so
-a config key cannot re-grant it. The merge happens in the web UI and the harness
-never performs it at all.
+a config key cannot re-grant it. No level grants the merge either: in `pr` mode
+it happens in the web UI, by a human, and in `solo` mode the pipeline performs it
+locally once the commit is approved. At `assisted` and `auto` the level itself
+sets that commit approval, so in `solo` mode no human decides each merge there;
+a supervisor-spawned (unattended) session is refused the merge regardless.
 
 ### The daily loop
 
@@ -199,7 +204,8 @@ git push
 python .claude/tools/pipeline/advance.py --task task-0001
 ```
 
-Between the start of a task and its two checkpoints (the commit and the push),
+Between the start of a task and its tail checkpoints (the commit, and - in `pr`
+mode only - the push after it),
 the orchestrator drives it without asking to continue: the `Stop` hook
 (`stop_gate.py`) blocks the session from ending while any task is
 advanceable or a ready backlog task remains, and reconciles a task's folder

@@ -110,7 +110,7 @@ re-reading the transcript. Meanwhile the pipeline sits parked and nobody knows i
 **Every point where work stops and waits for a human goes through `AskUserQuestion`.**
 No exceptions, and specifically including:
 
-- Both checkpoints, commit and push.
+- The tail checkpoints `workflow.mode` leaves in place: the commit, and - in `pr` mode only - the push after it.
 - Plan and spec approval.
 - A blocked task surfaced to the CEO.
 - A fork in the work where two readings lead to different deliverables.
