@@ -118,11 +118,28 @@ def gates_cfg() -> dict:
 
 # --- Shared redirect detection (used here and by agent_gate.py) ---
 # A file-writing redirect (mutation) vs a read-only-safe descriptor dup / discard.
-# `> file` and `2>> log` write files; `2>&1`, `>&2` only dup descriptors; `NUL`,
-# `nul`, `/dev/null` discard. Only the first kind is a mutation. The lookbehind
+# `> file` and `2>> log` write files; `2>&1`, `>&2` only dup descriptors;
+# `/dev/null` discards. Only the first kind is a mutation. The lookbehind
 # `(?<![-\w<>])` skips arrows like `->` / `-->` and glued word chars.
+#
+# A bare `NUL` is NOT a discard target and used to be listed as one (task-0074).
+# Measured under git-bash: bash has no device of that name, so the redirect
+# creates a regular file called NUL, which Windows then cannot unlink by name.
 REDIR_RE = re.compile(r"(?<![-\w<>])\d*>>?\s*(?P<t>&\d+|[^\s;|&<>]+)")
-DISCARD_TARGETS = ("nul", "/dev/null")
+DISCARD_TARGETS = ("/dev/null",)
+BARE_NUL_NOTE = (
+    "`NUL` is a real file on this host: bash has no device of that name, so the "
+    "redirect creates an entry named NUL that Windows cannot unlink by name. Drop "
+    "the redirect and let the output through, or capture it with `out=$(cmd 2>&1)`.")
+
+
+def bare_nul_note(frag: str) -> str:
+    """The explanation to append to a deny whose fragment writes a bare NUL,
+    else ''. Exact name, any case, quotes and a closing `)` or backtick from a
+    command substitution ignored - `nullable.py` and `./NUL` get no note (the
+    second is denied like any path, and needs none)."""
+    target = frag.split(">")[-1].strip().strip("'\"`)")
+    return " " + BARE_NUL_NOTE if target.lower() == "nul" else ""
 QUOTED_RE = re.compile(r"'[^']*'|\"[^\"]*\"", re.DOTALL)
 
 # A nested sh-family shell: the `-c` argument is a whole command in its own
@@ -699,7 +716,7 @@ def unscannable_depth(command: str, _depth: int) -> bool:
 
 def redirect_write_target(command: str, _depth: int = 0) -> str:
     """Return the file-writing redirect fragment, or '' if the command only dups
-    descriptors (2>&1) or discards output (NUL / /dev/null).
+    descriptors (2>&1) or discards output (/dev/null). A bare NUL is a write.
 
     Nested `sh -c "..."` bodies are unwrapped and scanned recursively, because
     mask_quoted() blanks the quoted body and would otherwise report ''.
@@ -822,7 +839,8 @@ def orch_check_bash(command: str) -> int:
         target = frag.split(">")[-1].strip()
         if target and not orch_allowed_path(target):
             return deny(f"Orchestrator never writes files via shell redirects ('{frag}'). "
-                        f"Dispatch the owning agent instead. (orchestrator_gate)")
+                        f"Dispatch the owning agent instead. (orchestrator_gate)"
+                        f"{bare_nul_note(frag)}")
     m = ORCH_TEE_RE.search(command)
     if m and not orch_allowed_path(m.group("t")):
         return deny(f"Orchestrator never writes files via tee ('{m.group(0)}'). "

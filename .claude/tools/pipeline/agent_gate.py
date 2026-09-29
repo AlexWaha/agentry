@@ -98,7 +98,7 @@ MUTATING_BASH = [
     r"\bchmod\s",
     r"\bmkdir\s",
     # NOTE: file-writing redirects are detected separately in redirect_write_target()
-    # so descriptor dups (2>&1) and discard sinks (NUL, /dev/null) do not false-positive.
+    # so descriptor dups (2>&1) and the discard sink (/dev/null) do not false-positive.
     r"\bnpm\s+(install|i|uninstall|update|ci)\b",
     r"\bcomposer\s+(install|update|require|remove)\b",
     r"\bpip3?\s+(install|uninstall)\b",
@@ -446,7 +446,8 @@ def handle_readonly(tool: str, ti: dict, cwd: str = "") -> int:
         if frag:
             return deny(f"Read-only agent: mutating Bash denied (matched: '{frag}'). "
                         f"Use Read/Grep/Glob or read-only git commands; report changes "
-                        f"you would make to the orchestrator.")
+                        f"you would make to the orchestrator."
+                        f"{pretool_gate.bare_nul_note(frag)}")
     return allow()
 
 
@@ -470,7 +471,8 @@ def handle_docs(tool: str, ti: dict, cwd: str = "") -> int:
         frag = bash_mutates(command)
         if frag:
             return deny(f"Docs agent: mutating Bash denied (matched: '{frag}'). "
-                        f"Use Write/Edit for documents under .claude/, .agentry/ or docs/.")
+                        f"Use Write/Edit for documents under .claude/, .agentry/ or docs/."
+                        f"{pretool_gate.bare_nul_note(frag)}")
     return allow()
 
 

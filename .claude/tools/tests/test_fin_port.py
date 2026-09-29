@@ -218,6 +218,7 @@ class NestedShellRedirectTest(unittest.TestCase):
         'zsh -c "cat x > src/app.py"',
         'bash -lc "echo pwned > src/app.py"',
         'bash -c "bash -c \'echo pwned > src/app.py\'"',
+        'bash -c "ls > NUL"',                       # a bare NUL is a real file here
     )
     STILL_ALLOWED = (
         'python -c "print(2 > 1)"',                 # quoted operator, not a redirect
@@ -225,7 +226,6 @@ class NestedShellRedirectTest(unittest.TestCase):
         'bash -c "pytest -k order"',                # nested, but read-only
         "bash -c 'cat src/app.py'",
         'bash -c "ls 2>&1"',                        # descriptor dup
-        'bash -c "ls > NUL"',                       # discard sink
         'grep -n "a > b" src/app.py',
     )
 

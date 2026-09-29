@@ -2,17 +2,15 @@
 """SessionStart hook - one process instead of three.
 
 Does, in order, all fail-open:
-  1. Remove stray Windows `nul`/`NUL` files. The `2>NUL` spelling leaves them
+  1. Remove stray Windows `nul`/`NUL` entries. The `2>NUL` spelling leaves them
      (bash has no device named NUL, so it opens a file); `2>/dev/null` does
      not, MSYS2 mounts a real device there. See rules/quality-standard.md.
-     KNOWN GAP, measured 2026-09-14: cleanup_nul() below cannot actually
-     remove one. Win32 resolves the name as the reserved device, so
-     `Path.is_file()` is False and the guard skips it, and `unlink()` would
-     raise WinError 5 anyway. Only bash (`rm -f`, `find -delete`) clears it -
-     which is what hooks/cleanup-nul.sh does. Needs its own task, and NOT an
-     `exists()`-based fix: that name always exists (the device does), so an
-     exists() guard would fire at the reserved device every session whether an
-     artifact is there or not. The fix has to shell out to bash.
+     Win32 resolves the name as the reserved device, so `Path.is_file()` is
+     False, `Path.exists()` is True in EVERY directory (entry or not) and
+     `unlink()` raises WinError 5. So the entry is found by listing the
+     directory (os.scandir) and removed by bash (`rm -f`), the same tool
+     hooks/cleanup-nul.sh uses. An exists()-based guard would fire at the
+     reserved device every session. Failures are printed, not swallowed.
   2. Print the pipeline resume summary (in-flight runs from state.py).
   3. Sync the codegraph index (one status line; silent skip if CLI absent).
   3.5 Module-map drift check (tools/memory/codebase_sync.py --check): silent
@@ -29,6 +27,8 @@ A bug here must never brick the session: every step swallows its own errors.
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -38,14 +38,50 @@ CLAUDE_DIR = HERE.parents[2]          # .../.claude
 ROOT = HERE.parents[3]                # project root
 
 
+def stray_nul_entries(root: Path) -> list[str]:
+    """Names in `root` that are a NUL entry, read from the directory listing.
+    Never from the path: Path("NUL").exists() is True with no entry at all."""
+    with os.scandir(root) as entries:
+        return [e.name for e in entries
+                if e.name.lower() == "nul" and e.is_file(follow_symlinks=False)]
+
+
+def find_bash() -> str | None:
+    """Git bash beside git on Windows: a bare `bash` there can be WSL, a
+    different operating system. Elsewhere, the bash on PATH."""
+    if os.name != "nt":
+        return shutil.which("bash")
+    git = shutil.which("git")
+    if git:
+        for parent in Path(git).resolve().parents[:3]:
+            candidate = parent / "bin" / "bash.exe"
+            if candidate.is_file():
+                return str(candidate)
+    return None
+
+
 def cleanup_nul() -> None:
-    for name in ("nul", "NUL"):
-        try:
-            p = ROOT / name
-            if p.is_file():
-                p.unlink()
-        except OSError:
-            pass
+    try:
+        names = stray_nul_entries(ROOT)
+    except OSError as exc:
+        print(f"nul cleanup: cannot list {ROOT}: {exc}")
+        return
+    if not names:
+        return
+    listed = ", ".join(names)
+    try:
+        bash = find_bash()
+        if bash is None:
+            print(f"nul cleanup: {listed} in {ROOT} needs bash to remove and none was "
+                  f"found - run `rm -f {listed}` from Git bash")
+            return
+        proc = subprocess.run([bash, "-c", 'rm -f -- "$@"', "_", *names], cwd=ROOT,
+                              capture_output=True, timeout=5,
+                              encoding="utf-8", errors="replace")
+        if proc.returncode != 0:
+            print(f"nul cleanup: removing {listed} failed: {proc.stderr.strip()}")
+    except Exception as exc:
+        print(f"nul cleanup: could not remove {listed}: {exc}")
 
 
 def pipeline_resume() -> None:

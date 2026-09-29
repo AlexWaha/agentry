@@ -238,8 +238,14 @@ class MaskQuotedRedirectTest(unittest.TestCase):
         self.assertEqual(len(command), len(pretool_gate.mask_quoted(command)))
 
     def test_descriptor_dup_and_discard_still_pass(self):
+        unix_null = "/" + "dev" + "/" + "null"
         self.assertEqual("", pretool_gate.redirect_write_target("make 2>&1"))
-        self.assertEqual("", pretool_gate.redirect_write_target("make 2>NUL"))
+        self.assertEqual("", pretool_gate.redirect_write_target(f"make 2>{unix_null}"))
+
+    def test_a_bare_nul_is_a_write_not_a_discard(self):
+        # task-0074: this used to assert "" - the sink reading, inverted on this
+        # host, where the redirect creates a real file. See test_nul_entry.py.
+        self.assertEqual("2>NUL", pretool_gate.redirect_write_target("make 2>NUL"))
 
 
 class RepoBootstrapOrderingTest(unittest.TestCase):
@@ -368,8 +374,10 @@ class ForbidDevNullGateTest(unittest.TestCase):
         # substring test for the Unix path, and `NUL` has no slash in it, so
         # these forms pass HERE. That is not an endorsement, and the measurement
         # makes it awkward: these are the forms that DO leave a file behind,
-        # while the one this gate denies does not. Nothing enforces the NUL
-        # forms yet - this test documents the gap, it does not bless them.
+        # while the one this gate denies does not. Since task-0074 the redirect
+        # scan denies them for the readonly and docs profiles and the
+        # orchestrator (test_nul_entry.py); this policy gate and the dev
+        # profile still pass them, which this test pins without blessing it.
         for form in ("2>NUL", ">NUL", ">NUL 2>&1"):
             with self.subTest(redirect=form):
                 self.assertEqual(0, self.drive(form)[0])
