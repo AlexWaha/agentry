@@ -1365,5 +1365,236 @@ class ApproveTrunkPushTest(unittest.TestCase):
                 self.assertNotIn(approvals.TRUNK_PUSH, approvals.GRANTS[level])
 
 
+class GatedToolNamedNotRunTest(unittest.TestCase):
+    """task-0078 denial 3, measured 2026-09-16 (task-0092 handoff): a dev agent
+    running the READ-ONLY history lookup
+
+        git show <commit> -- .claude/tools/pipeline/approve.py
+
+    was refused with
+
+        approve.py is orchestrator-only. Recording CEO approval from a dev
+        agent is self-approval - report readiness to the orchestrator instead.
+
+    The regex matched the guarded filename anywhere in the command text, so a
+    path argument read as an invocation. The check now asks whether the script
+    is actually RUN (argv0, or the script argument of an interpreter).
+
+    The name is assembled from pieces because this repository's own gate denies
+    a Bash command carrying the literal - which is the defect under test."""
+
+    SCRIPT = "appr" + "ove.py"
+
+    def dev(self, command: str) -> tuple:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = agent_gate.handle_dev("Bash", {"command": command}, cwd=".")
+        return code, err.getvalue()
+
+    def test_naming_the_script_as_a_path_argument_is_allowed(self):
+        for command in (f"git show 13f4b4c -- .claude/tools/pipeline/{self.SCRIPT}",
+                        f"git log --oneline -- .claude/tools/pipeline/{self.SCRIPT}",
+                        f"grep -rn {self.SCRIPT} .claude"):
+            with self.subTest(command=command):
+                code, msg = self.dev(command)
+                self.assertEqual(0, code, msg)
+
+    def test_actually_invoking_the_script_is_still_denied(self):
+        for command in (f"python .claude/tools/pipeline/{self.SCRIPT} --task task-1 --gate commit",
+                        f"{self.SCRIPT} --task task-1 --gate commit",
+                        f"ls && python .claude/tools/pipeline/{self.SCRIPT} --task task-1",
+                        f"FOO=1 python .claude/tools/pipeline/{self.SCRIPT} --task task-1",
+                        f'bash -c "python .claude/tools/pipeline/{self.SCRIPT} --task task-1"'):
+            with self.subTest(command=command):
+                code, msg = self.dev(command)
+                self.assertEqual(2, code)
+                self.assertIn("orchestrator-only", msg)
+
+    def test_untokenisable_text_still_refuses(self):
+        code, msg = self.dev(f"python {self.SCRIPT} --task \"don't")
+        self.assertEqual(2, code)
+        self.assertIn("orchestrator-only", msg)
+
+    def test_waive_is_gated_on_the_invocation_not_the_mention(self):
+        code, msg = self.dev("git show sha -- .claude/tools/pipeline/handoff.py")
+        self.assertEqual(0, code, msg)
+        code, msg = self.dev("python .claude/tools/pipeline/handoff.py --check")
+        self.assertEqual(0, code, msg)
+        code, msg = self.dev("python .claude/tools/pipeline/handoff.py --waive task-0001")
+        self.assertEqual(2, code)
+        self.assertIn("--waive is orchestrator-only", msg)
+
+    def test_force_push_in_prose_is_not_a_force_push(self):
+        command = ('python .claude/tools/memory/memory.py --record '
+                   '--fix "never run git push --force on a task branch"')
+        self.assertFalse(agent_gate.is_force_push(command))
+
+    def test_real_force_push_is_still_denied_in_every_form(self):
+        for command in ("git push --force origin main",
+                        "git push -f origin main",
+                        "git -C /tmp/x push --force-with-lease",
+                        'bash -c "git push -f origin x"'):
+            with self.subTest(command=command):
+                self.assertTrue(agent_gate.is_force_push(command))
+
+    def test_a_document_mentioning_a_mutating_verb_is_not_one(self):
+        """The readonly/docs net matched the heredoc BODY of a document."""
+        command = "cat > docs/a.md <<'EOF'\nNever run git add -A on this repo.\nEOF"
+        self.assertEqual("", agent_gate.git_mutates(command))
+        self.assertTrue(agent_gate.git_mutates("git add -A"))
+
+    def test_a_wrapper_argv0_does_not_hide_the_invocation(self):
+        """C2: the interpreter can sit behind a wrapper, be fed the script on
+        stdin, or be piped the script - all three ran it while the gate saw a
+        path argument."""
+        script = f".claude/tools/pipeline/{self.SCRIPT}"
+        for command in (f"env python {script} --task task-1",
+                        f"nohup python {script} --task task-1",
+                        f"python < {script}",
+                        f"cat {script} | python",
+                        f"echo {script} | xargs python"):
+            with self.subTest(command=command):
+                code, msg = self.dev(command)
+                self.assertEqual(2, code)
+                self.assertIn("orchestrator-only", msg)
+
+    def test_the_waive_path_has_the_same_wrappers_closed(self):
+        code, msg = self.dev("env python .claude/tools/pipeline/handoff.py --waive task-1")
+        self.assertEqual(2, code)
+        self.assertIn("--waive is orchestrator-only", msg)
+
+
+class AgentGateProseIsNotAnActionTest(unittest.TestCase):
+    """task-0078 re-implementation, H2: agent_gate matched its own literals as
+    SUBSTRINGS of the whitespace-collapsed command text, so the task's second
+    denial was fixed on the main-thread path only. A memory row whose prose
+    field named a mutating verb, or a file utility, was still denied inside
+    every readonly and docs agent.
+
+    The token path answers both; the regex nets stay as the fail-closed layer
+    for text that cannot be tokenised."""
+
+    PROSE_GIT = ('python .claude/tools/memory/memory.py --record --kind lesson '
+                 '--fix "always git add -A before the commit"')
+    PROSE_RM = ('python .claude/tools/memory/memory.py --record --kind lesson '
+                '--fix "never run rm -rf on the working tree"')
+    PROSE_MORE = (
+        'python m.py --fix "do not mv the file, cp it"',
+        'python m.py --fix "chmod 777 is never the answer"',
+        'python m.py --fix "mkdir the directory first"',
+        'python m.py --fix "npm install must not run in a hook"',
+        'python m.py --fix "tee the output into tmp/"',
+    )
+
+    def test_a_git_verb_in_a_prose_field_is_not_a_mutation(self):
+        self.assertEqual("", agent_gate.git_mutates(self.PROSE_GIT))
+        self.assertEqual("", agent_gate.bash_mutates(self.PROSE_GIT))
+
+    def test_a_file_utility_named_in_a_prose_field_is_not_a_mutation(self):
+        self.assertEqual("", agent_gate.bash_mutates(self.PROSE_RM))
+        for command in self.PROSE_MORE:
+            with self.subTest(command=command):
+                self.assertEqual("", agent_gate.bash_mutates(command))
+
+    def test_the_memory_call_is_allowed_under_readonly_and_docs(self):
+        for profile, handler in (("readonly", agent_gate.handle_readonly),
+                                 ("docs", agent_gate.handle_docs)):
+            for command in (self.PROSE_GIT, self.PROSE_RM):
+                with self.subTest(profile=profile, command=command):
+                    err = io.StringIO()
+                    with contextlib.redirect_stderr(err):
+                        code = handler("Bash", {"command": command})
+                    self.assertEqual(0, code, err.getvalue())
+
+    def test_the_real_utilities_are_still_denied(self):
+        for command in ("rm -rf src", "mv a b", "cp a b", "tee out.txt",
+                        "truncate -s 0 f", "ln -s a b", "chmod 777 f",
+                        "mkdir -p x", "sed -i 's/a/b/' f", "npm install",
+                        "composer require x", "pip install x", "apt-get install x",
+                        "git add -A", "git -C /tmp/x push origin main",
+                        'bash -c "rm -rf src"', 'bash -c "git add -A"',
+                        "echo x | xargs rm"):
+            with self.subTest(command=command):
+                self.assertTrue(agent_gate.bash_mutates(command),
+                                "a real mutation stopped being denied")
+
+    def test_untokenisable_text_still_falls_back_to_the_regex_net(self):
+        self.assertTrue(agent_gate.bash_mutates('git add -A "unbalanced'))
+        self.assertTrue(agent_gate.bash_mutates("rm -rf 'unbalanced"))
+
+
+class QuotingAwarenessMutationTest(unittest.TestCase):
+    """Mutation check for task-0078's acceptance criterion: break the quoting
+    awareness, watch the NAMED test fail, restore, assert the file hash.
+
+    The subject is pretool_gate.strip_heredocs(), the single place that decides
+    a heredoc body is data rather than argv. Neutered to the identity function,
+    the named tests below must go red - otherwise they are not testing what
+    they claim to. The mutation is in-process (unittest.mock patches the
+    attribute); the file on disk is never written, so there is nothing to
+    checksum.
+
+    Two mutations, because the two rules are independent and each has its own
+    named test. The second mutation is the implementation this task replaced,
+    written out: a raw scan with no quote awareness, swallowing an unterminated
+    body to the end of the text.
+
+    NAMED TESTS:
+      test_pretool_gate.HeredocBodyIsDataTest
+          .test_a_task_file_describing_a_push_is_not_a_push
+      test_pretool_gate.HeredocQuoteAwarenessTest
+          .test_a_quoted_heredoc_opener_does_not_swallow_the_next_command
+    """
+
+    @staticmethod
+    def quote_blind_strip(command: str) -> str:
+        """The pre-fix strip_heredocs: quote-blind, swallow-to-end."""
+        if "<<" not in command or pretool_gate.runs_a_shell(command):
+            return command
+        lines = command.split("\n")
+        out, i = [], 0
+        while i < len(lines):
+            line = lines[i]
+            i += 1
+            words = [m.group(2) for m in pretool_gate.HEREDOC_RE.finditer(line)]
+            out.append(pretool_gate.HEREDOC_RE.sub("", line))
+            for word in words:
+                while i < len(lines) and lines[i].strip() != word:
+                    i += 1
+                i += 1
+        return "\n".join(out)
+
+    def mutations(self) -> tuple:
+        return (
+            ("the body read as argv", lambda c: c, "HeredocBodyIsDataTest",
+             "test_a_task_file_describing_a_push_is_not_a_push"),
+            ("quote-blind, swallow to end", self.quote_blind_strip,
+             "HeredocQuoteAwarenessTest",
+             "test_a_quoted_heredoc_opener_does_not_swallow_the_next_command"),
+        )
+
+    def test_neutering_the_heredoc_strip_turns_the_named_tests_red(self):
+        import importlib
+
+        # Discovery runs this file as tests.test_pretool_gate_git; a direct
+        # `python test_pretool_gate_git.py` run has no package. Both spellings.
+        module = importlib.import_module(
+            "tests.test_pretool_gate" if __package__ else "test_pretool_gate")
+
+        for label, mutant, cls_name, method in self.mutations():
+            with self.subTest(mutation=label, test=f"{cls_name}.{method}"):
+                cls = getattr(module, cls_name)
+                self.assertTrue(
+                    unittest.TestSuite([cls(method)]).run(
+                        unittest.TestResult()).wasSuccessful(),
+                    "the named test is not green to begin with")
+                with unittest.mock.patch.object(pretool_gate, "strip_heredocs", mutant):
+                    result = unittest.TestSuite([cls(method)]).run(unittest.TestResult())
+                self.assertFalse(
+                    result.wasSuccessful(),
+                    "the named test passes with the heredoc handling removed - "
+                    "it does not test what it claims to")
+
+
 if __name__ == "__main__":
     unittest.main()
