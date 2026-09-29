@@ -19,7 +19,8 @@ profiles:
                       Bash: git write commands, file mutation utilities, shell
                       redirects, in-place editors, package installers, approve.py.
   --profile docs      documentation/planning agents. Edit/Write allowed only
-                      under .claude/, .agentry/, docs/, or README files;
+                      under .claude/, .agentry/ (not .agentry/state/), docs/,
+                      README files, or the root CLAUDE.md;
                       mutating Bash and approve.py denied.
 
 Deny = exit 2 with a one-line reason on stderr (same convention as
@@ -30,9 +31,11 @@ bug here must never brick an agent.
 from __future__ import annotations
 
 import argparse
+import posixpath
 import re
 import shlex
 import sys
+from pathlib import Path
 
 import pretool_gate
 
@@ -160,7 +163,14 @@ def is_force_push(command: str, _depth: int = 0) -> bool:
 # Redirect detection is shared with the main-thread gate - single source of truth.
 redirect_write_target = pretool_gate.redirect_write_target
 
-README_RE = re.compile(r"(^|[\\/])readme[^\\/]*\.md$", re.IGNORECASE)
+README_RE = re.compile(r"(^|[\\/])readme[^\\/]*\.(md|rst)$", re.IGNORECASE)
+
+# The whole .agentry/state/ tree is the orchestrator's: the approvals level and mode,
+# the run.db commit/push/plan approval flags, the solo trunk_push approval and the
+# memory stamps all decide what clears without the CEO. Nothing a docs agent writes
+# lives there. Windows resolves `state.` and `state ` (and `state./x`) to the same
+# directory (measured), so the segment tolerates trailing dots and spaces.
+PROTECTED_STATE_RE = re.compile(r"(^|/)\.agentry/state[. ]*(/|$)")
 
 
 def deny(reason: str) -> int:
@@ -209,12 +219,42 @@ def handle_web(profile: str, tool: str, ti: dict) -> int:
     return allow()
 
 
+def normalize(path: str) -> str:
+    """Lowercase posix spelling with `..` resolved, so `docs/../src/a.py` is judged
+    as the `src/a.py` it names and not as the `docs/` prefix it starts with."""
+    return posixpath.normpath(path.replace("\\", "/").lower())
+
+
+def is_protected_state(path: str) -> bool:
+    return bool(PROTECTED_STATE_RE.search(normalize(path)))
+
+
+def is_root_claude_md(path: str) -> bool:
+    """The repository-root CLAUDE.md, resolved against the project root the way
+    pretool_gate.orch_allowed_path() resolves it. Root only: a CLAUDE.md inside an
+    application tree is not the document the technical-writer owns."""
+    p = Path(path)
+    root = pretool_gate.state.ROOT
+    if not p.is_absolute():
+        p = root / p
+    try:
+        return p.resolve().relative_to(root.resolve()).as_posix().lower() == "claude.md"
+    except (OSError, ValueError):
+        return False
+
+
 def is_docs_path(path: str) -> bool:
     """.agentry/ was ADDED alongside .claude/, not substituted for it: FR-13
     moved the work product (tasks, handoffs, specs, plans, epics) to .agentry/,
     which is exactly what the docs profile writes - but rules/, skills/ and
-    agents/ stayed under .claude/, so a docs agent still needs both."""
-    p = path.replace("\\", "/").lower()
+    agents/ stayed under .claude/, so a docs agent still needs both. The root
+    CLAUDE.md was added the same way (task-0075), and .agentry/ is allowed except
+    for .agentry/state/, which holds the approvals, mode and run flags."""
+    if is_protected_state(path):
+        return False
+    if is_root_claude_md(path):
+        return True
+    p = normalize(path)
     if "/.claude/" in p or p.startswith(".claude/"):
         return True
     if "/.agentry/" in p or p.startswith(".agentry/"):
@@ -455,9 +495,14 @@ def handle_docs(tool: str, ti: dict, cwd: str = "") -> int:
     if tool in ("Edit", "Write"):
         path = str(ti.get("file_path", ""))
         if not is_docs_path(path):
+            if is_protected_state(path):
+                return deny(f"Docs agent: '{path}' is under .agentry/state/, which holds "
+                            f"the approvals, workflow mode and run flags that decide what "
+                            f"clears without the CEO. Report the level or mode change you "
+                            f"need to the orchestrator.")
             return deny(f"Docs agent: writes allowed only under .claude/, .agentry/, docs/, "
-                        f"or README files - '{path}' is outside that scope. Code changes "
-                        f"belong to dev agents via the pipeline.")
+                        f"README files or the root CLAUDE.md - '{path}' is outside that "
+                        f"scope. Code changes belong to dev agents via the pipeline.")
         return allow()
     if tool == "Bash":
         command = str(ti.get("command", ""))

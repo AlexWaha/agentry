@@ -95,8 +95,9 @@ state and gate checks live in deterministic hooks (`.claude/tools/pipeline/` +
 
 Every agent's full definition (frontmatter, preloaded skills, gate profile)
 lives in `.claude/agents/<name>.md`. Skills catalog: `.claude/skills/README.md`.
-Gate profiles: `dev` (writes code), `docs` (writes only .claude/, .agentry/,
-docs/, README), `readonly` (analyzes, never writes).
+Gate profiles: `dev` (writes code), `docs` (writes only .claude/, .agentry/
+except .agentry/state/, docs/, README and the root CLAUDE.md), `readonly`
+(analyzes, never writes).
 
 **Technical department [ACTIVE with implementation work]:**
 
