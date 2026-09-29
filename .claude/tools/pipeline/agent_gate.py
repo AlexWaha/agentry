@@ -64,7 +64,29 @@ MUTATING_GIT_FALLBACK_RE = re.compile(
     r"(?![-\w])",
     re.IGNORECASE)
 
-# Non-git Bash fragments that mutate the working tree.
+# Commands that mutate the working tree, matched as ARGV0 of a simple command
+# (see mutating_command). The MUTATING_BASH regex list below is the same set
+# spelled as text, kept for the one case tokenisation cannot serve.
+MUTATING_COMMANDS = frozenset({
+    "rm", "mv", "cp", "tee", "truncate", "ln", "chmod", "mkdir",
+})
+# Installers: the command mutates only with one of these subcommands, so
+# `npm run build` and `pip --version` stay allowed.
+MUTATING_SUBCOMMANDS = {
+    "npm": frozenset({"install", "i", "uninstall", "update", "ci"}),
+    "composer": frozenset({"install", "update", "require", "remove"}),
+    "pip": frozenset({"install", "uninstall"}),
+    "pip3": frozenset({"install", "uninstall"}),
+    "apt": frozenset({"install", "remove"}),
+    "apt-get": frozenset({"install", "remove"}),
+}
+
+# Non-git Bash fragments that mutate the working tree. FALLBACK ONLY: this runs
+# on text that cannot be tokenised (see bash_mutates). Run over the whole
+# command string it matched its literal inside a quoted argument, so a memory
+# row whose prose said "never run rm -rf on the tree" was denied as an rm -
+# task-0078's second denial, which the main-thread gate fixed and this one did
+# not.
 MUTATING_BASH = [
     r"\brm\s",
     r"\bmv\s",
@@ -83,19 +105,43 @@ MUTATING_BASH = [
     r"\bapt(-get)?\s+(install|remove)\b",
 ]
 
-APPROVE_RE = re.compile(r"approve\.py", re.IGNORECASE)
+# task-0078: these three checks used to match their literal anywhere in the raw
+# command text, so naming the tool was denied as running it - a dev agent's
+# read-only `git show <sha> -- <path>/approve.py` was refused as self-approval.
+# They now ask pretool_gate whether the script is actually INVOKED (argv0, or
+# the script argument of an interpreter), which is the same tokenisation every
+# other gate here uses and is fail-closed on text it cannot tokenise.
 # handoff.py --waive records a CEO waiver - orchestrator-only, same trust
 # boundary as approve.py. --for / --check stay allowed for every profile.
-WAIVE_RE = re.compile(r"handoff\.py[^|;&]*--waive", re.IGNORECASE)
-FORCE_PUSH_RE = re.compile(r"\bgit\s+push\b[^|;&]*(--force|-f\b)", re.IGNORECASE)
+HANDOFF_SCRIPT_RE = re.compile(r"(?:^|[\\/])handoff\.py$", re.IGNORECASE)
+
+runs_approve_script = pretool_gate.runs_approve_script
 
 
-def is_force_push(command: str) -> bool:
+def runs_waive(command: str, _depth: int = 0) -> bool:
+    """True when handoff.py is invoked WITH --waive in the same simple command.
+    Fail-closed on text that cannot be tokenised."""
+    segments = pretool_gate.command_segments(command)
+    if segments is None:
+        return True
+    for seg in segments:
+        if "--waive" in seg and any(HANDOFF_SCRIPT_RE.search(n)
+                                    for n in pretool_gate.exec_names_of(seg)):
+            return True
+    if pretool_gate.unscannable_depth(command, _depth):
+        return True
+    return any(runs_waive(body, _depth + 1)
+               for body in pretool_gate.nested_command_bodies(command))
+
+
+def is_force_push(command: str, _depth: int = 0) -> bool:
     """Force push in any spelling: `--force`, `--force-with-lease`, `-f`, and any
     short-flag cluster containing `f`. Resolved through git_invocations() so
-    `git -C dir push --force` is caught; the legacy regex stays as a net for
-    forms argv walking cannot see (e.g. `bash -c "git push -f"`)."""
+    `git -C dir push --force` is caught, and through the nested `sh -c` body for
+    the form argv walking cannot see (`bash -c "git push -f"`)."""
     for sub, args in pretool_gate.git_invocations(command):
+        if sub == pretool_gate.GIT_UNKNOWN:
+            return True  # unparseable git text - refuse rather than guess
         if sub != "push":
             continue
         for tok in args:
@@ -105,7 +151,10 @@ def is_force_push(command: str) -> bool:
                 return True
             if tok.startswith("-") and not tok.startswith("--") and "f" in tok[1:]:
                 return True
-    return bool(FORCE_PUSH_RE.search(command))
+    if pretool_gate.unscannable_depth(command, _depth):
+        return True
+    return any(is_force_push(body, _depth + 1)
+               for body in pretool_gate.nested_command_bodies(command))
 
 
 # Redirect detection is shared with the main-thread gate - single source of truth.
@@ -175,24 +224,21 @@ def is_docs_path(path: str) -> bool:
     return bool(README_RE.search(p))
 
 
-def git_mutates(command: str) -> str:
+def git_mutates(command: str, _depth: int = 0) -> str:
     """Return the mutating git invocation, or '' if every git call is read-only.
     Unparseable git text is treated as mutating (fail-closed) - see
     pretool_gate.git_invocations().
 
-    Two layers on purpose. argv resolution is the real check; the regex net
-    behind it covers the case argv walking is structurally blind to - the whole
-    git call sits inside ONE shlex token (`bash -c "git add -A"`), so no `git`
-    token is ever seen and git_invocations() comes back empty.
+    Two layers, in the order task-0078 requires. argv resolution is the real
+    check, and it now recurses into every nested body (a shell's `-c` argument,
+    an `eval` operand, a `$( ... )` substitution) exactly as pretool_gate does,
+    so the git call inside one shlex token is RESOLVED rather than guessed at.
 
-    The net therefore runs only on that empty result. When the walk DID resolve
-    invocations and none of them mutate, that answer is authoritative and the
-    regex can only add false positives. Residual gap, narrower than those false
-    positives were: `git status && bash -c "git add -A"` resolves one read-only
-    invocation, so the nested call skips the net. Closing it needs per-segment
-    matching, not a whole-string regex."""
-    invocations = pretool_gate.git_invocations(command)
-    for sub, args in invocations:
+    The regex net behind it fires only when the text cannot be tokenised at
+    all. Run any wider it matched a listed word inside a quoted argument - a
+    prose field naming `git add`, or a read-only `git diff HEAD -- add.py` -
+    and denied the readonly/docs agents whose whole job is reading diffs."""
+    for sub, args in pretool_gate.git_invocations(command):
         if sub == pretool_gate.GIT_UNKNOWN:
             return "git (command could not be parsed)"
         if sub in MUTATING_GIT_SUBS:
@@ -201,33 +247,95 @@ def git_mutates(command: str) -> str:
             return f"git stash {args[0].lower()}"
         if sub == "checkout" and "--" in args:
             return "git checkout --"
-    if not invocations:
-        m = MUTATING_GIT_FALLBACK_RE.search(command)
+    if pretool_gate.gate_tokens(command) is None:
+        # Heredoc-stripped: the body is data on stdin, and this net would
+        # otherwise read a document that MENTIONS `git add` as a `git add`.
+        m = MUTATING_GIT_FALLBACK_RE.search(pretool_gate.strip_heredocs(command))
         if m:
             return "git " + " ".join(m.group("sub").split())
+    if pretool_gate.unscannable_depth(command, _depth):
+        return pretool_gate.DEPTH_EXCEEDED
+    for body in pretool_gate.nested_command_bodies(command):
+        hit = git_mutates(body, _depth + 1)
+        if hit:
+            return hit
     return ""
 
 
-def bash_mutates(command: str) -> str:
+def base_name(token: str) -> str:
+    """argv0 reduced to a bare command name: no directory, no .exe."""
+    name = re.split(r"[\\/]", token)[-1].lower()
+    return name.removesuffix(".exe")
+
+
+def in_place_sed(args: list) -> bool:
+    """`sed -i`, `sed -i.bak`, a cluster ending in it (`sed -ni`), `--in-place`."""
+    for tok in args:
+        if tok.startswith("--in-place"):
+            return True
+        if tok.startswith("-") and not tok.startswith("--") and "i" in tok[1:]:
+            return True
+    return False
+
+
+def mutating_command(segment: list) -> str:
+    """The mutating command ONE simple command runs, or ''. argv0 is resolved
+    through pretool_gate.argv0_index(), so `echo x | xargs rm` is an rm and
+    `--fix "never run rm -rf"` is one token of prose."""
+    i = pretool_gate.argv0_index(segment)
+    if i is None:
+        return ""
+    name, args = base_name(segment[i]), segment[i + 1:]
+    if name in MUTATING_COMMANDS:
+        return name
+    if name == "sed" and in_place_sed(args):
+        return "sed -i"
+    subs = MUTATING_SUBCOMMANDS.get(name)
+    if subs:
+        for tok in args:
+            if tok.startswith("-"):
+                continue
+            return f"{name} {tok.lower()}" if tok.lower() in subs else ""
+    return ""
+
+
+def bash_mutates(command: str, _depth: int = 0) -> str:
     """Return the matched mutating fragment, or '' if the command is read-only."""
-    low = " ".join(command.split())
-    hit = git_mutates(low)
+    hit = git_mutates(command)
     if hit:
         return hit
-    for pattern in MUTATING_BASH:
-        m = re.search(pattern, low, re.IGNORECASE)
-        if m:
-            return m.group(0)
-    return redirect_write_target(low)
+    segments = pretool_gate.command_segments(command)
+    if segments is None:
+        # Fail-closed fallback: text shlex cannot tokenise gets the old net.
+        low = " ".join(pretool_gate.strip_heredocs(command).split())
+        for pattern in MUTATING_BASH:
+            m = re.search(pattern, low, re.IGNORECASE)
+            if m:
+                return m.group(0).strip()
+    else:
+        for segment in segments:
+            hit = mutating_command(segment)
+            if hit:
+                return hit
+    hit = redirect_write_target(command)
+    if hit:
+        return hit
+    if pretool_gate.unscannable_depth(command, _depth):
+        return pretool_gate.DEPTH_EXCEEDED
+    for body in pretool_gate.nested_command_bodies(command):
+        hit = bash_mutates(body, _depth + 1)
+        if hit:
+            return hit
+    return ""
 
 
 def handle_dev(tool: str, ti: dict, cwd: str = "") -> int:
     if tool == "Bash":
         command = str(ti.get("command", ""))
-        if APPROVE_RE.search(command):
+        if runs_approve_script(command):
             return deny("approve.py is orchestrator-only. Recording CEO approval from a "
                         "dev agent is self-approval - report readiness to the orchestrator instead.")
-        if WAIVE_RE.search(command):
+        if runs_waive(command):
             return deny("handoff.py --waive is orchestrator-only - it records a CEO waiver. "
                         "Report the handoff problem to the orchestrator instead.")
         if is_force_push(command):
@@ -327,9 +435,9 @@ def handle_readonly(tool: str, ti: dict, cwd: str = "") -> int:
                     "Return findings to the orchestrator.")
     if tool == "Bash":
         command = str(ti.get("command", ""))
-        if APPROVE_RE.search(command):
+        if runs_approve_script(command):
             return deny("approve.py is orchestrator-only.")
-        if WAIVE_RE.search(command):
+        if runs_waive(command):
             return deny("handoff.py --waive is orchestrator-only - it records a CEO waiver.")
         frag = bash_mutates(command)
         if frag:
@@ -349,9 +457,9 @@ def handle_docs(tool: str, ti: dict, cwd: str = "") -> int:
         return allow()
     if tool == "Bash":
         command = str(ti.get("command", ""))
-        if APPROVE_RE.search(command):
+        if runs_approve_script(command):
             return deny("approve.py is orchestrator-only.")
-        if WAIVE_RE.search(command):
+        if runs_waive(command):
             return deny("handoff.py --waive is orchestrator-only - it records a CEO waiver.")
         frag = bash_mutates(command)
         if frag:

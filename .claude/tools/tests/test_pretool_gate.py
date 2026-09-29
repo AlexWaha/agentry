@@ -18,6 +18,7 @@ from pathlib import Path
 PIPELINE_DIR = Path(__file__).resolve().parents[1] / "pipeline"
 sys.path.insert(0, str(PIPELINE_DIR))
 
+import agent_gate
 import pretool_gate
 
 
@@ -419,6 +420,535 @@ class MainFailOpenTest(unittest.TestCase):
         # decodes UTF-8 itself, so patching the old entry point asserted nothing.
         with unittest.mock.patch("json.loads", side_effect=OSError("boom")):
             self.assertEqual(pretool_gate.main(), 0)
+
+
+class QuotingAwareRedirectTest(unittest.TestCase):
+    """task-0078: the gate denied text that merely DESCRIBES the redirect.
+
+    Denial 1, measured 2026-09-14 while closing task-0070 and reproduced here
+    against the unchanged code before the fix. The commit message documenting
+    the redirect measurement was written through a heredoc, and the gate read
+    the literal in the MESSAGE BODY as the act itself:
+
+        Redirect to /dev/null is denied by project policy
+        (gates.forbid_dev_null). The reason once given on this deny was wrong
+        and has been removed: measured on this host 2026-09-14 under git-bash
+        MINGW64, /dev/null IS a real character device here, ...
+
+    The rule itself is untouched - `gates.forbid_dev_null` is the CEO's and only
+    he relaxes it. What changed is that the gate now asks whether a REDIRECT
+    OPERATOR sits outside quotes, instead of asking whether the literal appears
+    anywhere in the command text.
+
+    The forbidden token is assembled from pieces for the same reason
+    ForbidDevNullGateTest does it: this file is read by humans grepping for the
+    pattern and must not look like an example to copy."""
+
+    UNIX_NULL = "/" + "dev" + "/" + "null"
+
+    def test_every_real_redirect_spelling_is_still_detected(self):
+        # Glued, spaced, appended, both descriptors, and the input direction.
+        for form in (f"ls 2>{self.UNIX_NULL}", f"ls > {self.UNIX_NULL}",
+                     f"ls &>{self.UNIX_NULL}", f"ls >> {self.UNIX_NULL}",
+                     f"echo hi>{self.UNIX_NULL}", f"ls < {self.UNIX_NULL}",
+                     f"ls > '{self.UNIX_NULL}'"):
+            with self.subTest(form=form):
+                self.assertTrue(pretool_gate.redirects_to_dev_null(form))
+
+    def test_operator_and_target_as_two_separate_tokens_is_a_redirect(self):
+        """The acceptance criterion a naive token-equality fix cannot satisfy:
+        `2>` and the target are TWO tokens here, and together they are still a
+        real redirect."""
+        self.assertTrue(pretool_gate.redirects_to_dev_null(f"ls 2> {self.UNIX_NULL}"))
+
+    def test_the_literal_inside_a_quoted_argument_is_not_a_redirect(self):
+        for form in (f"python m.py --fix 'never write 2>{self.UNIX_NULL}'",
+                     f'python m.py --fix "2>{self.UNIX_NULL}"'):
+            with self.subTest(form=form):
+                self.assertFalse(pretool_gate.redirects_to_dev_null(form))
+
+    def test_the_literal_inside_a_heredoc_body_is_not_a_redirect(self):
+        body = (f"git commit -F - <<'MSG'\ndocs: record that 2>{self.UNIX_NULL} "
+                f"discards output\nMSG")
+        self.assertFalse(pretool_gate.redirects_to_dev_null(body))
+
+    def test_an_ordinary_file_redirect_is_not_the_forbidden_target(self):
+        self.assertFalse(pretool_gate.redirects_to_dev_null("ls > tmp/build.log"))
+
+    def test_an_arrow_is_not_a_redirect(self):
+        self.assertFalse(pretool_gate.redirects_to_dev_null(f"echo 'a -> b' {self.UNIX_NULL}"))
+
+    def test_the_deny_still_fires_end_to_end_through_handle_bash(self):
+        cfg = dict(pretool_gate.gates_cfg())
+        cfg["forbid_dev_null"] = True
+        err = io.StringIO()
+        with unittest.mock.patch.object(pretool_gate, "gates_cfg", return_value=cfg), \
+                unittest.mock.patch("sys.stderr", err):
+            code = pretool_gate.handle_bash(f"ls foo 2>{self.UNIX_NULL}", cwd=".")
+        self.assertEqual(2, code)
+        self.assertIn("forbid_dev_null", err.getvalue())
+
+    def test_documenting_the_rule_in_a_heredoc_is_no_longer_the_deny(self):
+        cfg = dict(pretool_gate.gates_cfg())
+        cfg["forbid_dev_null"] = True
+        err = io.StringIO()
+        with unittest.mock.patch.object(pretool_gate, "gates_cfg", return_value=cfg), \
+                unittest.mock.patch("sys.stderr", err):
+            code = pretool_gate.handle_bash(
+                f"cat > docs/redirects.md <<'EOF'\nNever use 2>{self.UNIX_NULL}.\nEOF", cwd=".")
+        self.assertEqual(0, code)
+        self.assertNotIn("forbid_dev_null", err.getvalue())
+
+
+class HeredocBodyIsDataTest(unittest.TestCase):
+    """task-0078 denial 4, measured 2026-09-16 and again 2026-09-29: the
+    orchestrator writing a TASK FILE through a heredoc was denied because the
+    markdown DESCRIBED a trunk push. Verbatim:
+
+        This push cannot be resolved to a target branch, so the gate refuses
+        rather than guessing (an unresolvable push gates). Run git push
+        directly instead of wrapping it in another shell, and name the branch:
+        git push -u origin <type>/task-<id>. The CEO merges via a PR.
+
+    The command wrote markdown; no git ran."""
+
+    TASK_FILE = ("cat > .agentry/tasks/backlog/task-0100.md <<'EOF'\n"
+                 "## Notes\n\nSolo mode still needs a real git push origin main "
+                 "to publish the trunk.\nEOF")
+
+    def test_a_task_file_describing_a_push_is_not_a_push(self):
+        self.assertFalse(pretool_gate.git_invokes(self.TASK_FILE, "push"))
+
+    def test_the_backtick_spelling_is_not_a_push_either(self):
+        cmd = ("cat > .agentry/tasks/backlog/task-0100.md <<'EOF'\n"
+               "A `git push` of the trunk publishes it.\nEOF")
+        self.assertFalse(pretool_gate.git_invokes(cmd, "push"))
+
+    def test_the_write_itself_is_allowed_end_to_end(self):
+        err = io.StringIO()
+        with unittest.mock.patch("sys.stderr", err):
+            code = pretool_gate.handle_bash(self.TASK_FILE, cwd=".")
+        self.assertEqual(0, code, err.getvalue())
+
+    def test_a_heredoc_body_a_shell_could_execute_is_kept(self):
+        """Fail-closed: `bash <<EOF` runs its body as a script, so nothing is
+        stripped and the push inside it is still seen."""
+        cmd = "bash <<'EOF'\ngit push origin main\nEOF"
+        self.assertEqual(cmd, pretool_gate.strip_heredocs(cmd))
+        self.assertTrue(pretool_gate.git_invokes(cmd, "push"))
+
+    def test_a_herestring_is_not_a_heredoc(self):
+        cmd = "grep x <<<'EOF is a word here'"
+        self.assertEqual(cmd, pretool_gate.strip_heredocs(cmd))
+
+    def test_separator_token_set_matches_the_padder(self):
+        # SEPARATOR_TOKENS is spelled out above SHELL_SEPARATORS in the file;
+        # the two must not drift apart.
+        self.assertEqual(set(pretool_gate.SHELL_SEPARATORS),
+                         set(pretool_gate.SEPARATOR_TOKENS))
+
+
+class GitVerbInProseTest(unittest.TestCase):
+    """task-0078 denial 2, measured 2026-09-14: recording the lesson about
+    denial 1 into the memory store was itself denied, because the branch gate
+    saw a git verb inside a `--fix` PROSE FIELD of a memory.py call and applied
+    branch rules to a command that touches no repository at all:
+
+        task-XXXX has no row in the run store (...), so the checkpoint approval
+        cannot be verified and the gate refuses rather than assuming approval.
+
+    The old second layer was `f"git {sub}" in command.lower()` - a substring net
+    that cannot tell an invocation from a mention."""
+
+    PROSE = ('python .claude/tools/memory/memory.py --record --kind lesson '
+             '--fix "never let a git commit message quote the forbidden literal"')
+
+    def test_a_git_verb_in_a_prose_argument_is_not_an_invocation(self):
+        self.assertFalse(pretool_gate.git_invokes(self.PROSE, "commit", "push"))
+
+    def test_the_memory_call_is_allowed_end_to_end(self):
+        err = io.StringIO()
+        with unittest.mock.patch("sys.stderr", err):
+            code = pretool_gate.handle_bash(self.PROSE, cwd=".")
+        self.assertEqual(0, code, err.getvalue())
+
+    def test_a_real_invocation_is_still_resolved(self):
+        for form in ("git commit -m x", "git -C /repo commit -m x",
+                     "cd /repo && git commit -m x", "ls && git commit -m x",
+                     "git status; git commit -m x", "git status&&git commit -m x"):
+            with self.subTest(form=form):
+                self.assertTrue(pretool_gate.git_invokes(form, "commit"))
+
+    def test_a_nested_shell_body_is_still_resolved(self):
+        self.assertTrue(pretool_gate.git_invokes('bash -c "git push origin main"', "push"))
+
+    def test_untokenisable_text_is_still_refused(self):
+        """Fail-closed, deliberately: an unbalanced quote means the gate cannot
+        tell which subcommand would run."""
+        self.assertIsNone(pretool_gate.gate_tokens('git commit -m "don\'t'))
+        self.assertTrue(pretool_gate.git_unparseable('git commit -m "don\'t'))
+        self.assertTrue(pretool_gate.runs_approve_script('python x.py -m "don\'t'))
+
+
+class ExecutedNamesTest(unittest.TestCase):
+    """The position rule behind denial 3: a script NAME in an argument is not an
+    invocation of that script."""
+
+    def test_an_interpreter_runs_its_script_argument(self):
+        self.assertEqual(["python", "a/approve.py"],
+                         pretool_gate.executed_names("python a/approve.py --task t"))
+
+    def test_flags_before_the_script_are_skipped(self):
+        self.assertEqual(["python", "b/approve.py"],
+                         pretool_gate.executed_names("python -u b/approve.py"))
+
+    def test_leading_assignments_do_not_hide_the_interpreter(self):
+        self.assertEqual(["python", "approve.py"],
+                         pretool_gate.executed_names("FOO=1 python approve.py"))
+
+    def test_a_path_argument_of_another_command_is_not_executed(self):
+        self.assertEqual(["git"],
+                         pretool_gate.executed_names("git show sha -- a/approve.py"))
+
+    def test_each_simple_command_contributes_its_own_argv0(self):
+        self.assertEqual(["ls", "python", "b/approve.py"],
+                         pretool_gate.executed_names("ls && python b/approve.py"))
+
+    def test_untokenisable_text_yields_none(self):
+        self.assertIsNone(pretool_gate.executed_names("echo 'unbalanced"))
+
+    def test_a_wrapper_argv0_does_not_hide_the_interpreter(self):
+        """C2: `env`, `sudo`, `nohup`, `time`, `command`, `exec` and `xargs` all
+        run their first non-flag argument, so argv0 is the word BEHIND them."""
+        for command, expected in (
+            ("env python a/approve.py", ["python", "a/approve.py"]),
+            ("nohup python a/approve.py", ["python", "a/approve.py"]),
+            ("command python a/approve.py", ["python", "a/approve.py"]),
+            ("exec python a/approve.py", ["python", "a/approve.py"]),
+            ("env FOO=1 python a/approve.py", ["python", "a/approve.py"]),
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(expected, pretool_gate.executed_names(command))
+
+    def test_an_interpreter_reading_a_script_from_stdin_runs_it(self):
+        for command in ("python < a/approve.py", "python <a/approve.py",
+                        "python 0< a/approve.py"):
+            with self.subTest(command=command):
+                self.assertIn("a/approve.py", pretool_gate.executed_names(command))
+
+    def test_a_pipe_into_an_interpreter_runs_the_piped_operand(self):
+        for command in ("cat a/approve.py | python",
+                        "echo a/approve.py | xargs python"):
+            with self.subTest(command=command):
+                self.assertIn("a/approve.py", pretool_gate.executed_names(command))
+
+    def test_a_pipe_into_a_non_interpreter_runs_nothing_extra(self):
+        self.assertEqual(["cat", "grep"],
+                         pretool_gate.executed_names("cat a/approve.py | grep x"))
+
+
+class HeredocQuoteAwarenessTest(unittest.TestCase):
+    """task-0078 re-implementation, C1: strip_heredocs() scanned the raw text
+    with no notion of quoting and swallowed an unterminated body to the end of
+    the text, so a quoted MENTION of a heredoc opener deleted every command
+    after it.
+
+        echo "see <<EOF in docs"
+        git push origin main
+
+    stripped to `echo "see  in docs"` and the push became invisible to every
+    gate. Heredoc stripping must never delete text that would otherwise be
+    scanned: the opener is recognised only outside quotes, and a missing
+    terminator keeps the remaining lines."""
+
+    UNIX_NULL = "/" + "dev" + "/" + "null"
+    HIDDEN_PUSH = 'echo "see <<EOF in docs"\ngit push origin main'
+
+    def test_a_quoted_heredoc_opener_does_not_swallow_the_next_command(self):
+        self.assertIn("git push origin main",
+                      pretool_gate.strip_heredocs(self.HIDDEN_PUSH))
+        self.assertTrue(pretool_gate.git_invokes(self.HIDDEN_PUSH, "push"))
+
+    def test_the_hidden_push_is_denied_to_a_readonly_agent(self):
+        err = io.StringIO()
+        with unittest.mock.patch("sys.stderr", err):
+            code = agent_gate.handle_readonly("Bash", {"command": self.HIDDEN_PUSH})
+        self.assertEqual(2, code)
+        self.assertIn("mutating Bash denied", err.getvalue())
+
+    def test_a_quoted_opener_does_not_hide_a_real_redirect(self):
+        command = f'echo "documented <<EOF here"\nls 2>{self.UNIX_NULL}'
+        self.assertTrue(pretool_gate.redirects_to_dev_null(command))
+
+    def test_an_unterminated_heredoc_keeps_the_remaining_lines(self):
+        command = "cat > f <<EOF\ngit push origin main\nno terminator here"
+        self.assertIn("git push origin main", pretool_gate.strip_heredocs(command))
+        self.assertTrue(pretool_gate.git_invokes(command, "push"))
+
+    def test_a_command_on_the_next_line_is_its_own_command(self):
+        """A newline terminates a command, but shlex eats it as whitespace, so
+        the second line arrived as an ARGUMENT of the first - `echo "x"` then a
+        file mutation read as one `echo` call with extra words."""
+        self.assertEqual(["echo", "hi"],
+                         pretool_gate.command_segments("echo hi\nls -la")[0])
+        self.assertTrue(agent_gate.bash_mutates('echo "doc <<EOF here"\nchmod 777 f'))
+
+    def test_a_terminated_heredoc_body_is_still_data(self):
+        command = ("cat > .agentry/tasks/backlog/task-0100.md <<'EOF'\n"
+                   "Solo mode still needs a real git push origin main.\n"
+                   "EOF\necho done")
+        stripped = pretool_gate.strip_heredocs(command)
+        self.assertNotIn("git push", stripped)
+        self.assertIn("echo done", stripped)
+        self.assertFalse(pretool_gate.git_invokes(command, "push"))
+
+
+class NestedRedirectTest(unittest.TestCase):
+    """task-0078 re-implementation, C3: redirects_to_dev_null() never recursed
+    into a nested shell body, unlike redirect_write_target() and git_invokes()
+    next to it, so `bash -c 'ls >/dev/null'` was allowed where the bare form was
+    denied. `eval` carries the same body in a different wrapper."""
+
+    UNIX_NULL = "/" + "dev" + "/" + "null"
+
+    def deny_code(self, command: str) -> tuple:
+        cfg = dict(pretool_gate.gates_cfg())
+        cfg["forbid_dev_null"] = True
+        err = io.StringIO()
+        with unittest.mock.patch.object(pretool_gate, "gates_cfg", return_value=cfg), \
+                unittest.mock.patch("sys.stderr", err):
+            code = pretool_gate.handle_bash(command, cwd=".")
+        return code, err.getvalue()
+
+    def test_a_nested_shell_body_redirect_is_detected(self):
+        for command in (f"bash -c 'ls >{self.UNIX_NULL}'",
+                        f'sh -c "ls 2>{self.UNIX_NULL}"',
+                        f"bash -lc 'ls >> {self.UNIX_NULL}'"):
+            with self.subTest(command=command):
+                self.assertTrue(pretool_gate.redirects_to_dev_null(command))
+
+    def test_a_nested_shell_body_redirect_is_denied_end_to_end(self):
+        code, msg = self.deny_code(f"bash -c 'ls >{self.UNIX_NULL}'")
+        self.assertEqual(2, code)
+        self.assertIn("forbid_dev_null", msg)
+
+    def test_a_nested_body_that_only_mentions_the_target_is_allowed(self):
+        command = f"bash -c 'echo \"never write 2>{self.UNIX_NULL}\"'"
+        self.assertFalse(pretool_gate.redirects_to_dev_null(command))
+        code, msg = self.deny_code(command)
+        self.assertEqual(0, code, msg)
+
+    def test_eval_with_a_redirect_operator_is_refused(self):
+        for command in (f"eval 'ls >{self.UNIX_NULL}'", "eval 'ls > $X'",
+                        'eval "ls 2> $TARGET"'):
+            with self.subTest(command=command):
+                code, msg = self.deny_code(command)
+                self.assertEqual(2, code)
+                self.assertIn("eval", msg)
+
+    def test_eval_without_a_redirect_operator_is_allowed(self):
+        code, msg = self.deny_code("eval 'ls -la'")
+        self.assertEqual(0, code, msg)
+
+
+class CommandSubstitutionTest(unittest.TestCase):
+    """task-0078 re-implementation, H1: `$( ... )` and backticks run a command
+    the shell splits differently from shlex - `echo $(git push origin main)`
+    tokenises to `$(git`, `push`, `main)`, so the git regex never matched a
+    `git` token and the push was invisible. Quoted, `"$(git push)"` is one
+    token and equally invisible. The inner text is now analysed as a command in
+    its own right."""
+
+    UNIX_NULL = "/" + "dev" + "/" + "null"
+
+    def test_a_substituted_git_call_is_resolved(self):
+        for command in ("echo $(git push origin main)",
+                        'echo "$(git push origin main)"',
+                        "echo `git push origin main`",
+                        "X=$(git commit -m x)"):
+            with self.subTest(command=command):
+                self.assertTrue(pretool_gate.git_invokes(command, "push", "commit"))
+
+    def test_a_substituted_push_is_denied_to_a_readonly_agent(self):
+        err = io.StringIO()
+        with unittest.mock.patch("sys.stderr", err):
+            code = agent_gate.handle_readonly(
+                "Bash", {"command": "echo $(git push origin main)"})
+        self.assertEqual(2, code)
+        self.assertIn("mutating Bash denied", err.getvalue())
+
+    def test_a_substituted_redirect_is_detected(self):
+        self.assertTrue(pretool_gate.redirects_to_dev_null(
+            f"echo $(ls 2>{self.UNIX_NULL})"))
+
+    def test_a_substitution_inside_single_quotes_is_not_expanded(self):
+        # Single quotes suppress substitution, so this really is prose.
+        self.assertFalse(pretool_gate.git_invokes("echo '$(git push origin main)'", "push"))
+
+    def test_arithmetic_expansion_is_not_a_redirect(self):
+        self.assertEqual("", pretool_gate.redirect_write_target('echo "$(( 2 > 1 ))"'))
+
+    def test_an_unbalanced_substitution_fails_closed(self):
+        self.assertTrue(pretool_gate.git_invokes("echo $(git push origin main", "push"))
+
+    def test_read_only_substitutions_stay_allowed(self):
+        for command in ("echo $(git rev-parse HEAD)", "echo `git status --short`"):
+            with self.subTest(command=command):
+                self.assertEqual("", agent_gate.bash_mutates(command))
+
+
+class MaskLineAlignmentTest(unittest.TestCase):
+    """task-0078 second review, C1: mask_quoted() replaced the newlines INSIDE a
+    quoted span with filler, so `mask_quoted(cmd).split("\\n")` produced fewer
+    lines than `cmd.split("\\n")` and split_heredocs() indexed `masked[i]` off
+    the end. The IndexError propagated to main(), which catches Exception and
+    allows - so a multi-line quoted argument did not merely evade one check, it
+    switched the whole gate off. Measured before the fix: all three of these
+    exited 0."""
+
+    UNIX_NULL = "/" + "dev" + "/" + "null"
+    HIDDEN_PUSH = "git commit -m 'msg\n<<' && git push origin main"
+    HIDDEN_RM = "echo 'note\n<<' && rm -rf src"
+
+    def test_the_mask_keeps_the_line_count_of_the_original(self):
+        for command in (self.HIDDEN_PUSH, self.HIDDEN_RM, "x='a\nb\nc'\nls"):
+            with self.subTest(command=command):
+                self.assertEqual(len(command.split("\n")),
+                                 len(pretool_gate.mask_quoted(command).split("\n")))
+
+    def test_split_heredocs_does_not_raise_on_a_multiline_quoted_argument(self):
+        pretool_gate.split_heredocs(self.HIDDEN_PUSH)  # used to raise IndexError
+
+    def test_the_push_behind_a_multiline_quote_is_resolved(self):
+        self.assertTrue(pretool_gate.git_invokes(self.HIDDEN_PUSH, "push"))
+
+    def test_the_push_behind_a_multiline_quote_is_denied(self):
+        err = io.StringIO()
+        with unittest.mock.patch("sys.stderr", err):
+            code = agent_gate.handle_readonly("Bash", {"command": self.HIDDEN_PUSH})
+        self.assertEqual(2, code)
+        self.assertIn("mutating Bash denied", err.getvalue())
+
+    def test_the_rm_behind_a_multiline_quote_is_denied_to_a_readonly_agent(self):
+        self.assertIn("rm", agent_gate.bash_mutates(self.HIDDEN_RM))
+        err = io.StringIO()
+        with unittest.mock.patch("sys.stderr", err):
+            code = agent_gate.handle_readonly("Bash", {"command": self.HIDDEN_RM})
+        self.assertEqual(2, code)
+
+    def test_the_discard_redirect_behind_a_multiline_quote_is_detected(self):
+        command = f"echo 'note\n<<' && ls 2>{self.UNIX_NULL}"
+        self.assertTrue(pretool_gate.redirects_to_dev_null(command))
+
+
+class ParserTotalityFuzzTest(unittest.TestCase):
+    """task-0078 second review, C1 guard. A gate that raises is an ALLOW here
+    (every main() catches Exception by design, so a bug cannot brick the agent),
+    which makes totality over arbitrary text a security property rather than a
+    style preference. Every parser in the file is run over a small cross product
+    of quote / newline / heredoc-operator shapes: none may raise, and where a
+    real mutation follows the noise it must still be denied."""
+
+    NOISE = ("'a\n<<'", '"a\n<<"', "'<<EOF'", '"<<"', "'\n'", '"x\ny"',
+             "<<", "<<EOF", "'unclosed", '"unclosed\n<<', "`a\nb`",
+             "$(a\n<<)", "''", '""', "'<<\n<<\n<<'")
+    PARSERS = ("mask_quoted", "strip_heredocs", "split_heredocs",
+               "command_substitutions", "substitution_bodies",
+               "nested_command_bodies", "executed_names", "shell_c_bodies",
+               "eval_operands", "redirect_write_target", "redirects_to_dev_null",
+               "runs_approve_script")
+
+    def test_no_parser_raises_on_any_quote_newline_heredoc_combination(self):
+        for noise in self.NOISE:
+            for tail in ("", " && git push origin main", "\nrm -rf src", " > out.txt"):
+                command = f"echo {noise}{tail}"
+                for name in self.PARSERS:
+                    with self.subTest(command=command, parser=name):
+                        try:
+                            getattr(pretool_gate, name)(command)
+                        except Exception as exc:  # catching everything IS the test
+                            self.fail(f"{name} raised {exc!r} on {command!r}")
+                with self.subTest(command=command, parser="bash_mutates"):
+                    try:
+                        agent_gate.bash_mutates(command)
+                    except Exception as exc:  # catching everything IS the test
+                        self.fail(f"bash_mutates raised {exc!r} on {command!r}")
+
+    def test_a_real_mutation_after_the_noise_is_still_denied(self):
+        for noise in self.NOISE:
+            for tail in (" && git push origin main", "\nrm -rf src"):
+                command = f"echo {noise}{tail}"
+                with self.subTest(command=command):
+                    self.assertNotEqual("", agent_gate.bash_mutates(command))
+
+
+class SubstitutionDepthTest(unittest.TestCase):
+    """task-0078 second review, H1: exceeding MAX_SHELL_DEPTH was an ALLOW, and
+    every `$(` cost a level, so `echo $($($($(git push origin main))))` - two
+    free characters per level - ran past the ceiling and was allowed against a
+    protected branch (measured, exit 0). A substitution is not a nested shell:
+    the bodies are flattened onto the one depth charge the outermost pays, and
+    running out of depth is now a deny."""
+
+    def test_a_four_deep_substituted_push_is_resolved(self):
+        self.assertTrue(pretool_gate.git_invokes(
+            "echo $($($($(git push origin main))))", "push"))
+
+    def test_an_eight_deep_substituted_push_is_resolved(self):
+        command = "echo " + "$(" * 8 + "git push origin main" + ")" * 8
+        self.assertTrue(pretool_gate.git_invokes(command, "push"))
+
+    def test_a_deeply_substituted_push_is_denied_to_a_readonly_agent(self):
+        for depth in (4, 8):
+            command = "echo " + "$(" * depth + "git push origin main" + ")" * depth
+            with self.subTest(depth=depth):
+                err = io.StringIO()
+                with unittest.mock.patch("sys.stderr", err):
+                    code = agent_gate.handle_readonly("Bash", {"command": command})
+                self.assertEqual(2, code)
+
+    def test_a_two_deep_real_shell_is_still_resolved(self):
+        command = 'bash -c \'bash -c "git push origin main"\''
+        self.assertTrue(pretool_gate.git_invokes(command, "push"))
+
+    def test_running_out_of_depth_is_a_deny_not_an_allow(self):
+        command = 'bash -c "bash -c \'git status\'"'
+        self.assertTrue(pretool_gate.unscannable_depth(
+            command, pretool_gate.MAX_SHELL_DEPTH))
+        self.assertFalse(pretool_gate.unscannable_depth(
+            "git status", pretool_gate.MAX_SHELL_DEPTH))
+
+    def test_a_read_only_substitution_stack_stays_allowed(self):
+        self.assertEqual("", agent_gate.bash_mutates("echo $($(git rev-parse HEAD))"))
+
+
+class ModuleInterpreterFlagTest(unittest.TestCase):
+    """task-0078 second review, M1: exec_names_of() read the script an
+    interpreter is handed as an argument or on stdin, but never its `-m`
+    operand, so `python3 -m approve` named no script and passed every profile."""
+
+    COMMAND = ("cd .claude/tools/pipeline && "
+               "python3 -m approve --task task-0078 --gate commit")
+
+    def test_the_module_resolves_to_its_script_path(self):
+        self.assertIn("approve.py", pretool_gate.executed_names(self.COMMAND))
+        self.assertIn("pipeline/approve.py", pretool_gate.executed_names(
+            "python -m pipeline.approve --gate commit"))
+        self.assertTrue(pretool_gate.runs_approve_script(self.COMMAND))
+
+    def test_the_module_invocation_is_denied_to_every_profile(self):
+        for handler in (agent_gate.handle_dev, agent_gate.handle_docs,
+                        agent_gate.handle_readonly):
+            with self.subTest(handler=handler.__name__):
+                err = io.StringIO()
+                with unittest.mock.patch("sys.stderr", err):
+                    code = handler("Bash", {"command": self.COMMAND})
+                self.assertEqual(2, code)
+                self.assertIn("approve.py", err.getvalue())
+
+    def test_a_module_that_is_not_a_gated_script_stays_allowed(self):
+        self.assertFalse(pretool_gate.runs_approve_script(
+            "python -m unittest discover -s .claude/tools"))
 
 
 if __name__ == "__main__":

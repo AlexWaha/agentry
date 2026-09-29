@@ -30,6 +30,25 @@ Wired to Claude Code's `PreToolUse` event (matchers: Bash, Edit|Write). It denie
 
 Everything else is allowed (exit 0). Fail-open: any error allows the tool, so a
 bug here can never brick the agent.
+
+STATED LIMITATIONS of the command analysis below (task-0078). All of them are
+textual: the gate reads the command it is given and nothing else.
+  - A target reached through a VARIABLE is not resolved: `X=/dev/null; ls > $X`
+    redirects to the forbidden target and reads here as a redirect to `$X`.
+    Shell variables are not expanded, and expanding them would mean executing
+    the command to find out. `eval` with a redirect operator in its operand is
+    therefore refused outright rather than guessed at (see eval_redirect).
+  - A body built at runtime (`bash -c "$CMD"`), decoded (`base64 -d | sh`), or
+    held in a script file invoked by path is invisible. So is nesting deeper
+    than MAX_SHELL_DEPTH.
+  - A gate that RAISES is an allow: every main() here catches Exception and
+    returns allow(), by design (fail-open, so a bug cannot brick the agent), so
+    any parser added to this file must be TOTAL over arbitrary text - one
+    IndexError on a crafted string silently disables every check. The fuzz test
+    over quote / newline / heredoc combinations is the guard on that.
+  - These are the profile gates' floor, not a proof of absence. A pass means
+    "no forbidden thing is written in this text", never "this command cannot do
+    the forbidden thing".
 """
 
 from __future__ import annotations
@@ -123,6 +142,20 @@ MAX_SHELL_DEPTH = 3
 # Run the new and the old version over the same list and compare the answers.
 
 
+def _mask_span(m: re.Match) -> str:
+    """Blank ONE quoted span character for character, keeping its newlines.
+
+    Equal length is not enough. split_heredocs() indexes the mask BY LINE, and
+    a multi-line quoted argument whose newlines were masked away collapsed into
+    one masked line, so `masked[i]` ran off the end and raised IndexError - and
+    every main() here catches Exception and allows, so the raise did not fail
+    the command, it disabled the whole gate. Measured on the first version of
+    this file: `git commit -m 'msg<newline><<' && git push origin main` exited
+    0 against a protected branch. Keeping the newlines keeps the line counts
+    equal while the offsets stay exact."""
+    return "".join("\n" if c == "\n" else "Q" for c in m.group(0))
+
+
 def mask_quoted(command: str) -> str:
     """Blank quoted spans so a `>` inside a quoted SQL comparison or message is
     not read as a redirect.
@@ -135,8 +168,394 @@ def mask_quoted(command: str) -> str:
 
     Masking alone is NOT enough: a quoted span can be a whole nested command
     (`bash -c "echo x > f"`), and blanking it makes the redirect invisible. That
-    is what shell_c_bodies() + the recursion in redirect_write_target() cover."""
-    return QUOTED_RE.sub(lambda m: "Q" * len(m.group(0)), command)
+    is what shell_c_bodies() + the recursion in redirect_write_target() cover.
+
+    NEWLINES inside the span survive the mask (see _mask_span). Do not
+    "simplify" that back to plain filler."""
+    return QUOTED_RE.sub(_mask_span, command)
+
+
+# --- One tokenisation for every gate here (task-0078) -----------------------
+# The defect these close: every gate matched its forbidden literal as a
+# SUBSTRING of the raw command text, so text that merely DESCRIBES a forbidden
+# thing was indistinguishable from doing it. Four measured denials, all on
+# truthful text: a commit message quoting the redirect literal, a memory row
+# whose prose field named a git verb, a `git show -- <path to approve.py>`, and
+# a task file written through a heredoc whose markdown described a push.
+#
+# Quoting is already handled by shlex: `--fix "never run git commit"` collapses
+# to ONE token, which matches no command name. What shlex has no notion of is a
+# heredoc, so its body was tokenised as argv - that is what strip_heredocs()
+# removes before any tokenisation happens.
+#
+# Fail-closed is preserved throughout: every helper below returns None (not an
+# empty result) when the text cannot be tokenised, and every caller must treat
+# None as "refuse", exactly as git_invocations() already treats GIT_UNKNOWN.
+
+# `<<WORD`, `<<'WORD'`, `<<-WORD`. The lookbehind keeps a herestring (`<<<x`)
+# out: its trailing `<<x` would otherwise read as a heredoc opener.
+HEREDOC_RE = re.compile(r"(?<!<)<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+# Same set as SHELL_SEPARATORS below, spelled out because that constant is
+# defined further down the file; a test pins the two together.
+SEPARATOR_TOKENS = frozenset({"&&", "||", ";", "|", "&"})
+# argv0 forms that run their first non-flag argument as a script, so the script
+# name is an invocation rather than a path argument. Shells are absent on
+# purpose: their `-c` body is handled by shell_c_bodies() instead.
+INTERPRETER_RE = re.compile(
+    r"^(?:.*[\\/])?(?:python[\d.]*|pythonw|py|node|ruby|perl|php)(?:\.exe)?$", re.IGNORECASE)
+ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# argv0 forms that run ANOTHER command given as their argument, so the real
+# argv0 is the word behind them. Without this, `env python .../approve.py` had
+# argv0 `env`, which is not an interpreter, and the script argument was never
+# read as executed - the gate saw a path.
+WRAPPER_RE = re.compile(
+    r"^(?:.*[\\/])?(?:env|command|nohup|time|sudo|xargs|exec)(?:\.exe)?$", re.IGNORECASE)
+# `< file`, `<file`, `0< file` - stdin redirection. An interpreter reading a
+# script this way RUNS it, exactly as it would as an argument. The negative
+# lookahead keeps a heredoc / herestring operator out.
+STDIN_REDIR_RE = re.compile(r"^\d*<(?!<)(.*)$")
+EVAL_RE = re.compile(r"^(?:.*[\\/])?eval$", re.IGNORECASE)
+# Any redirect operator, target unread: what eval_redirect() looks for in an
+# eval operand it cannot resolve.
+ANY_REDIR_RE = re.compile(r"(?<![-<>=])\d*[<>&]{0,2}[<>](?!<)")
+
+
+def runs_a_shell(command: str) -> bool:
+    """True when any token is an sh-family shell - then a heredoc body may BE a
+    script (`bash <<EOF ... EOF`) rather than data. Fail-closed on untokenisable
+    text so an unbalanced quote cannot buy a heredoc strip."""
+    try:
+        return any(SHELL_TOKEN_RE.match(t)
+                   for t in shlex.split(pad_separators(command), posix=True))
+    except ValueError:
+        return True
+
+
+def strip_heredocs(command: str) -> str:
+    """`command` with every heredoc BODY - and its `<<WORD` operator - removed.
+
+    A heredoc body is data on stdin, not words the shell runs. shlex tokenises
+    it exactly like the command line, so a task file written with
+    `cat > file <<EOF` handed the gates its own markdown as argv, and a
+    paragraph describing a push was denied as a push.
+
+    Two rules keep the strip from DELETING text that must still be scanned -
+    both were bypasses, both measured on the first attempt (task-0078 review):
+
+      1. The opener must sit outside quotes. `echo "see <<EOF in docs"` is a
+         sentence, and reading it as an opener made every following line a
+         heredoc body: a real `git push origin main` on the next line, an
+         `rm -rf`, a redirect - all deleted before any gate saw them. An opener
+         counts only when its `<<` OPERATOR sits outside quotes; the delimiter
+         itself may be quoted, which is the ordinary `<<'EOF'` spelling, so the
+         test is on the operator offset alone (mask_quoted preserves length, so
+         the mask can be indexed by an offset into the original).
+      2. A MISSING terminator keeps the remaining lines. The shell would indeed
+         swallow them, but a gate that deletes text on the strength of an
+         unterminated opener can be made to delete anything. Keeping them is
+         the fail-closed direction: at worst a document is scanned as argv and
+         gets denied, which is visible, rather than a command being hidden,
+         which is not.
+
+    Nothing is stripped at all when a shell could be executing the body
+    (runs_a_shell)."""
+    return split_heredocs(command)[0]
+
+
+def expanding_heredoc_bodies(command: str) -> list:
+    """The bodies of heredocs whose delimiter is UNQUOTED.
+
+    `<<EOF` expands `$(...)` and backticks inside the body; `<<'EOF'` does not.
+    The body is data either way - it is never argv - but a substitution in an
+    unquoted body really does run, so those bodies are handed to
+    command_substitutions() and to nothing else."""
+    return [body for quoted, body in split_heredocs(command)[1] if not quoted]
+
+
+def split_heredocs(command: str) -> tuple:
+    """(text with the heredocs removed, [(delimiter-was-quoted, body), ...])."""
+    if "<<" not in command or runs_a_shell(command):
+        return command, []
+    lines = command.split("\n")
+    masked = mask_quoted(command).split("\n")
+    out, bodies, i = [], [], 0
+    while i < len(lines):
+        line = lines[i]
+        # The mask is line-aligned by construction (_mask_span keeps newlines),
+        # so this bound never trims. It stays because when it DID trim, the
+        # IndexError was caught by main() as an allow and every gate went off.
+        # An unreadable mask line yields no openers, so the line is KEPT for the
+        # gates to scan - the fail-closed direction, never a silent drop.
+        mline = masked[i] if i < len(masked) else ""
+        i += 1
+        openers = [m for m in HEREDOC_RE.finditer(line)
+                   if m.start() < len(mline) and mline[m.start()] == line[m.start()]]
+        if not openers:
+            out.append(line)
+            continue
+        # Find each body's terminator BEFORE dropping anything: one missing
+        # terminator disqualifies the whole line (rule 2 above).
+        end, terminated, found = i, True, []
+        for m in openers:
+            word, start = m.group(2), end
+            while end < len(lines) and lines[end].strip() != word:
+                end += 1
+            if end >= len(lines):
+                terminated = False
+                break
+            found.append((bool(m.group(1)), "\n".join(lines[start:end])))
+            end += 1  # drop the terminator line too
+        if not terminated:
+            out.append(line)
+            continue
+        kept, pos = [], 0
+        for m in openers:
+            kept.append(line[pos:m.start()])
+            pos = m.end()
+        kept.append(line[pos:])
+        out.append("".join(kept))
+        bodies.extend(found)
+        i = end
+    return "\n".join(out), bodies
+
+
+def gate_tokens(command: str) -> list | None:
+    """shlex tokens of `command`, heredoc bodies removed and glued shell
+    separators padded. None when the text cannot be tokenised."""
+    try:
+        return shlex.split(pad_separators(strip_heredocs(command)), posix=True)
+    except ValueError:
+        return None
+
+
+def segments_with_separators(command: str) -> list | None:
+    """[(separator-before, tokens), ...] - one entry per simple command. The
+    separator of the first entry is ''. None when the text cannot be tokenised.
+
+    The separator is kept because a PIPE changes what the next command runs:
+    `cat script.py | python` executes the script on the left."""
+    tokens = gate_tokens(command)
+    if tokens is None:
+        return None
+    pairs, current, sep = [], [], ""
+    for tok in tokens:
+        if tok in SEPARATOR_TOKENS:
+            if current:
+                pairs.append((sep, current))
+            current, sep = [], tok
+        else:
+            current.append(tok)
+    if current:
+        pairs.append((sep, current))
+    return pairs
+
+
+def command_segments(command: str) -> list | None:
+    """Tokens of `command` grouped into simple commands, split on the shell
+    separators. None when the text cannot be tokenised."""
+    pairs = segments_with_separators(command)
+    return None if pairs is None else [seg for _, seg in pairs]
+
+
+def argv0_index(segment: list) -> int | None:
+    """Index of the word a simple command actually RUNS: past leading
+    `VAR=value` assignments, past flags, and past wrapper commands that run
+    their own argument (`env`, `sudo`, `nohup`, `xargs`, ...). None when the
+    segment runs nothing."""
+    i = 0
+    while i < len(segment):
+        tok = segment[i]
+        if ASSIGNMENT_RE.match(tok) or tok.startswith("-") or WRAPPER_RE.match(tok):
+            i += 1
+            continue
+        return i
+    return None
+
+
+def stdin_operands(segment: list) -> list:
+    """Every `< file` operand of one simple command, glued or spaced."""
+    out = []
+    for n, tok in enumerate(segment):
+        m = STDIN_REDIR_RE.match(tok)
+        if not m:
+            continue
+        if m.group(1):
+            out.append(m.group(1))
+        elif n + 1 < len(segment):
+            out.append(segment[n + 1])
+    return out
+
+
+def exec_names_of(segment: list) -> list:
+    """The words ONE simple command actually runs: argv0 (see argv0_index),
+    plus - when argv0 is an interpreter - the script it is handed, whether as
+    its first non-flag argument, on stdin, or as a `-m` module. `python
+    .../approve.py`, `python < .../approve.py` and `python -m approve` all run
+    that script; `git show -- x.py` does not run x.py.
+
+    The `-m` operand went unread, and that was the whole of a bypass: the flag
+    loop skipped `-m` as a flag and `approve` as its value, so
+    `cd .claude/tools/pipeline && python3 -m approve --gate commit` named no
+    script and passed every profile. A module is resolved to its file path
+    (`pipeline.approve` -> `pipeline/approve.py`) so the script regexes, which
+    anchor on a path separator, match it the same way they match the argument
+    spelling."""
+    i = argv0_index(segment)
+    if i is None:
+        return []
+    names = [segment[i]]
+    if INTERPRETER_RE.match(segment[i]):
+        stdin = stdin_operands(segment)
+        names.extend(stdin)
+        rest = segment[i + 1:]
+        for n, tok in enumerate(rest):
+            if tok == "-m" and n + 1 < len(rest):
+                names.append(rest[n + 1].replace(".", "/") + ".py")
+            if tok.startswith("-") or STDIN_REDIR_RE.match(tok) or tok in stdin:
+                continue
+            names.append(tok)
+            break
+    return names
+
+
+def executed_names(command: str) -> list | None:
+    """Every word `command` actually runs, across all its simple commands.
+    None when the text cannot be tokenised (callers gate that).
+
+    A pipe INTO an interpreter runs what the previous command emitted, so its
+    operands count as executed: `cat x/approve.py | python` and
+    `echo x/approve.py | xargs python` both run the script the gate would
+    otherwise have read as a path argument."""
+    pairs = segments_with_separators(command)
+    if pairs is None:
+        return None
+    names = []
+    for n, (sep, seg) in enumerate(pairs):
+        seg_names = exec_names_of(seg)
+        names.extend(seg_names)
+        if n and sep == "|" and seg_names and INTERPRETER_RE.match(seg_names[0]):
+            names.extend(tok for tok in pairs[n - 1][1][1:] if not tok.startswith("-"))
+    return names
+
+
+def command_substitutions(command: str) -> list:
+    """The inner text of every `$( ... )` and backtick substitution.
+
+    The shell runs these as commands; shlex does not know them, so
+    `echo $(git push origin main)` tokenises to `$(git`, `push`, `main)` and no
+    gate ever saw a `git` token, while the quoted `"$(git push)"` was a single
+    token. Both are returned here as ordinary command strings for the caller to
+    analyse recursively.
+
+    Single quotes suppress substitution, so their content is skipped; double
+    quotes do not. `$(( ... ))` is arithmetic, not a command - skipped, or its
+    `>` would be read as a redirect. An unbalanced opener yields the rest of
+    the text (fail-closed: the caller then resolves what it can and refuses
+    what it cannot).
+
+    Heredocs are removed first, so a backtick inside a document being written
+    is prose - but the body of an UNQUOTED heredoc is scanned too, because
+    `<<EOF` really does expand a substitution written in it."""
+    text, _ = split_heredocs(command)
+    out = []
+    for body in expanding_heredoc_bodies(command):
+        out.extend(command_substitutions(body))
+    command = text
+    i, n, dq = 0, len(command), False
+    while i < n:
+        ch = command[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == '"':
+            dq = not dq
+            i += 1
+            continue
+        if ch == "'" and not dq:
+            j = command.find("'", i + 1)
+            i = n if j < 0 else j + 1
+            continue
+        if ch == "`":
+            j = command.find("`", i + 1)
+            out.append(command[i + 1:] if j < 0 else command[i + 1:j])
+            if j < 0:
+                break
+            i = j + 1
+            continue
+        if ch == "$" and command.startswith("$(", i):
+            if command.startswith("$((", i):
+                j = command.find("))", i + 3)
+                i = n if j < 0 else j + 2
+                continue
+            depth, j = 1, i + 2
+            while j < n:
+                if command[j] == "(":
+                    depth += 1
+                elif command[j] == ")":
+                    depth -= 1
+                    if not depth:
+                        break
+                j += 1
+            if depth:
+                out.append(command[i + 2:])
+                break
+            out.append(command[i + 2:j])
+            i = j + 1
+            continue
+        i += 1
+    return out
+
+
+def eval_operands(command: str) -> list:
+    """The string operands of every `eval` in `command`. What eval runs is a
+    command, so the operand is analysed as one."""
+    segments = command_segments(command)
+    if segments is None:
+        return []
+    out = []
+    for seg in segments:
+        i = argv0_index(seg)
+        if i is not None and EVAL_RE.match(seg[i]):
+            out.extend(tok for tok in seg[i + 1:] if not tok.startswith("-"))
+    return out
+
+
+def eval_redirect(command: str, _depth: int = 0) -> str:
+    """The `eval` operand carrying a redirect operator, or ''.
+
+    Its TARGET cannot be resolved - that is the whole point of eval, and
+    `eval 'ls > $X'` after `X=/dev/null` is the shape that motivates this. So
+    the operator alone is refused, rather than guessing at the target. An eval
+    with no redirect operator in it is not this function's business."""
+    for operand in eval_operands(command):
+        if ANY_REDIR_RE.search(operand):
+            return operand
+    if unscannable_depth(command, _depth):
+        return DEPTH_EXCEEDED
+    for body in nested_command_bodies(command):
+        hit = eval_redirect(body, _depth + 1)
+        if hit:
+            return hit
+    return ""
+
+
+APPROVE_SCRIPT_RE = re.compile(r"(?:^|[\\/])approve\.py$", re.IGNORECASE)
+
+
+def runs_approve_script(command: str, _depth: int = 0) -> bool:
+    """True when approve.py is INVOKED (not merely named as a path argument).
+
+    Fail-closed on untokenisable text. Nested `sh -c` bodies are unwrapped, the
+    same layering git resolution uses."""
+    names = executed_names(command)
+    if names is None:
+        return True
+    if any(APPROVE_SCRIPT_RE.search(n) for n in names):
+        return True
+    if unscannable_depth(command, _depth):
+        return True
+    return any(runs_approve_script(body, _depth + 1)
+               for body in nested_command_bodies(command))
 
 
 def shell_c_bodies(command: str) -> list:
@@ -144,12 +563,11 @@ def shell_c_bodies(command: str) -> list:
 
     shlex removes the quoting, so the body comes back as a plain command string
     the caller can scan exactly like a top-level one. Same two-layer shape the
-    file already uses for git (git_invocations plus a substring net): argv
+    file already uses for git (git_invocations plus a nested-body pass): argv
     walking is the real check, and this is what stops a quoted subshell from
     being scanned as an empty string."""
-    try:
-        tokens = shlex.split(pad_separators(command), posix=True)
-    except ValueError:
+    tokens = gate_tokens(command)
+    if tokens is None:
         return []
     bodies = []
     for i, tok in enumerate(tokens):
@@ -169,6 +587,54 @@ def shell_c_bodies(command: str) -> list:
     return bodies
 
 
+def nested_command_bodies(command: str) -> list:
+    """Every command string `command` carries INSIDE itself: a nested shell's
+    `-c` body, an `eval` operand, and the inner text of a `$( ... )` or
+    backtick substitution.
+
+    One list, because every gate that recurses needs all three and any gate
+    that knows only some of them is a bypass with extra steps.
+
+    Substitutions are FLATTENED (substitution_bodies), so they all arrive at
+    one depth charge; only a nested shell or an eval costs a level."""
+    return (shell_c_bodies(command) + eval_operands(command)
+            + substitution_bodies(command))
+
+
+def substitution_bodies(command: str, _limit: int = 64) -> list:
+    """Every `$( ... )` / backtick body in `command`, transitively flattened.
+
+    A substitution is not a nested shell, so it must not cost recursion depth.
+    It did, and `echo $($($($(git push origin main))))` exhausted
+    MAX_SHELL_DEPTH and was ALLOWED against a protected branch (measured, exit
+    0). Each `$(` is two characters; the depth ceiling is there for `sh -c` and
+    `eval`, which is where each level really is a separate shell. Flattening
+    here means an arbitrarily deep stack of substitutions is resolved at the
+    single charge the outermost one pays.
+
+    `_limit` caps pathological input; the bodies a real command carries are few."""
+    out, queue = [], command_substitutions(command)
+    while queue and len(out) < _limit:
+        body = queue.pop(0)
+        out.append(body)
+        queue.extend(command_substitutions(body))
+    return out
+
+
+DEPTH_EXCEEDED = (f"nested shell deeper than MAX_SHELL_DEPTH ({MAX_SHELL_DEPTH}) "
+                  f"- the inner body was never scanned, so it is refused")
+
+
+def unscannable_depth(command: str, _depth: int) -> bool:
+    """True when the recursion budget is spent and a nested body remains.
+
+    Every recursing gate treats this as a HIT. Exceeding the depth used to be a
+    silent allow, which made the ceiling a bypass instead of a limit: whatever
+    the gate could not read, it waved through. Refusing costs a legitimate
+    4-shells-deep command a deny it can rewrite; allowing costs the gate."""
+    return _depth >= MAX_SHELL_DEPTH and bool(nested_command_bodies(command))
+
+
 def redirect_write_target(command: str, _depth: int = 0) -> str:
     """Return the file-writing redirect fragment, or '' if the command only dups
     descriptors (2>&1) or discards output (NUL / /dev/null).
@@ -185,6 +651,7 @@ def redirect_write_target(command: str, _depth: int = 0) -> str:
     building that command is harder than the runtime-body bypass above, which
     this can never catch anyway - but do not read a pass as proof of no
     redirect. Those need the profile's other layers, not a bigger regex."""
+    command = strip_heredocs(command)
     for m in REDIR_RE.finditer(mask_quoted(command)):
         # Offsets index the original, so the reported fragment and the target
         # test both read the real text rather than the mask's filler.
@@ -194,11 +661,12 @@ def redirect_write_target(command: str, _depth: int = 0) -> str:
         if target.lower() in DISCARD_TARGETS:
             continue  # discard sink - not a tree mutation
         return command[m.start():m.end()].strip()
-    if _depth < MAX_SHELL_DEPTH:
-        for body in shell_c_bodies(command):
-            frag = redirect_write_target(body, _depth + 1)
-            if frag:
-                return frag
+    if unscannable_depth(command, _depth):
+        return DEPTH_EXCEEDED
+    for body in nested_command_bodies(command):
+        frag = redirect_write_target(body, _depth + 1)
+        if frag:
+            return frag
     return ""
 
 
@@ -359,7 +827,12 @@ def pad_separators(command: str) -> str:
 
     `git status&&git add -A` -> `git status && git add -A`, so shlex yields the
     second `git` as its own token. Quoted regions are copied verbatim: padding
-    inside them would rewrite a commit message or a branch name."""
+    inside them would rewrite a commit message or a branch name.
+
+    An unquoted NEWLINE terminates a command too, and shlex swallows it as
+    ordinary whitespace - so `echo hi\\nrm -rf src` came back as one simple
+    command whose argv0 is `echo`, and the second line read as an argument.
+    It is emitted as `;` for that reason."""
     out = []
     quote = ""
     i = 0
@@ -377,6 +850,10 @@ def pad_separators(command: str) -> str:
         if ch in "\"'":
             quote = ch
             out.append(ch)
+            i += 1
+            continue
+        if ch == "\n":
+            out.append(" ; ")
             i += 1
             continue
         sep = next((s for s in SHELL_SEPARATORS if command.startswith(s, i)), "")
@@ -409,9 +886,8 @@ def git_invocations(command: str) -> list:
     """
     if not MENTIONS_GIT_RE.search(command):
         return []
-    try:
-        tokens = shlex.split(pad_separators(command), posix=True)
-    except ValueError:
+    tokens = gate_tokens(command)
+    if tokens is None:
         return [(GIT_UNKNOWN, [])]
     found = []
     i = 0
@@ -453,17 +929,26 @@ def git_unparseable(command: str) -> bool:
     return any(sub == GIT_UNKNOWN for sub, _ in git_invocations(command))
 
 
-def git_invokes(command: str, *subcommands: str) -> bool:
+def git_invokes(command: str, *subcommands: str, _depth: int = 0) -> bool:
     """True when `command` runs one of `subcommands` ('commit', 'push', ...).
 
-    Unparseable git text counts as a match (fail-closed), and a plain substring
-    match is kept as a safety net for forms argv walking cannot see from the
-    outside, such as `bash -c "git push origin main"`."""
+    Unparseable git text counts as a match (fail-closed). The second layer is
+    the nested `sh -c` body, which argv walking is structurally blind to
+    (`bash -c "git push origin main"` is one shlex token).
+
+    That second layer USED to be `f"git {sub}" in command.lower()`, and it is
+    the whole of task-0078: a substring net cannot tell an invocation from a
+    mention, so a memory row whose `--fix` prose named a git verb, and a task
+    file whose markdown described a push, were both gated as git commands.
+    Unwrapping the nested body keeps the case the net existed for and drops
+    every prose match with it."""
     for sub, _ in git_invocations(command):
         if sub == GIT_UNKNOWN or sub in subcommands:
             return True
-    low = " ".join(command.lower().split())
-    return any(f"git {s}" in low for s in subcommands)
+    if unscannable_depth(command, _depth):
+        return True
+    return any(git_invokes(body, *subcommands, _depth=_depth + 1)
+               for body in nested_command_bodies(command))
 
 
 def repo_candidates(command: str, cwd: str) -> list:
@@ -778,7 +1263,6 @@ def check_trunk_merge(command: str, trunk: str) -> int:
 # as `git merge <branch>` does, and carries no `merge` token to resolve.
 # The name must stay equal to supervisor.UNATTENDED_ENV (pinned by a test).
 UNATTENDED_ENV = "AGENTRY_UNATTENDED"
-APPROVE_SCRIPT_RE = re.compile(r"\bapprove\.py\b", re.IGNORECASE)
 
 
 def check_unattended(command: str) -> int:
@@ -792,7 +1276,7 @@ def check_unattended(command: str) -> int:
     step = ("a merge" if merge_invocations(command)
             else "a pull" if git_invokes(command, "pull")
             else "a push" if git_invokes(command, "push")
-            else "recording a checkpoint approval" if APPROVE_SCRIPT_RE.search(command)
+            else "recording a checkpoint approval" if runs_approve_script(command)
             else "")
     if not step:
         return allow()
@@ -1123,12 +1607,57 @@ def planning_only_commit(command: str, cwd: str) -> bool:
     return bool(files) and all(matches_c2(f) for f in files)
 
 
+# The forbidden target reached by a REAL redirect operator: `>`, `>>`, `2>`,
+# `&>`, `<`, with or without a space before the target, and with the target
+# optionally quoted. Not `in command`: that read the literal inside a commit
+# message, a heredoc body or a prose argument as the act itself (task-0078).
+# The lookbehind keeps arrows (`->`, `-->`, `=>`) out; a word glued to the
+# operator (`echo hi>/dev/null`) is still a redirect and still matches.
+DEV_NULL_REDIR_RE = re.compile(
+    r"(?<![-<>=])\d*[<>&]{0,2}[<>]\s*['\"]?/dev/null['\"]?(?![\w./-])", re.IGNORECASE)
+
+
+def redirects_to_dev_null(command: str, _depth: int = 0) -> bool:
+    """True when `command` really redirects to the forbidden target.
+
+    Heredoc bodies are dropped first, and a match is kept only when the
+    OPERATOR sits outside quotes - mask_quoted() preserves length, so the
+    masked string can be indexed by the match offset in the original. That is
+    what separates `ls 2>/dev/null` (a redirect) from
+    `memory.py --fix "never write 2>/dev/null"` (a sentence about one), while a
+    quoted TARGET (`> '/dev/null'`) stays caught because its operator is bare.
+
+    Nested bodies are then scanned recursively, the same layering
+    redirect_write_target() and git_invokes() carry. Without it the quoting
+    awareness above WAS the bypass: `bash -c 'ls >/dev/null'` has its operator
+    inside a quoted span, so every match was discarded and the wrapped form was
+    allowed where the bare one is denied."""
+    text = strip_heredocs(command)
+    masked = mask_quoted(text)
+    if any(masked[m.start()] == text[m.start()]
+           for m in DEV_NULL_REDIR_RE.finditer(text)):
+        return True
+    if unscannable_depth(command, _depth):
+        return True
+    return any(redirects_to_dev_null(body, _depth + 1)
+               for body in nested_command_bodies(command))
+
+
 def check_destructive_and_repl(command: str, low: str) -> int:
     """A + B + G, all data-driven from pipeline.json 'gates' so no project/stack
     scope leaks into the code."""
     cfg = gates_cfg()
 
-    if cfg.get("forbid_dev_null") and "/dev/null" in command:  # B
+    if cfg.get("forbid_dev_null"):  # B
+        operand = eval_redirect(command)
+        if operand:
+            return deny(
+                f"`eval` carries a redirect operator in a string this gate cannot "
+                f"resolve ('{operand}'). The target of an eval'd redirect is only "
+                f"known once it runs, so the redirect policy (gates.forbid_dev_null) "
+                f"cannot be checked and the gate refuses rather than guessing. Write "
+                f"the command out instead of eval'ing it.")
+    if cfg.get("forbid_dev_null") and redirects_to_dev_null(command):  # B
         return deny("Redirect to /dev/null is denied by project policy "
                     "(gates.forbid_dev_null). The reason once given on this deny was "
                     "wrong and has been removed: measured on this host 2026-09-14 under "
