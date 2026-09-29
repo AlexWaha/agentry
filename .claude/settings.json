@@ -370,5 +370,20 @@
       }
     ]
   },
-  "autoMemoryEnabled": false
+  "autoMemoryEnabled": false,
+  "env": {
+    "DISABLE_TELEMETRY": "1",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    "DISABLE_FEEDBACK_COMMAND": "1",
+    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+    "OTEL_METRICS_EXPORTER": "none",
+    "OTEL_LOGS_EXPORTER": "none",
+    "OTEL_TRACES_EXPORTER": "none",
+    "OTEL_LOG_USER_PROMPTS": "0",
+    "OTEL_LOG_TOOL_CONTENT": "0",
+    "OTEL_LOG_TOOL_DETAILS": "0",
+    "OTEL_LOG_ASSISTANT_RESPONSES": "0",
+    "DO_NOT_TRACK": "1"
+  }
 }
