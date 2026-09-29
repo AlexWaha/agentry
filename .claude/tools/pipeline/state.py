@@ -100,16 +100,6 @@ EDITING_STAGES = ("implement", "test", "review")
 # cannot be read at all. Never consulted while the config parses.
 CHECKPOINT_STAGES = ("ready",)
 
-# Both spellings a stage definition may use to declare a human checkpoint.
-# `checkpoints` (plural, a list) is what advance.stage_checkpoints() reads and
-# what every other reader in this tree expects; `checkpoint` (singular, a
-# string) appears on the plan flow's `approval` stage and has NO reader
-# anywhere. It is accepted here so that stage stays protected, and the odd
-# spelling is deliberately not "tidied" in pipeline.json: normalising it without
-# also giving the plan flow a real checkpoint would look like a cleanup and
-# would silently unprotect the stage.
-CHECKPOINT_KEYS = ("checkpoints", "checkpoint")
-
 # How long a busy marker stays fresh with no explicit timeout of its own.
 BUSY_TIMEOUT = 900
 
@@ -274,7 +264,7 @@ def checkpoint_stages(pipeline: dict, which: str = BUILD) -> tuple[str, ...]:
         return CHECKPOINT_STAGES if which == BUILD else ()
     return tuple(
         str(s.get("name", "")) for s in stages(pipeline, which)
-        if any(s.get(k) for k in CHECKPOINT_KEYS)
+        if s.get("checkpoints")
     )
 
 
@@ -316,6 +306,10 @@ def init_db(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(runs)")}
     if "pipeline" not in cols:
         conn.execute(f"ALTER TABLE runs ADD COLUMN pipeline TEXT DEFAULT '{BUILD}'")
+    # The plan flow's checkpoint, mirroring commit_approved. Rows that predate
+    # the column take the default 0: an old run is never pre-approved.
+    if "plan_approved" not in cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN plan_approved INTEGER DEFAULT 0")
     conn.commit()
 
 

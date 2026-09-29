@@ -271,8 +271,9 @@ def finish_or_wait_for_merge(task: str, run: dict) -> int:
                   f"Merged into main ({repos}). Task done - file {note}.")
 
 
-# Which run.db flag records each checkpoint's approval.
-APPROVAL_FIELD = {"commit": "commit_approved", "push": "push_approved"}
+# Which run.db flag records each checkpoint's approval (one table, in approvals.py,
+# shared with approve.py so the reader and the writer cannot disagree).
+APPROVAL_FIELD = approvals.APPROVAL_FIELD
 
 
 def stage_checkpoints(stage_def: dict) -> list:
@@ -291,11 +292,16 @@ def stage_checkpoints(stage_def: dict) -> list:
 
     Only the push is dropped. push_needs_approval is untouched: if a push does
     happen in solo mode it still needs its recorded approval, and a push to a
-    protected branch is still refused outright."""
+    protected branch is still refused outright.
+
+    Every declared checkpoint is returned, in any pipeline. This used to filter
+    to the names in APPROVAL_FIELD, which silently dropped the plan flow's `plan`
+    and let a hand-run advance.py walk `approval` to `breakdown` (task-0089). A
+    name with no approval field is not dropped now - the park branch refuses it."""
     checkpoints = [str(c).lower() for c in (stage_def.get("checkpoints") or [])]
     if pretool_gate.workflow_mode() == pretool_gate.WORKFLOW_SOLO:
         checkpoints = [c for c in checkpoints if c != approvals.PUSH]
-    return [c for c in checkpoints if c in APPROVAL_FIELD]
+    return checkpoints
 
 
 def stage_owner(pipeline: dict, name: str, task: str = "", which: str = state.BUILD) -> str:
@@ -450,19 +456,29 @@ def main() -> int:
         # means the tail of the stage is complete, so route to the merge check -
         # in solo mode the local merge is what satisfies it, in pr mode the
         # CEO's merge of the pushed branch. Same check either way.
-        pending = next((c for c in checkpoints if not run[APPROVAL_FIELD[c]]), None)
+        # A checkpoint name with no approval field can never be approved, so it
+        # stays pending (fail-closed) and the park message names it.
+        pending = next((c for c in checkpoints
+                        if not run.get(APPROVAL_FIELD.get(c, ""))), None)
+        nxt = state.next_stage(pipeline, cur, which) or "done"
         if pending is None:
-            state.set_fields(conn, args.task, stage="done", awaiting_human="",
-                             stage_status=state.ST_GATE_PASSED)
+            # The stage after the checkpoints: `done` for build's `ready`, the
+            # breakdown for the plan flow's `approval`. Both used to be `done`.
+            fields = {"stage": nxt, "awaiting_human": "",
+                      "stage_status": (state.ST_GATE_PASSED if nxt == "done"
+                                       else state.ST_IN_PROGRESS)}
+            if nxt != "done":
+                fields.update(retries=0, continuations=0)
+            state.set_fields(conn, args.task, **fields)
         else:
             fields = {"awaiting_human": pending}
             # approvals.granted() answers the whole question: the level's GRANTS
             # set OR the stage list approves, and NEVER_GRANTED refuses the push
-            # ahead of both. Do NOT re-test `pending in auto` in front of it -
-            # that made the stage list mandatory, so the level dial could never
-            # approve anything on its own and manual/assisted/auto behaved
-            # identically at `ready` with the shipped (empty) config.
-            if approvals.granted(pending, sorted(auto)):
+            # and the plan ahead of both. Do NOT re-test `pending in auto` in
+            # front of it - that made the stage list mandatory, so the level dial
+            # could never approve anything on its own and manual/assisted/auto
+            # behaved identically at `ready` with the shipped (empty) config.
+            if pending in APPROVAL_FIELD and approvals.granted(pending, sorted(auto)):
                 fields[APPROVAL_FIELD[pending]] = 1
             state.set_fields(conn, args.task, **fields)
         run = state.get_run(conn, args.task)
@@ -487,10 +503,20 @@ def main() -> int:
                      if approvals.granted(approvals.PUSH, sorted(auto)) else
                      "Committed. Wait for CEO push approval (approve.py --gate push). "
                      "git push is hook-blocked until then."),
+            "plan": ("Plan awaiting CEO approval. Present it, and wait for the CEO to "
+                     "approve (approve.py --gate plan). advance.py will not leave "
+                     f"'{cur}' until that is recorded, at any approvals level."),
         }
         if run["stage"] == "done":
             return finish_or_wait_for_merge(args.task, run)
-        return result("park", args.task, run, msgs.get(run["awaiting_human"], "awaiting human."))
+        if pending is None:
+            return result("advanced", args.task, run,
+                          f"checkpoint(s) approved: '{cur}' -> '{nxt}' "
+                          f"(owner: {stage_owner(pipeline, nxt, args.task, which)}). Proceed.")
+        return result("park", args.task, run, msgs.get(
+            run["awaiting_human"],
+            f"awaiting human: checkpoint '{pending}' has no approval field and cannot "
+            f"be recorded - fix the stage's checkpoints in pipeline.json."))
 
     # 3. Gated autonomous stage - run the exit gate deterministically.
     write_gate_marker(args.task, cur)

@@ -897,7 +897,7 @@ def decide() -> int:
             #     `ready` on build, `approval` on plan, and whatever a later flow
             #     declares. Same reason as the drive branch above - the work is a
             #     human's - stated once for every flow instead of once per stage
-            #     name. Both spellings count; see CHECKPOINT_KEYS.
+            #     name. The key is `checkpoints`, the only spelling any reader accepts.
             #   - `awaiting_human` set: a human owns the run and there is
             #     nothing to demand of the orchestrator. Same reason the
             #     checkpoint branches above continue rather than block.
@@ -964,15 +964,12 @@ def decide() -> int:
         # task-0018's Critical restated, which is why both directions are tested
         # for both flows.
         #
-        # WHAT THIS DOES NOT DO: it stops the conveyor driving `approval`; it
-        # does not give the plan flow a checkpoint. There is no column for one in
-        # run.db, no branch for one in advance.py, and advance.stage_checkpoints()
-        # filters to `commit` and `push`, so a hand-run `advance.py --task X` on
-        # `approval` still walks it to `breakdown` - measured, because an absent
-        # `exit_gate` returns configured=True AND passed=True from gate.py. The
-        # automatic hole is closed: nothing instructs anyone to do it every stop.
-        # The remaining one is the KNOWN GAP noted in pipeline.json and has its
-        # own follow-up task.
+        # This hook only stops the conveyor driving `approval`. What stops a
+        # hand-run `advance.py --task X` walking it to `breakdown` is the plan
+        # checkpoint itself (task-0089): run.db plan_approved, parked on by
+        # advance.py, recorded by approve.py --gate plan. An absent `exit_gate`
+        # returns configured=True AND passed=True from gate.py, so that
+        # checkpoint is the only thing that holds the stage.
         #
         # The BLOCKED clause is the same "a blocked task still owns its dirty
         # tree" the second bullet states, spelled without going through a stage

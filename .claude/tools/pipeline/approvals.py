@@ -21,6 +21,7 @@ What no level ever grants:
   - merging into the main branch. That happens in the web UI, by a human. The
     agent stops at a pushed branch and a merge-request link, always.
   - moving a task to done. That needs the merge above, so it needs the human.
+  - approving a plan, which is what lets the breakdown into tasks begin.
   - answering the questions raised while planning. That information exists only
     in the CEO's head.
 
@@ -58,7 +59,7 @@ LEVELS = (MANUAL, ASSISTED, AUTO)
 TAKE = "take"              # move a task out of the queue into work
 COMMIT = "commit"
 PUSH = "push"
-PLAN_APPROVAL = "approval"  # the CEO signs off a plan
+PLAN = "plan"              # the CEO signs off a plan (plan flow, stage `approval`)
 TRUNK_PUSH = "trunk_push"   # solo mode: publish the trunk itself, once
 
 GRANTS = {
@@ -72,8 +73,14 @@ GRANTS = {
 # and not enforced, so the orchestrator followed the permissive document.
 # TRUNK_PUSH joins it for the same reason and one more: it is the one step that
 # publishes the trunk, so it is recorded per push by the CEO in chat
-# (approve.py --trunk-push), never handed over wholesale by a level.
-NEVER_GRANTED = frozenset({PUSH, TRUNK_PUSH})
+# (approve.py --trunk-push), never handed over wholesale by a level. PLAN is the
+# CEO's signature on a plan: closer to a push than to a commit, because every
+# task below an approved plan inherits its mistakes.
+NEVER_GRANTED = frozenset({PUSH, TRUNK_PUSH, PLAN})
+
+# Which run.db column records each checkpoint's approval. One table for every
+# reader: advance.py parks on it, approve.py writes it.
+APPROVAL_FIELD = {COMMIT: "commit_approved", PUSH: "push_approved", PLAN: "plan_approved"}
 
 DESCRIPTIONS = {
     MANUAL: "ask at every checkpoint: which task, the commit, the push",

@@ -1866,9 +1866,8 @@ class ScaffoldWritesABusyMarkerTest(unittest.TestCase):
 
 # The plan flow, as a literal, in the shape task-0020 gave it. Same reason
 # BUILD_PIPELINE is a literal: these assertions must survive an edit to
-# .agentry/pipeline.json. `approval` carries `checkpoint` SINGULAR, which is
-# what the real file says and what advance.stage_checkpoints() does not read -
-# the difference is load-bearing below, so it is reproduced rather than tidied.
+# .agentry/pipeline.json. `approval` carries `checkpoints` in the plural, like
+# every other stage (task-0089 settled the key; the singular has no reader).
 PLAN_PIPELINE = {
     "retry_budget": 3,
     "pipelines": {"plan": {
@@ -1877,7 +1876,7 @@ PLAN_PIPELINE = {
             {"name": "formalize", "owner": "architect"},
             {"name": "draft", "owner": "architect"},
             {"name": "plan-review", "owner": "reviewer"},
-            {"name": "approval", "owner": "ceo", "checkpoint": "plan"},
+            {"name": "approval", "owner": "ceo", "checkpoints": ["plan"]},
             {"name": "breakdown", "owner": "product-manager"},
             {"name": "done", "owner": "ceo"},
         ],
@@ -2121,10 +2120,9 @@ class CheckpointStageFromConfigTest(unittest.TestCase):
                                       set_fields=calls))
         self.assertEqual(0, calls.call_count)
 
-    def test_both_spellings_of_the_checkpoint_key_count(self):
-        # `approval` says `checkpoint`, `ready` says `checkpoints`, and no reader
-        # in the tree reads the singular. Pinned so that normalising the odd one
-        # out cannot quietly unprotect the stage.
+    def test_both_flows_mark_their_checkpoint_stage_with_the_plural_key(self):
+        # `approval` and `ready` both say `checkpoints`; the singular spelling
+        # has no reader, so a stage that used it would silently be no checkpoint.
         self.assertEqual(("approval",), state.checkpoint_stages(PLAN_PIPELINE, state.PLAN))
         self.assertEqual(("ready",), state.checkpoint_stages(BUILD_PIPELINE, state.BUILD))
 
@@ -2152,15 +2150,15 @@ class CheckpointStageFromConfigTest(unittest.TestCase):
         # becoming a hidden default.
         no_cp = json.loads(json.dumps(PLAN_PIPELINE))
         for s in no_cp["pipelines"]["plan"]["stages"]:
-            s.pop("checkpoint", None)
+            s.pop("checkpoints", None)
         self.assertEqual((), state.checkpoint_stages(no_cp, state.PLAN))
 
     def test_the_word_ready_is_gone_from_the_decide_source(self):
         # The literal is the thing being removed, so its absence is the
         # assertion. Two readers had it; the run loop's remaining `ready`
         # branches key on commit and push, which are build-only columns in
-        # run.db, and generalising those needs the checkpoint that does not
-        # exist yet - so they stay and are counted here rather than banned.
+        # run.db, and generalising those is not this test's business - so they
+        # stay and are counted here rather than banned.
         src = inspect.getsource(stop_gate.decide)
         code = "\n".join(ln for ln in src.splitlines() if not ln.strip().startswith("#"))
         self.assertEqual(2, code.count('== "ready"'))
