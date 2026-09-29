@@ -36,8 +36,8 @@ are gated stage machines registered and advanced through the same
 | Level | Grants without asking | What still needs the CEO |
 |---|---|---|
 | `manual` | nothing | every checkpoint: which task to take, the commit, the push |
-| `assisted` | take a task, commit | the push |
-| `auto` | all of the above, then it takes the next ready task | the push, moving a task to `done` (it follows the merge), answering planning questions - no level ever grants these; merging into `main` is the CEO's in `pr` mode, and in `solo` mode follows the commit approval |
+| `assisted` | commit | which task to take (the CEO starts each one, and the conveyor stops after it), the push |
+| `auto` | the commit, and taking the next ready task on its own when the current one is done | the push, moving a task to `done` (it follows the merge), answering planning questions - no level ever grants these; merging into `main` is the CEO's in `pr` mode, and in `solo` mode follows the commit approval |
 
 The push is absent from every "grants" cell on purpose: `approvals.NEVER_GRANTED`
 refuses it at every level, and a per-stage `auto_approve` listing it does nothing

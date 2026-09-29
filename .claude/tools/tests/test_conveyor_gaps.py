@@ -90,7 +90,7 @@ class _FakeConn:
 
 def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
                 set_fields=None, debt=(), mem_debt=(), count_nags=False,
-                busy=False, any_busy=False, latest=None) -> str | None:
+                busy=False, any_busy=False, latest=None, level=None) -> str | None:
     """stop_gate.decide() over a synthetic run set. Returns the block reason, or
     None when the hook allowed the stop. No DB, no git, no task files.
 
@@ -116,9 +116,17 @@ def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
     it made two cases in DocumentationDebtTest fail because earlier subtests had
     already spent the budget for the same debt key. Off, `debt_nags` returns 1,
     so each call behaves as a first stop. DebtNagBoundTest turns it on with
-    STATE_DIR pointed at a sandbox, and owns the bound."""
+    STATE_DIR pointed at a sandbox, and owns the bound.
+
+    approvals.granted is mocked True by default, so every checkpoint reads as
+    granted and the level is not under test. Pass `level` to run the REAL
+    approvals.granted against that level instead (task-0050)."""
     queue = [{"id": t, "deps": []} for t in backlog]
     buf = io.StringIO()
+    approval_patch = (
+        unittest.mock.patch.object(stop_gate.approvals, "granted", return_value=True)
+        if level is None else
+        unittest.mock.patch.object(stop_gate.approvals, "read", return_value=level))
     nag_patches = () if count_nags else (
         unittest.mock.patch.object(stop_gate, "debt_nags", return_value=1),
         unittest.mock.patch.object(stop_gate, "clear_debt_nags"))
@@ -136,7 +144,7 @@ def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
             unittest.mock.patch.object(stop_gate, "memory_debt", return_value=list(mem_debt)), \
             unittest.mock.patch.object(stop_gate, "latest_undocumented", return_value=latest), \
             unittest.mock.patch.object(stop_gate, "reconcile_status_drift", return_value=([], [])), \
-            unittest.mock.patch.object(stop_gate.approvals, "granted", return_value=True), \
+            approval_patch, \
             unittest.mock.patch.object(stop_gate, "busy_marker_fresh", return_value=busy), \
             unittest.mock.patch.object(stop_gate, "any_busy_marker_fresh",
                                        return_value=any_busy), \

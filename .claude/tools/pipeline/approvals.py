@@ -9,8 +9,10 @@ Levels, each a superset of the one before:
 
   manual    ask at every checkpoint. Which task to take, the commit, the push.
             The default, and the right setting while someone is at the keyboard.
-  assisted  take the task and commit without asking. Still asks before pushing.
-  auto      everything up to the commit, then pick up the next ready task. For
+  assisted  commit without asking. The CEO starts each task, and the conveyor
+            stops after the current one. Still asks before pushing.
+  auto      the same, plus taking the next ready backlog task on its own once
+            the current one is done (the Stop hook's pickup reads `take`). For
             a night run. Still stops at the push.
 
 What no level ever grants:
@@ -64,7 +66,7 @@ TRUNK_PUSH = "trunk_push"   # solo mode: publish the trunk itself, once
 
 GRANTS = {
     MANUAL: frozenset(),
-    ASSISTED: frozenset({TAKE, COMMIT}),
+    ASSISTED: frozenset({COMMIT}),
     AUTO: frozenset({TAKE, COMMIT}),
 }
 
@@ -84,9 +86,10 @@ APPROVAL_FIELD = {COMMIT: "commit_approved", PUSH: "push_approved", PLAN: "plan_
 
 DESCRIPTIONS = {
     MANUAL: "ask at every checkpoint: which task, the commit, the push",
-    ASSISTED: "take tasks and commit unasked, still ask before pushing",
-    AUTO: "everything through the commit, then take the next ready task. The push, "
-          "the merge and done stay with the CEO",
+    ASSISTED: "commit unasked, but you start each task and the next one waits for you. "
+              "The push is never granted",
+    AUTO: "commit unasked and take the next ready task on its own. The push is never "
+          "granted",
 }
 
 
