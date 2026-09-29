@@ -13,10 +13,15 @@ Idempotent, conflict-safe, fail-open per layer. Used for the fleet rollout
                           install project-root .mcp.json (codegraph MCP);
                           merge settings.json with the v2 hook set using
                           portable $CLAUDE_PROJECT_DIR paths; merge .gitignore.
-  Layer 2 (frontmatter) - pin model IDs (opus -> claude-opus-5,
-                          sonnet/haiku -> claude-sonnet-5), effort:max on rigor
-                          agents, memory:project on learners, per-profile gate
-                          hooks + maxTurns, mcpServers on code-facing agents.
+  Layer 2 (frontmatter) - effort:max on rigor agents, memory:project on
+                          learners, per-profile gate hooks + maxTurns,
+                          mcpServers on code-facing agents. Model aliases
+                          (`opus`, `sonnet`, and any other family name a
+                          target project already uses, e.g. `haiku`) are left
+                          exactly as written: routing is decided per-dispatch
+                          from the family alias, never from a pinned model
+                          id, so this layer must never turn one into the
+                          other (token-policy.md "Routing", task-0093).
                           Hook commands use $CLAUDE_PROJECT_DIR (clone-safe).
   Layer 3 (add agents)  - copy universal agents named via --add-agents when the
                           target has no agents dir yet.
@@ -41,7 +46,10 @@ from pathlib import Path
 
 # --- role maps (mirror the template's frontmatter state) --------------------
 
-EFFORT_MAX = {"reviewer", "security-engineer", "qa-engineer"}
+# qa-engineer is deliberately NOT here: the Phase 5 plan (and
+# test_effort_matches_the_plan) put it at effort: high, not max. It was found
+# here as a drift bug while auditing this set against the plan (task-0093).
+EFFORT_MAX = {"reviewer", "security-engineer"}
 MEMORY_PROJECT = {
     "reviewer", "security-engineer", "qa-engineer", "architect",
     "senior-backend-dev", "senior-frontend-dev", "devops-engineer",
@@ -61,9 +69,6 @@ CODEGRAPH_AGENTS = {"architect", "senior-backend-dev", "senior-frontend-dev",
                     "devops-engineer", "data-engineer", "rapid-prototyper",
                     "incident-response-commander"}
 MAX_TURNS = {"dev": 60, "readonly": 40, "docs": 30}
-
-MODEL_PINS = {"opus": "claude-opus-5", "sonnet": "claude-sonnet-5",
-              "haiku": "claude-sonnet-5"}
 
 COPY_SKILLS = ["self-learning", "new-task", "new-epic"]
 COPY_RULES = ["code-retrieval.md"]
@@ -365,11 +370,9 @@ def patch_agent(path: Path, root: Path) -> list[str]:
     name = path.stem
     changed: list[str] = []
 
-    for alias, pin in MODEL_PINS.items():
-        fm2 = re.sub(rf"^model:\s*{alias}\s*$", f"model: {pin}", fm, flags=re.MULTILINE)
-        if fm2 != fm:
-            changed.append(f"model={pin}")
-            fm = fm2
+    # No model rewriting here. `model:` is a family alias the source template
+    # already ships correctly (routing default sonnet, architect opus); this
+    # layer must never turn an alias into a pinned model id or vice versa.
 
     if name in EFFORT_MAX and not re.search(r"^effort:\s*max\s*$", fm, re.MULTILINE):
         if re.search(r"^effort:", fm, re.MULTILINE):

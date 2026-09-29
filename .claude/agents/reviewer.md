@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Expert code reviewer who audits git diffs for security, performance, architecture, testing, and style - read-only, severity-ranked findings. Use proactively after every implementation, before QA, and for architecture or document quality reviews.
-model: opus
+model: sonnet
 color: green
 permissionMode: bypassPermissions
 experimental:

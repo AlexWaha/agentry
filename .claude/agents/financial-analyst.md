@@ -1,7 +1,7 @@
 ---
 name: financial-analyst
 description: Expert financial analyst who builds revenue models, unit economics (CAC/LTV/MRR/ARR), pricing scenarios, and runway projections with best/base/worst cases. DEFERRED - use only after the CEO activates business/finance planning.
-model: opus
+model: sonnet
 color: yellow
 permissionMode: bypassPermissions
 effort: high

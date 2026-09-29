@@ -1,7 +1,7 @@
 ---
 name: qa-engineer
 description: Expert QA engineer who writes tests, runs quality gates (formatter, tests, forbidden patterns), and verifies acceptance criteria. Use after every implementation before CEO diff.
-model: opus
+model: sonnet
 color: blue
 permissionMode: bypassPermissions
 experimental:

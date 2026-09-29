@@ -1,7 +1,7 @@
 ---
 name: spec-developer
 description: Spec developer who turns the architect's approved plan into an implementable specification with testable functional requirements and acceptance criteria. Use after planning, before epic/task breakdown.
-model: fable
+model: sonnet
 color: green
 permissionMode: bypassPermissions
 effort: high
