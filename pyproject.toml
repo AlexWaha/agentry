@@ -34,6 +34,7 @@ select = ["E", "F", "I", "W", "UP", "FURB", "RUF", "DTZ", "PIE", "ISC"]
 # the file.
 ".claude/tools/tests/test_approvals.py" = ["E402"]
 ".claude/tools/tests/test_approvals_level.py" = ["E402"]
+".claude/tools/tests/test_busy_marker.py" = ["E402"]
 ".claude/tools/tests/test_pretool_gate.py" = ["E402"]
 ".claude/tools/tests/test_pretool_gate_git.py" = ["E402"]
 ".claude/tools/tests/test_conveyor_gaps.py" = ["E402"]

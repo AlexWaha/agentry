@@ -274,9 +274,9 @@ in git a week later.
 
 ### The busy marker is a choice between two failures, not a discipline problem
 
-Until `task-0057` and `task-0064` land, both options are broken and you should
-know which failure you are buying. `task-0067` has landed and shortened the
-second one - see below:
+Until `task-0064` lands, both options are still broken and you should know
+which failure you are buying. `task-0067` and `task-0057` have landed and
+narrowed them - see below:
 
 - **Set `advance.py --busy` and the Stop hook goes quiet.** If the marker
   outlives the reason it was written for - the dispatch returned, the preemption
@@ -345,6 +345,35 @@ the agent fills the doc instead of ordering it to do what it is doing.
 normal path pays seconds rather than the full 900; the full 900 is paid only
 when the scaffold is never filled.
 
+**`task-0057` gave the marker an owner, and the file is no longer yours to
+write.** `tools/pipeline/busy.py` is the only code that knows the marker's file
+name and format; `advance.py` (`--busy`/`--idle`, and the bracket around every
+gate), `handoff.py` and the Stop hook all go through it. Three consequences:
+
+- **The marker names the SESSION, not the writer.** It records `owner_pid`, the
+  Claude Code process, read from `CLAUDE_PID` (Claude Code exports it into every
+  command it runs - measured, and it is the `claude.exe` three shells above the
+  script). `advance.py` records nothing of its own, because it exits at once. A
+  marker whose session has exited reads OWNER_GONE and is treated as released
+  however young it is, probed through `supervisor.pid_alive()`. Outside Claude
+  Code there is no `CLAUDE_PID`, so no owner is recorded and only the timeout
+  ends the marker - `--busy` says so in its output. The probe's limit:
+  `supervisor.pid_alive()` reads every "cannot tell" (a reused pid, an
+  OpenProcess failure other than 87, a probe exception) as ALIVE, so such a
+  marker stays FRESH until its timeout, and only the timeout ends it.
+- **The timeout is a backstop and it is now reported.** When a marker has expired,
+  lost its owner or is unreadable, the Stop hook's nag for that task ends with a
+  sentence saying which, and the `--idle` command that clears it. A stale marker
+  is therefore no longer indistinguishable from no marker. That sentence is
+  byte-stable on purpose: the reason-repeat backstop compares nag text.
+- **One marker covers one task.** `--busy task-0009,task-0010` is refused with
+  exit 1, and a hand-written file whose `task` disagrees with its filename is
+  ignored. A gate that raises still releases its marker (`busy.hold()`).
+
+What it does NOT change: a marker that outlives its reason inside a live session
+still silences the hook until its timeout, so `--idle` in the same command
+sequence as whatever ended the reason is still the rule below.
+
 The root is that two watchdogs share one counter with opposite meanings.
 `continuations` is "how often I nagged" to the Stop hook and "the session is
 looping" to the supervisor, and nagging about an idle task is indistinguishable
@@ -358,7 +387,8 @@ loop from a slow worker needs progress evidence from outside `continuations`
 and a halt that reports nothing is the only failure mode this pipeline cannot
 recover from on its own. Clear a marker with `--idle` in the same command
 sequence as whatever ended its reason, never later. Never hand-write the JSON -
-the tool exists and a file written by hand has no owner. And if a running daemon
+the tool exists, and a file written by hand has no owner and is ignored when it
+names the wrong task. And if a running daemon
 carries code whose defect you are fixing, stop it for the duration
 (`supervisor.py --stop`) and say so: a watchdog on known-buggy code can park the
 task that fixes it.
@@ -369,9 +399,10 @@ forbidden, `approve.py --reject` moves a task the wrong way (to `implement`), an
 `stop_gate.decide()`'s in-flight branch outranks its drift reconciler, so moving
 the file back to `backlog/` does not quiet the hook either. Until `task-0059`
 lands, a preempted run keeps being demanded by the Stop hook. If you silence it
-with a busy marker, write into the marker's `note` field that it is NOT a
-dispatch - a signal you have to lie to is a missing state, and an undocumented
-lie in the pipeline's own records is worse than the nagging it avoids.
+with a busy marker, say in its stage label that it is NOT a dispatch
+(`--busy preempted-not-a-dispatch`) - a signal you have to lie to is a missing
+state, and an undocumented lie in the pipeline's own records is worse than the
+nagging it avoids.
 
 ## Steering a running agent (do not wait for the report)
 

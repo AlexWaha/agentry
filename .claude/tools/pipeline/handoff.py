@@ -49,6 +49,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import busy
 import state
 
 REQUIRED_SECTIONS = ("What was done", "Key decisions", "Files touched",
@@ -316,15 +317,9 @@ def drop_scaffold_markers(still_owed: set) -> None:
     it expires, which is the pre-existing behaviour, never an exception out of
     the debt check."""
     try:
-        for p in state.STATE_DIR.glob("gate-*.json"):
-            task = p.name[len("gate-"):-len(".json")]
-            if task in still_owed:
-                continue
-            try:
-                if json.loads(p.read_text(encoding="utf-8")).get("stage") == "handoff":
-                    state.clear_busy_marker(task)
-            except (OSError, ValueError):
-                continue
+        for task in busy.tasks():
+            if task not in still_owed and busy.read(task).stage == "handoff":
+                busy.release(task)
     except Exception:
         pass
 
@@ -599,7 +594,7 @@ def scaffold(task: str, force: bool = False) -> tuple[bool, str]:
     # instruction it repeats is to do the thing already being done. Fail-open:
     # an unwritable marker costs nagging, never the scaffold.
     try:
-        state.write_busy_marker(task, "handoff")
+        busy.acquire(task, "handoff")
     except Exception:
         pass
     return True, (f"scaffolded {rel(path)} (merge_commit: {commit}). Fill every FILL-ME "

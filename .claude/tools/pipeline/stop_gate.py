@@ -59,10 +59,10 @@ import json
 import re
 import subprocess
 import sys
-import time
 import traceback
 
 import approvals
+import busy
 import mode
 import state
 
@@ -381,19 +381,40 @@ def read_backlog() -> list[dict]:
 
 def busy_marker_fresh(task: str) -> bool:
     """True when tools/pipeline wrote a busy-marker for this task (a long gate is
-    running, or the orchestrator dispatched a subagent for the stage) and it has
-    not gone stale. Lets the Stop hook stay quiet instead of nagging while real
-    work is in flight. Fail-open: any error -> not fresh (nag as before)."""
+    running, or the orchestrator dispatched a subagent for the stage) and it is
+    still live: its owning session is running and its timeout has not run out.
+    Lets the Stop hook stay quiet instead of nagging while real work is in
+    flight. Fail-open: any error -> not fresh (nag as before)."""
     try:
-        p = state.busy_marker_path(task)
-        if not p.is_file():
-            return False
-        d = json.loads(p.read_text(encoding="utf-8"))
-        started = float(d.get("started", 0))
-        timeout = float(d.get("timeout", 900))
-        return (time.time() - started) < timeout
+        return busy.read(task).fresh
     except Exception:
         return False
+
+
+def busy_marker_note(task: str) -> str:
+    """What to append to a nag when the task's marker exists but no longer
+    silences anything, so a stale marker is told apart from no marker. Empty for
+    a live marker, an absent one, or any error.
+
+    BYTE-STABLE for a given marker: no elapsed time, only the recorded timeout
+    and owner. The reason-repeat backstop compares nag text, and a sentence that
+    changed every stop would hand the run a fresh budget on every one."""
+    try:
+        m = busy.read(task)
+        clear = (f"clear it with: python .claude/tools/pipeline/advance.py --task {task} "
+                 f"--idle")
+        if m.status == busy.EXPIRED:
+            return (f" (The busy marker for {task} EXPIRED after its {int(m.timeout)}s "
+                    f"timeout and no longer silences this hook; {clear}.)")
+        if m.status == busy.OWNER_GONE:
+            return (f" (The busy marker for {task} is ignored: its owner, session pid "
+                    f"{m.owner_pid}, is gone; {clear}.)")
+        if m.status == busy.INVALID:
+            return (f" (A busy marker for {task} exists but is unreadable, names another "
+                    f"task or could not be checked, so it is ignored; {clear}.)")
+    except Exception:
+        pass
+    return ""
 
 
 def any_busy_marker_fresh() -> bool:
@@ -411,8 +432,7 @@ def any_busy_marker_fresh() -> bool:
     Fail-open: any error -> nothing is busy, which nags rather than going
     silent."""
     try:
-        return any(busy_marker_fresh(p.name[len("gate-"):-len(".json")])
-                   for p in state.STATE_DIR.glob("gate-*.json"))
+        return any(busy_marker_fresh(task) for task in busy.tasks())
     except Exception:
         return False
 
@@ -833,7 +853,7 @@ def decide() -> int:
                 return block(
                     f"{r['task']} checkpoint approved (awaiting_human={aw}). Perform the "
                     f"git {aw} now, then run: python .claude/tools/pipeline/advance.py --task {r['task']}. "
-                    f"Do not ask the user.")
+                    f"Do not ask the user.{busy_marker_note(r['task'])}")
             # Parked, unapproved checkpoint -> not autonomously advanceable.
             if stage == "ready" and aw in ("commit", "push"):
                 continue
@@ -870,11 +890,13 @@ def decide() -> int:
                 if status == state.ST_GATE_FAILED:
                     return block(
                         f"{r['task']} stage '{stage}' gate FAILED. Fix the cause, then re-run: "
-                        f"python .claude/tools/pipeline/advance.py --task {r['task']}. Do not ask the user.")
+                        f"python .claude/tools/pipeline/advance.py --task {r['task']}. Do not ask the user."
+                        f"{busy_marker_note(r['task'])}")
                 return block(
                     f"{r['task']} is at stage '{stage}'. Finish the stage work (dispatch the owning "
                     f"subagent if needed), then run: python .claude/tools/pipeline/advance.py "
-                    f"--task {r['task']}. Do not ask the user whether to continue.")
+                    f"--task {r['task']}. Do not ask the user whether to continue."
+                    f"{busy_marker_note(r['task'])}")
             # A LIVE RUN ON A STAGE ITS OWN FLOW DEFINES AND editing_stages DOES
             # NOT NAME (FR-39). Before this branch such a run matched nothing in
             # the loop and the hook said not one word about it. That was
@@ -912,7 +934,8 @@ def decide() -> int:
                 f"pipelines.{which}.editing_stages does not list, so no branch of the Stop "
                 f"hook drives it. Run: python .claude/tools/pipeline/advance.py "
                 f"--task {r['task']} - it advances the stage or names the recovery. If the "
-                f"stage is real work, add it to editing_stages. Do not ask the user.")
+                f"stage is real work, add it to editing_stages. Do not ask the user."
+                f"{busy_marker_note(r['task'])}")
 
         # Nothing above was driveable. If ANY task has a fresh busy marker, a
         # dispatched agent is working right now and every branch below would be

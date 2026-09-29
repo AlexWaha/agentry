@@ -44,10 +44,13 @@ DEAD     a session THIS supervisor spawned has exited while its run still sits
          in the stage it was spawned for. Process liveness, not a clock.
          Note honestly what this cannot see: a session the supervisor did not
          spawn has no known owner pid, so it can never be classified DEAD and
-         falls through to STALLED instead. The busy marker is no help here -
-         `advance.py --busy` records the pid of the advance.py process itself,
-         which has already exited by the time the marker is read, so the
-         marker's pid is dead for every healthy run. Hence our own registry.
+         falls through to STALLED instead. The busy marker WAS no help here -
+         `advance.py --busy` recorded the pid of the advance.py process itself,
+         which had already exited by the time the marker was read, so its pid
+         was dead for every healthy run. Since task-0057 it records the
+         SESSION's pid (busy.read(task).owner_pid), which is the missing owner;
+         this detector does not read it yet and still tracks only its own
+         registry.
          A spawned session that has exited is SETTLED before anything else is
          decided (settle_spawn): its exit code is read while it is still
          readable, and the relaunch counts as successful only if that code was 0

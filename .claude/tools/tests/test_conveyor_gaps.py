@@ -33,6 +33,7 @@ from __future__ import annotations
 import inspect
 import io
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -50,6 +51,7 @@ sys.path.insert(0, str(TESTS_DIR))
 import advance
 import approvals
 import approve
+import busy
 import gate as gate_module
 import git_state
 import handoff
@@ -90,7 +92,8 @@ class _FakeConn:
 
 def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
                 set_fields=None, debt=(), mem_debt=(), count_nags=False,
-                busy=False, any_busy=False, latest=None, level=None) -> str | None:
+                busy=False, any_busy=False, latest=None, level=None,
+                marker_note="") -> str | None:
     """stop_gate.decide() over a synthetic run set. Returns the block reason, or
     None when the hook allowed the stop. No DB, no git, no task files.
 
@@ -102,7 +105,8 @@ def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
     case: it globs that directory, so a marker for ANY task - one this test never
     heard of - would short-circuit decide() and turn every assertion here into a
     silent None. `busy` / `any_busy` turn them on for the tests that are about
-    the marker itself.
+    the marker itself. busy_marker_note reads that directory too, so it is
+    pinned to `marker_note` (empty unless a test is about the note).
 
     debt / mem_debt default to none, so every pre-existing assertion here is
     about a pipeline with its documentation paid up. `latest` defaults to None
@@ -148,6 +152,8 @@ def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
             unittest.mock.patch.object(stop_gate, "busy_marker_fresh", return_value=busy), \
             unittest.mock.patch.object(stop_gate, "any_busy_marker_fresh",
                                        return_value=any_busy), \
+            unittest.mock.patch.object(stop_gate, "busy_marker_note",
+                                       return_value=marker_note), \
             redirect_stdout(buf):
         stop_gate.decide()
     for p in nag_patches:
@@ -872,17 +878,16 @@ class BusyMarkerTest(unittest.TestCase):
     documented call, not hand-written marker JSON."""
 
     def setUp(self):
-        self.tmp = Path(__file__).resolve().parent / "_tmp_state"
-        self.tmp.mkdir(exist_ok=True)
+        self.tmp = tmproot.sandbox(self, "busystate")
         patcher = unittest.mock.patch.object(state, "STATE_DIR", self.tmp)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.addCleanup(self._clean)
-
-    def _clean(self):
-        for f in self.tmp.glob("gate-*.json"):
-            f.unlink()
-        self.tmp.rmdir()
+        # The marker records the session pid from the environment; a suite run
+        # inside Claude Code would otherwise make these depend on that session.
+        env = unittest.mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop(busy.SESSION_PID_ENV, None)
 
     def _cli(self, *args) -> dict:
         buf = io.StringIO()
@@ -905,8 +910,33 @@ class BusyMarkerTest(unittest.TestCase):
     def test_stale_marker_does_not_keep_the_hook_quiet(self):
         with unittest.mock.patch.object(advance, "GATE_TIMEOUT", 0):
             self._cli("--task", "task-0007", "--busy", "implement")
-        self.assertTrue(advance.gate_marker_path("task-0007").is_file())
+        self.assertTrue(busy.path("task-0007").is_file())
         self.assertFalse(stop_gate.busy_marker_fresh("task-0007"))
+
+
+class StaleMarkerIsNamedInTheNagTest(unittest.TestCase):
+    """task-0057: a marker that no longer silences the hook must say so in the
+    nag it failed to prevent, at every site that consults the marker."""
+
+    NOTE = " (marker note)"
+
+    def test_every_run_nag_carries_the_note(self):
+        cases = {
+            "approved checkpoint": ([run(stage="ready", awaiting_human="commit",
+                                         commit_approved=1)], BUILD_PIPELINE),
+            "gate failed": ([run(stage="implement", status=state.ST_GATE_FAILED)],
+                            BUILD_PIPELINE),
+            "stage in progress": ([run(stage="implement")], BUILD_PIPELINE),
+            "unlisted stage": ([plan_run(stage="draft")], PLAN_PIPELINE_UNSET),
+        }
+        for name, (runs, pipeline) in cases.items():
+            with self.subTest(site=name):
+                reason = decide_with(runs, pipeline=pipeline, marker_note=self.NOTE)
+                self.assertTrue(reason.endswith(self.NOTE), reason)
+
+    def test_no_note_no_added_text(self):
+        reason = decide_with([run(stage="implement")], pipeline=BUILD_PIPELINE)
+        self.assertNotIn("marker", reason)
 
 
 class MergeEvidenceTest(unittest.TestCase):
@@ -1851,6 +1881,10 @@ class ScaffoldWritesABusyMarkerTest(unittest.TestCase):
             p = unittest.mock.patch.object(target, attr, value)
             p.start()
             self.addCleanup(p.stop)
+        env = unittest.mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop(busy.SESSION_PID_ENV, None)
 
     def test_scaffolding_marks_the_task_busy(self):
         self.assertFalse(stop_gate.busy_marker_fresh("task-0099"))
@@ -1879,7 +1913,7 @@ class ScaffoldWritesABusyMarkerTest(unittest.TestCase):
         # A marker written by advance.py around a live stage belongs to a RUN.
         # Unlinking it would start nagging an agent that is still working, so
         # only markers this module wrote (stage == "handoff") are touched.
-        state.write_busy_marker("task-0100", "implement")
+        busy.acquire("task-0100", "implement")
         handoff.drop_scaffold_markers(set())
         self.assertTrue(stop_gate.busy_marker_fresh("task-0100"))
 

@@ -51,6 +51,7 @@ import re
 import sys
 
 import approvals
+import busy
 import git_state
 import mode
 import pretool_gate
@@ -62,20 +63,6 @@ GATE_TIMEOUT = 900
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 CRITERIA_RE = re.compile(r"##\s*Acceptance Criteria\s*\n(.*?)(\n##\s|\Z)", re.DOTALL)
 CHECKBOX_RE = re.compile(r"-\s*\[[ x]\]")
-
-
-def gate_marker_path(task: str):
-    return state.busy_marker_path(task)
-
-
-def write_gate_marker(task: str, stage: str) -> None:
-    """Heartbeat so stop_gate.py knows a long gate is legitimately running and
-    must not nag or trip the continuation ceiling while it waits."""
-    state.write_busy_marker(task, stage, GATE_TIMEOUT)
-
-
-def clear_gate_marker(task: str) -> None:
-    state.clear_busy_marker(task)
 
 
 def _frontmatter(text: str) -> dict:
@@ -354,21 +341,33 @@ def main() -> int:
     args = parser.parse_args()
 
     # Busy marker bookkeeping - no FSM transition, so handle it and leave.
-    # advance.py already brackets its own long gates with these two calls; a
-    # dispatched subagent is the same situation seen from the orchestrator's
-    # side, and it had no call to make until now.
+    # advance.py brackets its own long gates with busy.hold(); a dispatched
+    # subagent is the same situation seen from the orchestrator's side, and it
+    # outlives this process, so it is acquired here and released by --idle.
     if args.busy:
-        write_gate_marker(args.task, args.busy)
+        try:
+            busy.acquire(args.task, args.busy, GATE_TIMEOUT)
+        except (ValueError, OSError) as exc:
+            print(json.dumps({
+                "action": "error", "task": args.task,
+                "message": f"Busy marker NOT written: {exc}. The Stop hook keeps driving "
+                           f"this task.",
+            }, indent=2))
+            return 1
+        owner = busy.read(args.task).owner_pid
+        ends = (f"when session pid {owner} exits, or in {GATE_TIMEOUT}s" if owner else
+                f"in {GATE_TIMEOUT}s only (no session pid in the environment, so nothing "
+                f"else can end it)")
         print(json.dumps({
             "action": "busy", "task": args.task, "stage": args.busy,
-            "message": f"Busy marker written for stage '{args.busy}' (expires in "
-                       f"{GATE_TIMEOUT}s). The Stop hook stays quiet on {args.task} until "
-                       f"then. Clear it when the subagent returns: python "
-                       f".claude/tools/pipeline/advance.py --task {args.task} --idle.",
+            "message": f"Busy marker written for stage '{args.busy}'; it ends {ends}. The "
+                       f"Stop hook stays quiet on {args.task} until then. Clear it when the "
+                       f"subagent returns: python .claude/tools/pipeline/advance.py --task "
+                       f"{args.task} --idle.",
         }, indent=2))
         return 0
     if args.idle:
-        clear_gate_marker(args.task)
+        busy.release(args.task)
         print(json.dumps({
             "action": "idle", "task": args.task,
             "message": "Busy marker cleared - the Stop hook drives this task again.",
@@ -524,11 +523,8 @@ def main() -> int:
             f"be recorded - fix the stage's checkpoints in pipeline.json."))
 
     # 3. Gated autonomous stage - run the exit gate deterministically.
-    write_gate_marker(args.task, cur)
-    try:
+    with busy.hold(args.task, cur, GATE_TIMEOUT):
         gate = run_gate(pipeline, cur, args.task, which)
-    finally:
-        clear_gate_marker(args.task)
 
     if not gate["configured"]:
         state.set_fields(conn, args.task, stage_status=state.ST_BLOCKED)
