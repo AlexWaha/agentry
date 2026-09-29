@@ -3,12 +3,18 @@
 
 Before any NEW task registers in the pipeline, every completed task above the
 configured baseline must have a valid handoff doc in .agentry/tasks/handoffs/.
-The doc is written by the NEXT task's assignee IN ITS OWN WORDS - the act of
-writing forces the incoming agent to absorb the previous task's context (task
-file, merge diff, gate history) plus the project context and its own task's
-spec, before implementing anything.
+The doc is written by the NEXT task's assignee, who is instructed to write it in
+its own words, so that the writing is the context absorption (task file, merge
+diff, gate history, plus the project context and its own task's spec, before
+implementing anything). That is an instruction, not a check: validate_handoff()
+verifies structure only - the frontmatter `task:` matches the filename, the six
+required headings, no FILL-ME marker, at least 40 non-space characters per
+section and 500 in the body, the `Context loaded` confirmations, the byte cap.
+It does not compare the text with the task file, so a pasted task description
+that meets those checks passes.
 
-Enforced deterministically in three places (never by prompt goodwill):
+Enforced deterministically in three places (never by prompt goodwill) - the
+presence and structure of the doc, not who wrote it or how:
   - advance.py refuses registration of a new task while handoff debt exists;
   - stop_gate.py blocks "start next task" until the doc is written;
   - pretool_gate.py (config flag handoff.hard_edit_gate) freezes code edits

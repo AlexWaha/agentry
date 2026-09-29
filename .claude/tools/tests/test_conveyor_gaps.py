@@ -984,6 +984,18 @@ class MergeEvidenceTest(unittest.TestCase):
         self.assertEqual("park", out["action"])
         self.assertIn("does not carry this task yet", out["message"])
 
+    def test_park_message_names_who_merges_per_workflow_mode(self):
+        cases = (("solo", "locally", "web UI"), ("pr", "web UI", "locally"))
+        for mode, present, absent in cases:
+            with self.subTest(mode=mode), \
+                    unittest.mock.patch.object(advance.pretool_gate, "workflow_mode",
+                                               return_value=mode):
+                out = self._finish({"branch": "bugfix/task-0001"},
+                                   refs=("origin/bugfix/task-0001",))
+            self.assertEqual("park", out["action"])
+            self.assertIn(present, out["message"])
+            self.assertNotIn(absent, out["message"])
+
 
 class LocalMergeDetectionTest(unittest.TestCase):
     """task-0048: merge detection read only remote refs, so in `solo` mode - the

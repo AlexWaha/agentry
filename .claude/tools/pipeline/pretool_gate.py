@@ -1537,7 +1537,9 @@ def check_push_target(command: str, branch: str) -> tuple:
             "This push cannot be resolved to a target branch, so the gate refuses "
             "rather than guessing (an unresolvable push gates). Run git push "
             "directly instead of wrapping it in another shell, and name the branch: "
-            "git push -u origin <type>/task-<id>. The CEO merges via a PR."), False
+            "git push -u origin <type>/task-<id>. The trunk is reached by a pull "
+            "request in 'pr' mode or by an approved local merge in 'solo' mode, "
+            "never by a push."), False
     destructive = None
     for args in (a for sub, a in git_invocations(command) if sub == "push"):
         destructive = destructive or push_destructive_reason(args)
