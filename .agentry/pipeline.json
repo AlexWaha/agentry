@@ -33,7 +33,8 @@
     "destructive_allow_if": [],
     "repl_write_keyword": "",
     "repl_write_patterns": [],
-    "dev_forbidden_commands": []
+    "dev_forbidden_commands": [],
+    "forbid_piped_test_suite": true
   },
   "handoff": {
     "_comment": "Forced context-absorption chain: before any NEW task registers, every done task with id above baseline must have a valid doc in dir. The doc is written by the NEXT task's assignee in its own words. baseline: '' for a fresh project (every done task covered); when adopting mid-project, set it at onboarding to the highest pre-existing done task id (those are grandfathered). Enforced by advance.py (registration refusal), stop_gate.py (start-next-task block) and pretool_gate.py (hard_edit_gate code-edit freeze). Tools: handoff.py --check / --for / --inject / --waive (waive is orchestrator-only, CEO approval required).",

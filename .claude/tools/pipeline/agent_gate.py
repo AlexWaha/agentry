@@ -439,6 +439,9 @@ def handle_readonly(tool: str, ti: dict, cwd: str = "") -> int:
             return deny("approve.py is orchestrator-only.")
         if runs_waive(command):
             return deny("handoff.py --waive is orchestrator-only - it records a CEO waiver.")
+        piped = pretool_gate.check_piped_test_suite(command)
+        if piped != allow():
+            return piped
         frag = bash_mutates(command)
         if frag:
             return deny(f"Read-only agent: mutating Bash denied (matched: '{frag}'). "
@@ -461,6 +464,9 @@ def handle_docs(tool: str, ti: dict, cwd: str = "") -> int:
             return deny("approve.py is orchestrator-only.")
         if runs_waive(command):
             return deny("handoff.py --waive is orchestrator-only - it records a CEO waiver.")
+        piped = pretool_gate.check_piped_test_suite(command)
+        if piped != allow():
+            return piped
         frag = bash_mutates(command)
         if frag:
             return deny(f"Docs agent: mutating Bash denied (matched: '{frag}'). "
