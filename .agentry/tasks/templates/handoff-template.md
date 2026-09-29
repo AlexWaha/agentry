@@ -9,8 +9,9 @@ merge_commit: {{MERGE_COMMIT}}
 # Handoff: {{TASK}} - {{TITLE}}
 
 > Written by the NEXT task's assignee BEFORE implementing anything. Write in
-> your own words - the writing is the context absorption. A pasted task
-> description fails validation (handoff.py --check). All {{...}} tokens are
+> your own words - the writing is the context absorption. That is an
+> instruction: handoff.py --check verifies structure only (headings, no
+> FILL-ME, minimum length, Context loaded), not authorship. All {{...}} tokens are
 > runtime tokens filled by `handoff.py --for`, not onboarding placeholders.
 
 ## What was done

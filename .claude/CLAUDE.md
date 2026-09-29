@@ -56,14 +56,22 @@ state and gate checks live in deterministic hooks (`.claude/tools/pipeline/` +
 
 - **All questions are answered in plan mode, before execution.** Mid-pipeline you
   do not ask the CEO clarifying questions; missing data means park and send back.
-- **The CEO re-engages at two tail checkpoints:** approve the commit, then
-  approve the push. The commit checkpoint is where the CEO reads the diff
-  (Claude Code's built-in `/diff`); rejecting there sends the task back to
-  `implement`. The `PreToolUse` hook blocks `git commit`/`git push`
+- **The CEO re-engages at the tail checkpoints `workflow.mode` leaves in place:**
+  the commit, and - in `pr` mode only - the push after it. Where the last one falls follows
+  `workflow.mode` in `pipeline.json`: the push checkpoint in `pr` mode, the
+  commit checkpoint in `solo` mode, where the local merge follows (`advance.py`
+  `stage_checkpoints()` drops the push checkpoint there); the full split is in
+  `rules/git-workflow.md`. Solo mode does not weaken push approval:
+  `workflow.push_needs_approval` is independent of the mode, and
+  `approvals.NEVER_GRANTED` refuses both `PUSH` and `TRUNK_PUSH` at every level,
+  so a push that does happen in solo mode, including the one-shot trunk push,
+  still needs its recorded approval. The commit checkpoint is where the CEO
+  reads the diff (Claude Code's built-in `/diff`); rejecting there sends the task
+  back to `implement`. The `PreToolUse` hook blocks `git commit`/`git push`
   until you record the approval via `tools/pipeline/approve.py` (run it only
-  after the CEO approves). A checkpoint listed in the `ready` stage's
-  `auto_approve` (pipeline.json) is approved automatically - human participation
-  there is optional by CEO decision.
+  after the CEO approves). The commit checkpoint, when listed in the `ready`
+  stage's `auto_approve` (pipeline.json), is approved automatically - human
+  participation there is optional by CEO decision. The push never is.
 - **Between start and the checkpoints you are autonomous.** Drive each task with
   `tools/pipeline/advance.py` (it runs the real exit gate); fix gate/lint/review
   failures and re-run, up to the retry budget, then park `blocked` and surface it.
@@ -73,9 +81,13 @@ state and gate checks live in deterministic hooks (`.claude/tools/pipeline/` +
 - **Pipelined but edit-serialized:** one task in an editing stage at a time;
   parked tasks wait for the CEO while the next ready task runs.
 - **Handoff chain:** before a new task registers, the previous completed task's
-  handoff doc must exist and validate in `.agentry/tasks/handoffs/` - written by
-  the NEXT task's assignee in its own words (forced context absorption). Enforced
-  by hooks; see `rules/orchestration.md` step 0 and `tools/pipeline/handoff.py`.
+  handoff doc must exist and validate in `.agentry/tasks/handoffs/`. The NEXT
+  task's assignee is to write it in its own words; that is an instruction, and
+  validation checks structure only (frontmatter `task:` matches the filename,
+  the six required headings, no `FILL-ME` marker, at least 40 non-space
+  characters per section, at least 500 in the body, the two `Context loaded`
+  confirmations, and a byte cap), not authorship. Enforced by hooks; see
+  `rules/orchestration.md` step 0 and `tools/pipeline/handoff.py`.
 - **Memory chain:** after the handoff doc, the finished task is distilled into
   the memory store and stamped (`tools/memory/update.py`) before the next task
   starts - refused at registration by `advance.py`, and blocking the Stop hook
@@ -263,7 +275,7 @@ the file `backlog/ -> active/` itself when the CEO says to start it, and moves
 it `active/ -> done/` itself once git confirms the branch is merged into
 `main` - never before.
 
-Task workflow: Take from `backlog/` → Branch → Work → Format + Test → **Reviewer agent** → **QA Engineer agent** → Fix issues → Diff → CEO Approve → Commit → Push → CEO creates PR → Merge → `advance.py` confirms the merge and moves the file to `done/`
+Task workflow: Take from `backlog/` → Branch → Work → Format + Test → **Reviewer agent** → **QA Engineer agent** → Fix issues → Diff → CEO Approve → Commit → then, in `pr` mode: Push → CEO creates PR → CEO merges; in `solo` mode: the gated local merge (no push, no PR; a trunk push needs its own recorded approval) → `advance.py` confirms the merge and moves the file to `done/`. The mode split is in `rules/git-workflow.md`.
 
 **MANDATORY before showing diff to CEO:**
 1. Delegate to `reviewer` agent (`.claude/agents/reviewer.md`)

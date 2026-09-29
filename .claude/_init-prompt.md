@@ -105,9 +105,10 @@ editing stages get Read/Write/Edit/Bash/Glob/Grep; `review` is read-only:
 Read/Glob/Grep/Bash). These populate each stage's `tools` array.
 
 **B5. Branching + checkpoints.** Confirm the branch pattern
-[`{type}/{task}`], the protected main branch [`{{MAIN_BRANCH}}`], and the two
-human checkpoints [approve commit, then approve push]. These are enforced by the
-hooks - see `rules/orchestration.md`.
+[`{type}/{task}`], the protected main branch [`{{MAIN_BRANCH}}`], and the human
+checkpoints `workflow.mode` leaves in place [approve commit, then approve push in
+`pr` mode; commit only in `solo` mode]. These are enforced by the hooks - see
+`rules/orchestration.md`.
 
 **B6. Retry budget.** "How many gate-failure retries before a task is parked
 `blocked`? [3]" -> write as `retry_budget`.

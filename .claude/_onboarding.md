@@ -202,11 +202,14 @@ contract is in `rules/orchestration.md`; the stage machine in `rules/pipeline.md
   pipeline stages, exit-gate commands, stage owners, allowed tools, branching, and
   the retry budget - written into `.agentry/pipeline.json`.
 - The `Stop` hook keeps the agent advancing (it will not stop mid-pipeline to ask
-  "shall I continue?"); the `PreToolUse` hook enforces the two human checkpoints
-  (approve commit, then approve push) via `tools/pipeline/approve.py`.
+  "shall I continue?"); the `PreToolUse` hook enforces the human checkpoints
+  `workflow.mode` leaves in place (approve commit, then approve push in `pr`
+  mode; commit only in `solo` mode, where the local merge follows - see
+  `rules/git-workflow.md`) via `tools/pipeline/approve.py`.
 - Optional automation: the `ready` stage's `auto_approve` array (pipeline.json)
   lists checkpoints that need NO human approval - `advance.py` approves them
-  itself. Default `[]` keeps both manual; decide at Phase B per project.
+  itself. The push is never grantable. Default `[]` keeps the commit manual;
+  decide at Phase B per project.
 - Requires Python 3 on PATH. Verify the engine:
   `python .claude/tools/pipeline/state.py --show` (prints `[]` when idle).
 - Obedience is enforced inside subagents too: dev/readonly/docs agents carry

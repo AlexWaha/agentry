@@ -45,7 +45,7 @@ refused until that spec is approved.
 | test | `qa-engineer` | `{{TEST_CMD}}` green; required cases per `testing.md` | - |
 | review | `reviewer` (+ `security-engineer`) | `{{LINT_CMD}}` clean; all Critical/High findings resolved; read-only (no code edits) | - |
 | ready | Orchestrator | gates green; diff prepared | **CEO reads the diff (`/diff`) and approves the commit**; rejecting sends the task back to `implement` |
-| done | CEO | merged into `main` (confirmed by `git_state.py`, not just pushed) | **CEO approves push**; task file moved to `done/` once the merge is confirmed; next registration is blocked until this task's handoff doc exists AND its memory review is stamped - both refused by `advance.py` at registration, both blocking the Stop hook before it lets the session end (`tools/pipeline/handoff.py`, `tools/memory/update.py`) |
+| done | CEO in `pr` mode; the pipeline in `solo` mode | merged into `main` (confirmed by `git_state.py`, not just pushed) | **CEO approves push** (`pr` mode only; in `solo` mode the local merge follows the commit approval, see `git-workflow.md`); task file moved to `done/` once the merge is confirmed; next registration is blocked until this task's handoff doc exists AND its memory review is stamped - both refused by `advance.py` at registration, both blocking the Stop hook before it lets the session end (`tools/pipeline/handoff.py`, `tools/memory/update.py`) |
 
 UI-bearing tasks add a `senior-frontend-dev` implement pass and an
 `evidence-collector` screenshot check inside review. Performance-sensitive work
@@ -70,8 +70,13 @@ Every dispatched agent reads, in this order, BEFORE producing anything:
 
 When the Orchestrator dispatches you to WRITE a handoff doc for the previous
 completed task: write it in your own words from `tasks/done/<task>.md`, its
-merge diff on main, and the gate log - the writing IS the context absorption.
-A pasted task description fails validation (`handoff.py --check`).
+merge diff on main, and the gate log, so that the writing is the context
+absorption. That is an instruction, not a check. `handoff.py --check` verifies
+structure only: the six required headings, no `FILL-ME` marker, at least 40
+non-space characters per section and 500 in the body, and the `Context loaded`
+confirmations (list in `orchestration.md` step 0). It does not compare the text
+with the task file, so a pasted task description that meets those checks
+passes.
 
 ## Discipline
 
@@ -94,9 +99,10 @@ A pasted task description fails validation (`handoff.py --check`).
   that also carries backend code is not green until the backend test + formatter
   pass too. A passing subset is not a pass.
 - **Handoff-gated pickup.** Before a new task registers, the previous completed
-  task must have a valid handoff doc in `.agentry/tasks/handoffs/`, written by the
-  NEW task's assignee in its own words - forced context absorption. Enforced by
-  `advance.py`, `stop_gate.py` and (hard_edit_gate) `pretool_gate.py`; details in
+  task must have a valid handoff doc in `.agentry/tasks/handoffs/`; the NEW
+  task's assignee writes it, in its own words as an instruction, and validity is
+  a structural check, not an authorship check. Enforced by `advance.py`,
+  `stop_gate.py` and (hard_edit_gate) `pretool_gate.py`; details in
   `orchestration.md` step 0.
 - **Memory-gated pickup.** The same registration is refused again while any
   completed task above `memory.baseline` lacks its stamp (`tools/memory/
