@@ -33,9 +33,8 @@ only the hook scripts record one.
   the actual task text, rather than a markdown file whose first lines get
   auto-injected regardless of relevance.
 
-**Repository:** `github.com/AlexWaha/agentry`, public. No license has been
-chosen yet, so all rights are reserved by the repository owner for now
-(task-0054 tracks picking and adding one).
+**Repository:** `github.com/AlexWaha/agentry`, public, released under the MIT
+License (see `LICENSE`).
 
 **Who uses it:** a solo developer or a small team running Claude Code on
 real work - hobby projects, pet projects, anything with no dedicated ops

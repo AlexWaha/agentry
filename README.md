@@ -9,7 +9,7 @@ recorded by Python hooks and SQLite, not decided by the model.
 
 ![Python](https://img.shields.io/badge/python-3.12%2B-blue)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-required-blueviolet)
-![License](https://img.shields.io/badge/license-unreleased-lightgrey)
+![License](https://img.shields.io/badge/license-MIT-green)
 
 ## Table of contents
 
@@ -295,5 +295,4 @@ Sourced from `.agentry/plans/2026-09-12-harness-overhaul-plan.md`.
 
 ## License
 
-No license has been chosen yet. Until one is added, all rights are reserved
-by the repository owner.
+Released under the MIT License. See [LICENSE](LICENSE) for the full text.
