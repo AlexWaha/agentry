@@ -276,6 +276,16 @@ Follow all React/TypeScript conventions above, plus:
 
 ---
 
+## Client-Side Security
+
+Applies to browser frontends. React Native: keep tokens in Keychain/Keystore-backed secure storage, never AsyncStorage.
+
+- **Auth tokens:** keep them in an `HttpOnly; Secure; SameSite=Lax` (or `Strict`) cookie set by the server, and send the backend's CSRF token on state-changing requests. Never store an auth or refresh token in `localStorage`, `sessionStorage`, or a JS-readable cookie; if the API only issues bearer tokens, hold the access token in memory. Never put a session or access token in a URL (path, query, or fragment); single-use links such as password reset are the exception.
+- **Untrusted HTML:** anything not written in this repo (user input, API or CMS fields, rendered Markdown) is untrusted. Never render it into the DOM (`innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write`, `dangerouslySetInnerHTML`, `v-html`, `iframe srcdoc`) unless it first passes a vetted sanitizer (e.g. DOMPurify). Default to text rendering.
+- **URLs and DOM sinks:** never build a URL, `href`/`src`, `location.href`, `window.open` target or redirect from unvalidated input. Parse it with `new URL(input, location.origin)`, allow only `http:`/`https:` (block `javascript:` and `data:`), and compare the exact `origin` or `hostname` against an allowlist, never a substring match.
+
+---
+
 ## Forbidden Patterns (Per Language)
 
 ### PHP
