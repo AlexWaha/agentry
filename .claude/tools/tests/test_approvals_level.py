@@ -31,6 +31,7 @@ import approvals
 import pretool_gate
 import state
 import tmproot
+from test_conveyor_gaps import decide_with, run
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -114,6 +115,8 @@ class LevelDrivesTheCheckpointTest(unittest.TestCase):
 
     def test_the_three_levels_differ_at_ready(self):
         expected = {approvals.MANUAL: 0, approvals.ASSISTED: 1, approvals.AUTO: 1}
+        # At `ready` the two automated levels agree on the commit; what tells
+        # them apart is the pickup of the next task, NextTaskPickupTest below.
         for i, (level, commit_approved) in enumerate(expected.items()):
             with self.subTest(level=level):
                 with unittest.mock.patch.object(approvals, "read", return_value=level):
@@ -169,6 +172,32 @@ class LevelDrivesTheCheckpointTest(unittest.TestCase):
                     self._advance(task)
                     self._advance(task)
                     self.assertEqual(0, self._row(task)["push_approved"])
+
+
+class NextTaskPickupTest(unittest.TestCase):
+    """The observable difference between `assisted` and `auto` (task-0050): the
+    Stop hook starts the next ready backlog task only at `auto`. decide_with
+    runs the REAL approvals.granted against the level it is given."""
+
+    def test_only_auto_starts_the_next_ready_task_when_nothing_is_in_flight(self):
+        expected = {approvals.MANUAL: False, approvals.ASSISTED: False,
+                    approvals.AUTO: True}
+        for level, picks_up in expected.items():
+            with self.subTest(level=level):
+                reason = decide_with([], level=level)
+                if picks_up:
+                    self.assertIn("Start the next ready task task-0002", reason)
+                else:
+                    self.assertIsNone(reason)
+
+    def test_assisted_still_drives_the_task_already_in_flight(self):
+        reason = decide_with([run(stage="implement")], level=approvals.ASSISTED)
+        self.assertIsNotNone(reason)
+        self.assertNotIn("Start the next ready task", reason)
+
+    def test_assisted_still_auto_approves_the_commit_of_the_current_task(self):
+        with unittest.mock.patch.object(approvals, "read", return_value=approvals.ASSISTED):
+            self.assertTrue(approvals.granted(approvals.COMMIT))
 
 
 class ShippedConfigTest(unittest.TestCase):

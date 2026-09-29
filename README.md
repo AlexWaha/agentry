@@ -171,8 +171,8 @@ manifest) is planned - see [Roadmap](#roadmap) - and is not shipped today.
 | Level | Behavior |
 |---|---|
 | `manual` | every checkpoint waits for you: which task to take, the commit |
-| `assisted` | taking a task and committing pass unasked |
-| `auto` | the above, plus taking the next ready task when the current one parks |
+| `assisted` | committing passes unasked; you start each task, and the conveyor stops after it |
+| `auto` | the above, plus taking the next ready task on its own once the current one is done |
 
 Two things no level ever grants, whatever `pipeline.json` says: **the push** and
 **merging into the main branch**. `approvals.NEVER_GRANTED` refuses the push

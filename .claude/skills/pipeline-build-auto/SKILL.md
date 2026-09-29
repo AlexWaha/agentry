@@ -1,6 +1,6 @@
 ---
 name: pipeline-build-auto
-description: Switch to build mode with auto approvals - the conveyor takes a task, implements, tests, reviews and commits on its own, then parks at whichever checkpoint `workflow.mode` leaves last (the push in `pr` mode, the commit in `solo`) and waits for the CEO. Use when the CEO wants a run to get as far as it can unattended.
+description: Switch to build mode with auto approvals - the conveyor takes a task, implements, tests, reviews and commits on its own, then takes the next ready backlog task, and parks at whichever checkpoint `workflow.mode` leaves last (the push in `pr` mode, the commit in `solo`) and waits for the CEO. Use when the CEO wants a run to get as far as it can unattended, across the backlog.
 ---
 
 # Build, auto approvals
@@ -24,11 +24,12 @@ follows `workflow.mode` in `pipeline.json`: the push checkpoint in `pr` mode, th
 commit checkpoint in `solo` mode, where the local merge follows (`advance.py`
 `stage_checkpoints()` drops the push checkpoint there).
 
-Today this level differs from `assisted` in intent only: `approvals.GRANTS` gives
-both the same `{take, commit}` set, so the two behave identically until the
-difference is made real or the levels are merged (task-0050). Both do now differ
-from `manual`, which they did not until task-0083: `advance.py` required the
-checkpoint to appear in the stage's `auto_approve` list BEFORE it consulted
+What sets this level apart from `assisted`: only `auto` is granted `take`
+(`approvals.GRANTS`), and the Stop hook starts the next ready backlog task only
+when `approvals.granted(TAKE)` holds (`stop_gate.py`). `assisted` commits
+unasked but stops after the task the CEO started. Both differ from `manual`,
+which they did not until task-0083: `advance.py` required the checkpoint to
+appear in the stage's `auto_approve` list BEFORE it consulted
 `approvals.granted()`, and that list ships empty, so all three levels parked on
 the CEO at `ready`. The level alone is enough now.
 

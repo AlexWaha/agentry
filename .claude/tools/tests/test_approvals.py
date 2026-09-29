@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 PIPELINE_DIR = Path(__file__).resolve().parents[1] / "pipeline"
@@ -63,6 +64,56 @@ class PushIsNeverGrantedTest(unittest.TestCase):
         for level, text in approvals.DESCRIPTIONS.items():
             with self.subTest(level=level):
                 self.assertNotIn("through the push", text)
+
+
+class PublishingCheckpointsAreNeverGrantedTest(unittest.TestCase):
+    """PUSH and TRUNK_PUSH (task-0092) are refused at every level, by the level
+    and by a stage `auto_approve` list alike."""
+
+    def test_neither_is_in_any_level_grant_set(self):
+        for level in approvals.LEVELS:
+            for checkpoint in (approvals.PUSH, approvals.TRUNK_PUSH):
+                with self.subTest(level=level, checkpoint=checkpoint):
+                    self.assertIn(checkpoint, approvals.NEVER_GRANTED)
+                    self.assertNotIn(checkpoint, approvals.GRANTS[level])
+
+    def test_granted_refuses_both_at_every_level_even_when_the_stage_lists_them(self):
+        for level in approvals.LEVELS:
+            for checkpoint in (approvals.PUSH, approvals.TRUNK_PUSH):
+                with self.subTest(level=level, checkpoint=checkpoint):
+                    with unittest.mock.patch.object(approvals, "read", return_value=level):
+                        self.assertFalse(approvals.granted(checkpoint))
+                        self.assertFalse(approvals.granted(checkpoint, [checkpoint]))
+
+
+class AssistedAndAutoDifferTest(unittest.TestCase):
+    """task-0050: the two levels shared one grant set, so choosing `auto` for a
+    night run changed nothing. Only `auto` takes the next ready task."""
+
+    def test_the_grant_sets_differ(self):
+        self.assertNotEqual(approvals.GRANTS[approvals.ASSISTED],
+                            approvals.GRANTS[approvals.AUTO])
+
+    def test_only_auto_grants_taking_a_task(self):
+        expected = {approvals.MANUAL: False, approvals.ASSISTED: False,
+                    approvals.AUTO: True}
+        for level, take in expected.items():
+            with self.subTest(level=level):
+                with unittest.mock.patch.object(approvals, "read", return_value=level):
+                    self.assertEqual(take, approvals.granted(approvals.TAKE))
+
+    def test_assisted_and_auto_both_grant_the_commit_and_manual_does_not(self):
+        expected = {approvals.MANUAL: False, approvals.ASSISTED: True,
+                    approvals.AUTO: True}
+        for level, commit in expected.items():
+            with self.subTest(level=level):
+                with unittest.mock.patch.object(approvals, "read", return_value=level):
+                    self.assertEqual(commit, approvals.granted(approvals.COMMIT))
+
+    def test_the_description_names_what_distinguishes_each_level(self):
+        self.assertIn("next ready task", approvals.DESCRIPTIONS[approvals.AUTO])
+        self.assertNotIn("next ready task", approvals.DESCRIPTIONS[approvals.ASSISTED])
+        self.assertIn("you start each task", approvals.DESCRIPTIONS[approvals.ASSISTED])
 
 
 if __name__ == "__main__":

@@ -75,9 +75,11 @@ state and gate checks live in deterministic hooks (`.claude/tools/pipeline/` +
 - **Between start and the checkpoints you are autonomous.** Drive each task with
   `tools/pipeline/advance.py` (it runs the real exit gate); fix gate/lint/review
   failures and re-run, up to the retry budget, then park `blocked` and surface it.
-- **Never ask "shall I continue / what next / start the next task?"** The `Stop`
-  hook drives continuation: it keeps you advancing in-flight work and pulling the
-  next ready task until everything is parked at a checkpoint, blocked, or done.
+- **Never ask "shall I continue / what next?" while the Stop hook is driving
+  work.** It keeps you advancing in-flight work and, at the `auto` approvals
+  level only, pulling the next ready task, until everything is parked at a
+  checkpoint, blocked, or done. Below `auto`, which task to start is the CEO's
+  call, raised once as a card.
 - **Pipelined but edit-serialized:** one task in an editing stage at a time;
   parked tasks wait for the CEO while the next ready task runs.
 - **Handoff chain:** before a new task registers, the previous completed task's
@@ -93,8 +95,9 @@ state and gate checks live in deterministic hooks (`.claude/tools/pipeline/` +
   starts - refused at registration by `advance.py`, and blocking the Stop hook
   until it is paid. Both of those were written down long before either was
   true: the memory half was enforced nowhere (task-0066) and the Stop hook's
-  half of both halves ran only when nothing was in flight (task-0072). When
-  the backlog holds a single task, the latest task-tagged commit on main must
+  half of both halves ran only when nothing was in flight (task-0072). At the
+  `auto` level, when the backlog holds a single task, the latest task-tagged
+  commit on main must
   be documented first (read it, or generate its handoff doc) so the incoming
   agent always has the previous task's context.
 
