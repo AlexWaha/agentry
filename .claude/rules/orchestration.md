@@ -45,13 +45,23 @@ to the context-absorption chain from `pipeline.md`.
    approach, and scope are settled at planning. Once a task enters execution, the
    orchestrator does not ask the CEO clarifying questions - if data is missing,
    that is a planning failure: park the task and send it back, do not improvise.
-2. **The CEO re-engages at exactly two tail checkpoints:** approve the commit,
-   then approve the push. Both are enforced deterministically (see Hooks). The
-   CEO may also reject at a checkpoint, which sends the task back to `implement`.
-   Either checkpoint can be made optional per project: list it in the `ready`
-   stage's `auto_approve` array in `pipeline.json` and `advance.py` approves it
-   itself (no parking) - the approval flag is still set, so every downstream hook
-   works unchanged. Editing `auto_approve` is itself a CEO decision.
+2. **The CEO re-engages at the tail checkpoints `workflow.mode` leaves in place:**
+   the commit, and - in `pr` mode only - the push after it. Where the last one falls follows
+   `workflow.mode` in `pipeline.json`: the push checkpoint in `pr` mode, the
+   commit checkpoint in `solo` mode, where the local merge follows (`advance.py`
+   `stage_checkpoints()` drops the push checkpoint there); the full split is in
+   `git-workflow.md`. Solo mode does not weaken push approval:
+   `workflow.push_needs_approval` is independent of the mode, and
+   `approvals.NEVER_GRANTED` refuses both `PUSH` and `TRUNK_PUSH` at every level,
+   so a push that does happen in solo mode, including the one-shot trunk push,
+   still needs its recorded approval. Each checkpoint that exists is enforced
+   deterministically (see Hooks). The CEO may also reject at a checkpoint, which
+   sends the task back to `implement`. The commit checkpoint can be made optional
+   per project: list it in the `ready` stage's `auto_approve` array in
+   `pipeline.json` and `advance.py` approves it itself (no parking) - the
+   approval flag is still set, so every downstream hook works unchanged. The push
+   cannot: `approvals.granted()` refuses it ahead of `auto_approve`. Editing
+   `auto_approve` is itself a CEO decision.
 3. **Between start and the checkpoints, the orchestrator runs autonomously.**
    Gate failures, lint errors, and review findings are fixed and re-run by the
    delegated agents - never bounced to the CEO - until the retry budget is hit,
@@ -76,7 +86,16 @@ to the context-absorption chain from `pipeline.md`.
   `--pipeline` is passed explicitly. See `skills/pipeline/SKILL.md`.
 - `.agentry/state/approvals` - one word (`manual`/`assisted`/`auto`) picking how
   many checkpoints pass without the CEO. Read via `approvals.py`. Never grants
-  merging into `main`, moving a task to `done`, or answering planning questions.
+  the push, and grants nothing about merging into `main`: in `pr` mode the CEO
+  merges in the web UI, and in `solo` mode the merge follows the commit approval
+  and is gated by `pretool_gate.py`'s three conditions (branch name, run row,
+  commit approved), so the approved commit authorizes it, not the level. At
+  `assisted` and `auto` the level itself sets `commit_approved`
+  (`approvals.py`, `advance.py`), which is the third of those conditions, so
+  the level reaches the merge only through the commit approval. A
+  supervisor-spawned unattended session is refused the merge regardless
+  (`check_unattended`). Nor does it grant moving a task to `done` or answering
+  planning questions.
 - `PIPELINE_LANE` (environment variable, optional) - the name of an independent
   conveyor. It suffixes all three files above (`run.<lane>.db`, `mode.<lane>`,
   `approvals.<lane>`), so two parallel sessions do not share pipeline state.
@@ -95,7 +114,7 @@ to the context-absorption chain from `pipeline.md`.
 | Event | Script | What it enforces |
 |-------|--------|------------------|
 | `SessionStart` | `state.py --resume` | Injects in-flight runs so a new session resumes, not restarts. |
-| `PreToolUse` (Bash\|Edit\|Write) | `pretool_gate.py` | Denies `git commit` until commit is approved, `git push` until push is approved, any push to the protected branch, and code edits while a task is in the read-only `review` stage. Also **generic gates** (no config): work-branch name must be `<type>/task-<id>` and be cut from `main`; no AI-authorship trailer in commit messages; no em/en dash in written content; no writes under the runtime `~/.claude/` (exception: `~/.claude/plans/` - the harness's own plan-mode scratch area). Plus **stack-configured gates** from `pipeline.json` `gates` (filled at onboarding): destructive-command deny, live-REPL write deny, and optional `/dev/null` redirect deny. With `handoff.hard_edit_gate` on, code edits are also frozen while handoff debt exists and no task is mid-stage. Bookkeeping under `.claude/`, `.agentry/` and `docs/` is otherwise allowed. |
+| `PreToolUse` (Bash\|Edit\|Write) | `pretool_gate.py` | Denies `git commit` until commit is approved, `git push` until push is approved, any push to the protected branch (in `solo` mode, except the one-shot trunk push the CEO approved with `approve.py --trunk-push`), and code edits while a task is in the read-only `review` stage. Also **generic gates** (no config): work-branch name must be `<type>/task-<id>` and be cut from `main`; no AI-authorship trailer in commit messages; no em/en dash in written content; no writes under the runtime `~/.claude/` (exception: `~/.claude/plans/` - the harness's own plan-mode scratch area). Plus **stack-configured gates** from `pipeline.json` `gates` (filled at onboarding): destructive-command deny, live-REPL write deny, and optional `/dev/null` redirect deny. With `handoff.hard_edit_gate` on, code edits are also frozen while handoff debt exists and no task is mid-stage. Bookkeeping under `.claude/`, `.agentry/` and `docs/` is otherwise allowed. |
 | `Stop` | `stop_gate.py` | The non-stop engine. Blocks the stop and feeds back the next instruction while any task is advanceable or a ready backlog task remains. Reads the queue from `tasks/backlog/`, not a `status:` field, and only picks up a new task when the current approvals level grants the `take` checkpoint. **Blocks while any completed task lacks its handoff doc or its memory stamp** - the instruction it feeds back is "write the handoff first", then "distill and stamp it". Neither check reads whether a slot is free any more: they were once evaluated only when nothing was in flight, so a single task parked on the CEO - the normal state of a pipeline with a human in it - silenced both, and two done tasks went undocumented with nothing objecting (task-0072). Driving an in-flight run still comes first, and surfacing a BLOCKED run still comes first; the debt is the last thing before the session is allowed to end. Before idling it also **reconciles status drift**: a merged task file still in `tasks/active/` (its run reached `done`, or `main` carries its `[task-id]` tag) is moved to `tasks/done/`, and a run whose file already left `active/` is closed - so file state and `run.db` never rot. Allows the stop only when every task is parked at a checkpoint, blocked, or done. |
 
 More enforcement points live inside `advance.py` (not hooks, but deterministic gates on the transition it authorizes):
@@ -123,11 +142,17 @@ For each task, drive the deterministic FSM - never hand-wave a stage as done:
    reports debt, dispatch the NEXT task's assignee to write the handoff doc for the
    completed task BEFORE registering anything: scaffold with `handoff.py --for
    task-XXXX`, then the agent fills every section of
-   `.agentry/tasks/handoffs/task-XXXX.md` in its own words (from the done task file,
-   its merge diff on main, and the gate log), reading
-   `.agentry/project/project-context.md` and its OWN task's spec first. The writing
-   IS the context absorption. `advance.py` refuses registration and the Stop hook
-   blocks the start message until the doc validates. `handoff.py --waive` is the
+   `.agentry/tasks/handoffs/task-XXXX.md`, and is instructed to write in its own
+   words (from the done task file, its merge diff on main, and the gate log),
+   reading `.agentry/project/project-context.md` and its OWN task's spec first,
+   so that the writing is the context absorption. What `handoff.py` enforces is
+   structure, not authorship: the frontmatter `task:` matches the filename, the
+   six required headings are present, no `FILL-ME` marker survives, each section
+   has at least 40 non-space characters and the body at least 500, `Context
+   loaded` confirms project-context.md and the spec (or `none`), and the file is
+   under the byte cap. Nothing compares the text with the task file, so a pasted
+   task description that meets those checks passes. `advance.py` refuses registration and the Stop hook blocks
+   the start message until the doc validates. `handoff.py --waive` is the
    CEO-approved escape hatch - orchestrator-only, run it only after the CEO
    explicitly approves in chat (same trust boundary as `approve.py`).
    Then run `python .claude/tools/memory/update.py --check` and clear what it
@@ -163,11 +188,16 @@ For each task, drive the deterministic FSM - never hand-wave a stage as done:
 5. **Checkpoint - commit.** Entering `ready` parks the task (`awaiting_human=commit`).
    Surface the full diff. When the CEO approves, run
    `approve.py --task task-XXXX --gate commit`, then `git commit`, then `advance.py`.
-6. **Checkpoint - push.** The task parks (`awaiting_human=push`). When the CEO
-   approves, run `approve.py --task task-XXXX --gate push`, then `git push`, then
-   `advance.py`. This only pushes the branch; `advance.py` still needs the CEO's
-   merge in the web UI. Re-run it after the merge - git confirms it and the file
-   moves to `tasks/done/` itself.
+6. **Checkpoint - push (`pr` mode only).** The task parks (`awaiting_human=push`).
+   When the CEO approves, run `approve.py --task task-XXXX --gate push`, then
+   `git push`, then `advance.py`. This only pushes the branch; `advance.py` still
+   needs the CEO's merge in the web UI. Re-run it after the merge - git confirms
+   it and the file moves to `tasks/done/` itself. In `solo` mode there is no
+   such step: after the commit approval you merge the task branch into the trunk
+   locally, gated by `pretool_gate.py`'s three conditions (branch name, run row,
+   commit approved), then re-run `advance.py`, and git confirms the merge the
+   same way. Publishing the trunk is a separate one-shot approval, `approve.py
+   --trunk-push`, per `git-workflow.md`.
 
 ## Checkpoint advice (the smart-machine duty)
 

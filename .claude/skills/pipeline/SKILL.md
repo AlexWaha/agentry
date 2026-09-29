@@ -23,7 +23,7 @@ unreadable.
 
 | Mode | Conveyor | What it is for |
 |---|---|---|
-| `build` | on - `pipelines.build` | Default. Tasks advance implement -> test -> review -> ready -> done, commit and push gated by the CEO. |
+| `build` | on - `pipelines.build` | Default. Tasks advance implement -> test -> review -> ready -> done, commit gated by the CEO, and the push too in `pr` mode. |
 | `plan` | on - `pipelines.plan` | Design. Tasks advance formalize -> draft -> plan-review -> approval -> breakdown -> done. Writes a brief, a plan, a spec, and task files into `.agentry/tasks/backlog/`. No product code. |
 | `talk` | off | Discussion, hypotheses, exploration. Nothing tracked, nothing written. |
 
@@ -37,7 +37,7 @@ are gated stage machines registered and advanced through the same
 |---|---|---|
 | `manual` | nothing | every checkpoint: which task to take, the commit, the push |
 | `assisted` | take a task, commit | the push |
-| `auto` | all of the above, then it takes the next ready task | the push, merging into `main`, moving a task to `done`, answering planning questions - no level ever grants these |
+| `auto` | all of the above, then it takes the next ready task | the push, moving a task to `done` (it follows the merge), answering planning questions - no level ever grants these; merging into `main` is the CEO's in `pr` mode, and in `solo` mode follows the commit approval |
 
 The push is absent from every "grants" cell on purpose: `approvals.NEVER_GRANTED`
 refuses it at every level, and a per-stage `auto_approve` listing it does nothing
@@ -144,6 +144,10 @@ not silently switch. Say which flow is active and ask whether to switch to
 
 Neither dial disables the safety hooks, unlocks `main`, or skips review.
 `mode` only decides which stage machine the Stop hook drives; `approvals` only
-decides how many of that machine's checkpoints pass without asking. Merging
-into `main`, moving a task to `done`, and answering questions raised during
-planning always stay with the CEO, at every mode and every approval level.
+decides how many of that machine's checkpoints pass without asking. Answering
+questions raised during planning always stays with the CEO, at every mode and
+every approval level. Moving a task to `done` follows the merge into `main`,
+which git confirms: the CEO's merge in the web UI in `pr` mode, the pipeline's
+local merge after the commit approval in `solo` mode, gated by
+`pretool_gate.py`'s three conditions (branch name, run row, commit approved;
+see `rules/git-workflow.md`).

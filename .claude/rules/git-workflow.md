@@ -34,7 +34,12 @@ collaborative behaviour. In `solo` mode the local merge is still gated on three
 conditions, all required: the source branch matches `<type>/task-NNNN`, that
 task has a row in `run.db`, and its commit checkpoint was approved. Those guard
 against merging unreviewed work, which has nothing to do with working alone, so
-they hold in both modes.
+they hold in both modes. The merge follows the commit approval, and the
+approvals LEVEL grants nothing about it: the approved commit does. At
+`assisted` and `auto` the level itself sets `commit_approved`, which is the
+third condition, so it reaches the merge only through that approval. A
+supervisor-spawned unattended session is refused the merge regardless
+(`check_unattended`).
 
 Publishing the trunk is the one push `solo` mode allows, since that merge is its
 only writer: `approve.py --trunk-push` records the CEO's chat approval and the
@@ -79,7 +84,7 @@ These restrictions apply to all AI agents without exception:
 - **NEVER push without CEO approval** - always ask before pushing
 - **NEVER create PRs via CLI** - CEO creates PRs manually (no `gh` integration)
 - **NEVER work on `main` branch** - no commits, no pushes, no direct changes
-- **NEVER push to `main`** - not even with CEO approval; all changes go through PRs
+- **NEVER push to `main` in `pr` mode** - not even with CEO approval; all changes go through PRs. The one exception is the `solo`-mode trunk publication described under "Workflow modes", approved per push with `approve.py --trunk-push`
 - **NEVER force push** to any branch
 - **NEVER delete remote branches** without CEO approval
 - **NEVER skip pre-commit checks** - git hooks are disabled; linter and tests must be run manually before every commit
@@ -104,8 +109,8 @@ approvals level grants it, no per-stage `auto_approve` entry may list it, and no
 "he approved the last one" carries over. A push is the moment work leaves the
 machine, and the CEO has asked for that decision to stay his without exception.
 
-This is enforced, not just written: `approvals.NEVER_GRANTED` refuses `PUSH` at
-every level, and `granted()` checks it before both the level and the per-stage
+This is enforced, not just written: `approvals.NEVER_GRANTED` refuses `PUSH` and
+`TRUNK_PUSH` at every level, and `granted()` checks it before both the level and the per-stage
 `auto_approve` list, so neither can re-grant it. `advance.py` reads the push
 checkpoint through `granted()` for the same reason.
 
@@ -141,8 +146,9 @@ commit and push approvals are enforced by the `PreToolUse` hook, not by goodwill
 
 Run `approve.py` **only after the CEO explicitly approves in chat**. To send a task
 back for rework instead of approving, use `approve.py --task task-XXXX --reject`
-(returns it to `implement`). These two approvals are the only points where the CEO
-re-engages during execution.
+(returns it to `implement`). These approvals are the only points where the CEO
+re-engages during execution, and in `solo` mode the push one does not arise
+except for the one-shot trunk publication (`approve.py --trunk-push`).
 
 ### Multi-repo workspaces
 
