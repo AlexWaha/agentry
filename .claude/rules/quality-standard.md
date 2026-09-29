@@ -206,6 +206,29 @@ out=$({{BUILD_CMD}} 2>&1)
 {{BUILD_CMD}} 2>NUL
 ```
 
+### FORBIDDEN: Piping the Test Suite Into a Filter
+
+`python -m unittest discover ... | tail`, `pytest | head`, or any suite run
+piped into `head`, `tail`, `grep`, `wc`, `more`, `less` is denied by
+`gates.forbid_piped_test_suite` in both gates (task-0082). The mechanism is
+the same family as the redirect findings above: the shell edits the process
+tree before the program runs, and Git Bash is not Linux.
+
+A test that spawns a real child hands that child the pipe's write end. If the
+child outlives the test, the filter on the read end never sees EOF and blocks
+until the child exits, long after the suite itself printed its last line. The
+agent that ran the command then holds a live background process, and its
+completion notification never fires. Measured: two orphaned suite runs alive
+about four hours on 2026-09-14 with their readers blocked; on 2026-09-29 the
+`test` exit gate hung 400 to 600 seconds on its first run after a dispatch
+three times in one session while the immediate retry finished in about 40
+seconds, and `suite | tail` from the orchestrator's shell hung where
+`out=$(suite 2>&1)` returned in 39 seconds.
+
+Run the suite unpiped and let the output through; if it must be quiet,
+capture it (`out=$(cmd 2>&1)`) or write it to a file under the project's
+`tmp/`. A pipe on a non-suite command (`git log | head`) is not affected.
+
 ### NUL File Cleanup
 
 On Windows/Git Bash, at the **start** and **end** of every session, run:

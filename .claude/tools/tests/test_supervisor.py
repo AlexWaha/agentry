@@ -3073,6 +3073,46 @@ class DetachedStartTest(Sandbox):
         self.assertIn(".agentry/state/", ignored)
 
 
+class SuiteHoldsNoChildOverAPipeTest(unittest.TestCase):
+    """task-0082. The deadlock this guards against: a test spawns a real child
+    that inherits the pipe's write end, so a reader piped onto the suite
+    (`| tail`, `advance.py`'s gate subprocess) never sees EOF and blocks past
+    any timeout even though the suite itself finished.
+
+    This drives the REAL suite, piped, exactly as `python -m unittest
+    discover ... | tail` would from a shell - the only way to prove no test
+    left a live child holding the write end open. The NESTED_MARKER env var
+    stops this test running itself inside the child it spawns: the child
+    re-discovers this whole suite, this test is part of it, and without the
+    marker the first run recurses into a second full suite run that spawns a
+    third, and none of them was ever going to converge - measured directly,
+    every attempt hit the bound with no leaked test process in sight, because
+    the process tree itself was still legitimately working (a self-inflicted
+    fork bomb, not the deadlock this test exists to catch)."""
+
+    ROOT = Path(__file__).resolve().parents[3]
+    BOUND_SECONDS = 180
+    NESTED_MARKER = "AGENTRY_SUITE_PIPE_PROBE_NESTED"
+
+    @unittest.skipIf(os.environ.get(NESTED_MARKER), "nested run - see class docstring")
+    def test_the_full_suite_piped_returns_well_within_bound(self):
+        env = {**os.environ, self.NESTED_MARKER: "1"}
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "unittest", "discover", "-s", ".claude/tools", "-q"],
+            cwd=str(self.ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, text=True, env=env)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        try:
+            out, _ = proc.communicate(timeout=self.BOUND_SECONDS)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out, _ = proc.communicate()
+            self.fail(f"the piped suite did not return EOF within "
+                      f"{self.BOUND_SECONDS}s - a child is holding the pipe's write end "
+                      f"open. Tail of output:\n{out[-2000:]}")
+        self.assertEqual(0, proc.returncode, out[-2000:])
+
+
 class StopTest(Sandbox):
     """Stopping is one documented command, and it releases the lock. A stop that
     leaves the lock behind would keep the next session from starting a fresh one

@@ -109,6 +109,8 @@ EM_EN_DASH = (chr(0x2014), chr(0x2013))  # em dash, en dash
 #   destructive_allow_if: [substr,...]        - ... unless one of these appears
 #   repl_write_keyword: str        - REPL command name (e.g. a live shell)       [G]
 #   repl_write_patterns: [regex,...] - write ops denied inside that REPL
+#   forbid_piped_test_suite: bool  - block unittest discover / pytest piped      [H]
+#                                     into head/tail/grep/wc/more/less
 def gates_cfg() -> dict:
     cfg = state.load_pipeline().get("gates", {})
     return cfg if isinstance(cfg, dict) else {}
@@ -436,6 +438,66 @@ def executed_names(command: str) -> list | None:
         if n and sep == "|" and seg_names and INTERPRETER_RE.match(seg_names[0]):
             names.extend(tok for tok in pairs[n - 1][1][1:] if not tok.startswith("-"))
     return names
+
+
+# H: piping a test-suite run into a pager/filter deadlocks in Git Bash on
+# Windows - a test child can inherit the pipe's write end, so the sink never
+# sees EOF and blocks past any timeout, holding a live process behind it
+# (task-0082, measured: two orphaned `unittest discover` runs held ~4h each,
+# a QA agent stalled the full 600s tool timeout). The two suite entry points
+# this project runs end to end, never a single narrowed test file.
+PIPED_SUITE_SINKS = frozenset({"head", "tail", "grep", "wc", "more", "less"})
+
+
+def basename_no_ext(token: str) -> str:
+    """`token` reduced to its bare, extension-stripped, lowercased filename -
+    `C:/tools/tail.exe` and `tail` compare equal."""
+    name = token.lower().replace("\\", "/").rsplit("/", 1)[-1]
+    return re.sub(r"\.exe$", "", name)
+
+
+def is_test_suite_segment(segment: list) -> bool:
+    """True when `segment` (one simple command's tokens) invokes the unittest
+    discover runner or pytest. Deliberately narrow: `python -m unittest
+    <single test>` (no `discover` token) is a narrowed run, not the suite, and
+    stays out of scope."""
+    low = [t.lower() for t in segment]
+    if "unittest" in low and "discover" in low:
+        return True
+    i = argv0_index(segment)
+    if i is None:
+        return False
+    if basename_no_ext(segment[i]) == "pytest":
+        return True
+    if INTERPRETER_RE.match(segment[i]) and "-m" in low:
+        m = low.index("-m")
+        if m + 1 < len(low) and low[m + 1] == "pytest":
+            return True
+    return False
+
+
+def piped_test_suite_sink(command: str) -> str:
+    """The forbidden sink name when `command` pipes a test-suite invocation
+    (unittest discover / pytest) into head, tail, grep, wc, more or less - the
+    shape that deadlocks (see PIPED_SUITE_SINKS above). '' when nothing
+    matches, including when the text cannot be tokenised: this gate is
+    additive on top of the suite commands, which already run elsewhere in
+    the pipeline, so failing open here never hides a mutation another gate
+    would have caught."""
+    pairs = segments_with_separators(command)
+    if not pairs:
+        return ""
+    for n in range(1, len(pairs)):
+        sep, seg = pairs[n]
+        if sep != "|" or not is_test_suite_segment(pairs[n - 1][1]):
+            continue
+        i = argv0_index(seg)
+        if i is None:
+            continue
+        name = basename_no_ext(seg[i])
+        if name in PIPED_SUITE_SINKS:
+            return name
+    return ""
 
 
 def command_substitutions(command: str) -> list:
@@ -1643,6 +1705,22 @@ def redirects_to_dev_null(command: str, _depth: int = 0) -> bool:
                for body in nested_command_bodies(command))
 
 
+def check_piped_test_suite(command: str) -> int:
+    """H: deny piping a test-suite run into a pager/filter (task-0082)."""
+    if not gates_cfg().get("forbid_piped_test_suite"):
+        return allow()
+    sink = piped_test_suite_sink(command)
+    if not sink:
+        return allow()
+    return deny(
+        f"Piping a test-suite run (unittest discover / pytest) into '{sink}' is denied "
+        f"(gates.forbid_piped_test_suite). In Git Bash on Windows this deadlocks: a test "
+        f"child can inherit the pipe's write end, so '{sink}' never sees EOF and blocks past "
+        f"any timeout, holding a live process behind it. Run the suite unpiped and let the "
+        f"output through, capture it instead (`out=$(cmd 2>&1)`), or redirect it into a file "
+        f"under the project's tmp/.")
+
+
 def check_destructive_and_repl(command: str, low: str) -> int:
     """A + B + G, all data-driven from pipeline.json 'gates' so no project/stack
     scope leaks into the code."""
@@ -1786,6 +1864,7 @@ def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
         check_unattended(command),                 # supervisor-spawned session
         check_branch_creation(command, cwd),      # 4 (naming) + C (base)
         check_destructive_and_repl(command, low),  # A + B + G
+        check_piped_test_suite(command),            # H
         check_commit_attribution(command),         # D
         orch_check_bash(command) if orch else allow(),  # orchestrator profile
     ):

@@ -383,6 +383,105 @@ class ForbidDevNullGateTest(unittest.TestCase):
         self.assertEqual(0, self.drive(command, flag=False)[0])
 
 
+class PipedTestSuiteGateTest(unittest.TestCase):
+    """H: piping a test-suite run into a pager/filter deadlocks in Git Bash on
+    Windows (task-0082) - a test child can inherit the pipe's write end, so
+    the sink never sees EOF. Three measured instances on 2026-09-14, four more
+    on 2026-09-29, all on `unittest discover` or the suite piped through
+    `| tail` from the orchestrator's own shell."""
+
+    def drive(self, command: str, flag: bool = True) -> tuple[int, str]:
+        cfg = dict(pretool_gate.gates_cfg())
+        cfg["forbid_piped_test_suite"] = flag
+        err = io.StringIO()
+        with unittest.mock.patch.object(pretool_gate, "gates_cfg", return_value=cfg), \
+                unittest.mock.patch("sys.stderr", err):
+            code = pretool_gate.handle_bash(command, cwd=".")
+        return code, err.getvalue()
+
+    def test_the_shipped_config_has_the_gate_switched_on(self):
+        self.assertTrue(pretool_gate.gates_cfg().get("forbid_piped_test_suite"),
+                        "gates.forbid_piped_test_suite is off in .agentry/pipeline.json")
+
+    SUITE_INVOCATIONS = (
+        "python -m unittest discover -s .claude/tools",
+        "python -m unittest discover -s .claude/tools -q",
+        "python3 -m unittest discover -s .claude/tools",
+        "pytest",
+        "pytest .claude/tools/tests",
+        "python -m pytest .claude/tools/tests",
+    )
+    SINKS = ("head", "tail", "grep", "wc", "more", "less")
+
+    def test_every_suite_invocation_piped_into_every_sink_is_denied(self):
+        for suite in self.SUITE_INVOCATIONS:
+            for sink in self.SINKS:
+                command = f"{suite} | {sink} -20"
+                with self.subTest(command=command):
+                    code, msg = self.drive(command)
+                    self.assertEqual(2, code, msg)
+                    self.assertIn("forbid_piped_test_suite", msg)
+                    self.assertIn(sink, msg)
+                    # The message names the working alternatives, or the deny
+                    # just teaches the next person to work around it.
+                    self.assertIn("unpiped", msg)
+                    self.assertIn("out=$(cmd 2>&1)", msg)
+                    self.assertIn("tmp/", msg)
+
+    def test_an_unpiped_suite_run_is_allowed(self):
+        for suite in self.SUITE_INVOCATIONS:
+            with self.subTest(command=suite):
+                self.assertEqual(0, self.drive(suite)[0])
+
+    def test_a_pipe_on_a_non_suite_command_still_works(self):
+        # git log | head must keep working - the gate must not over-refuse.
+        for command in ("git log | head", "git log --oneline | tail -5",
+                        "cat README.md | grep TODO", "ls | wc -l"):
+            with self.subTest(command=command):
+                self.assertEqual(0, self.drive(command)[0])
+
+    def test_a_narrowed_unittest_run_with_no_discover_token_is_allowed(self):
+        # `python -m unittest <single test>` is a narrowed run, not the suite -
+        # out of scope by design (see is_test_suite_segment's docstring).
+        command = "python -m unittest .claude.tools.tests.test_pretool_gate | tail"
+        self.assertEqual(0, self.drive(command)[0])
+
+    def test_the_suite_piped_into_a_non_sink_command_is_allowed(self):
+        # Piping the suite into something that is not one of the six named
+        # sinks (e.g. a real consumer script) is not this gate's business.
+        command = "python -m unittest discover -s .claude/tools | python summarize.py"
+        self.assertEqual(0, self.drive(command)[0])
+
+    def test_the_flag_is_what_denies_it_and_not_some_other_rule(self):
+        command = "python -m unittest discover -s .claude/tools | tail"
+        self.assertEqual(2, self.drive(command, flag=True)[0])
+        self.assertEqual(0, self.drive(command, flag=False)[0])
+
+    def test_the_helper_is_used_by_the_agent_gate_dev_profile_too(self):
+        # agent_gate.handle_dev delegates to pretool_gate.handle_bash for
+        # every Bash command once its own checks pass, so a dev-profile agent
+        # (senior-backend-dev, qa-engineer, devops-engineer) is denied the
+        # same way the orchestrator is - one implementation, both surfaces.
+        cfg = dict(pretool_gate.gates_cfg())
+        cfg["forbid_piped_test_suite"] = True
+        payload = {"command": "python -m unittest discover -s .claude/tools | tail"}
+        with unittest.mock.patch.object(pretool_gate, "gates_cfg", return_value=cfg):
+            code = agent_gate.handle_dev("Bash", payload, cwd=".")
+        self.assertEqual(2, code)
+
+    def test_the_helper_is_used_by_the_agent_gate_readonly_and_docs_profiles_too(self):
+        # reviewer/architect (readonly) and technical-writer (docs) route Bash
+        # through their own handler, not handle_dev - each must call the same
+        # piped-suite check directly, or a readonly/docs agent could still
+        # deadlock itself piping a suite into tail.
+        cfg = dict(pretool_gate.gates_cfg())
+        cfg["forbid_piped_test_suite"] = True
+        payload = {"command": "pytest .claude/tools/tests | tail"}
+        with unittest.mock.patch.object(pretool_gate, "gates_cfg", return_value=cfg):
+            self.assertEqual(2, agent_gate.handle_readonly("Bash", payload, cwd="."))
+            self.assertEqual(2, agent_gate.handle_docs("Bash", payload, cwd="."))
+
+
 class MainFailOpenTest(unittest.TestCase):
     """NFR-4: an internal error in the gate allows the action rather than
     bricking the session. Forces a real exception inside main()'s dispatch and
