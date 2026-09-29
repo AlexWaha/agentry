@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import shlex
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -30,6 +32,7 @@ sys.path.insert(0, str(TESTS_DIR))
 
 import agent_gate
 import pretool_gate
+import state
 import tmproot  # noqa: F401  (arms the in-project temp redirect)
 
 PROFILES = ("handle_dev", "handle_readonly", "handle_docs")
@@ -284,6 +287,153 @@ class DevProfileCannotWriteStateFilesTest(unittest.TestCase):
             with self.subTest(tool=tool):
                 code, err = self._edit(tool, ".agentry/tasks/active/task-0001.md")
                 self.assertEqual(0, code, err)
+
+
+class DocsProfileWritePathsTest(unittest.TestCase):
+    """The docs profile writes the work product AND the harness config.
+
+    FR-13 moved tasks, handoffs, specs and plans to .agentry/ while rules/,
+    skills/ and agents/ stayed in .claude/. is_docs_path() kept only the old
+    tree, so every docs agent was denied its own handoff doc - which then raised
+    handoff debt and froze edits tree-wide."""
+
+    def test_the_work_product_tree_is_writable(self):
+        for path in (".agentry/tasks/handoffs/task-0008.md",
+                     ".agentry/specs/spec-0001.md",
+                     ".agentry/tasks/backlog/task-0010.md",
+                     r".agentry\tasks\handoffs\task-0008.md"):
+            with self.subTest(path=path):
+                self.assertEqual(0, agent_gate.handle_docs("Write", {"file_path": path}))
+
+    def test_the_harness_tree_is_still_writable(self):
+        # The regression the fix could introduce: .agentry/ ADDED, not substituted.
+        for path in (".claude/rules/git-workflow.md",
+                     ".claude/skills/new-task/SKILL.md",
+                     ".claude/agents/reviewer.md",
+                     "docs/technical/architecture.md",
+                     "README.md"):
+            with self.subTest(path=path):
+                self.assertEqual(0, agent_gate.handle_docs("Write", {"file_path": path}))
+
+    def test_application_source_outside_both_trees_is_denied(self):
+        for path in ("src/services/OrderService.php", "app/main.py",
+                     "frontend/src/App.tsx"):
+            with self.subTest(path=path):
+                self.assertEqual(2, agent_gate.handle_docs("Edit", {"file_path": path}))
+
+
+def run_agent_gate(profile: str, tool: str, path: str) -> subprocess.CompletedProcess:
+    """Feed the real hook a payload on stdin, exactly as Claude Code does."""
+    payload = {"tool_name": tool, "tool_input": {"file_path": path}, "cwd": str(state.ROOT)}
+    return subprocess.run(
+        [sys.executable, str(PIPELINE_DIR / "agent_gate.py"), "--profile", profile],
+        input=json.dumps(payload).encode("utf-8"), capture_output=True, timeout=30)
+
+
+class DocsProfileRootClaudeMdTest(unittest.TestCase):
+    """task-0075: the technical-writer owns the root CLAUDE.md and was denied it,
+    while the orchestrator gate allowed it. The fix must ADD that one file, not
+    substitute it for an existing allowance and not widen the profile."""
+
+    def setUp(self):
+        self.root_claude = str(state.ROOT / "CLAUDE.md")
+
+    def test_docs_write_to_root_claude_md_is_allowed_by_the_hook(self):
+        proc = run_agent_gate("docs", "Write", self.root_claude)
+        self.assertEqual(0, proc.returncode, proc.stderr.decode("utf-8", "replace"))
+
+    def test_docs_root_claude_md_is_allowed_in_every_spelling(self):
+        for path in (self.root_claude, self.root_claude.replace("\\", "/"),
+                     "CLAUDE.md"):
+            with self.subTest(path=path):
+                self.assertEqual(0, agent_gate.handle_docs("Edit", {"file_path": path}))
+
+    def test_a_claude_md_below_the_root_is_still_denied(self):
+        # Root only, matching pretool_gate.orch_allowed_path(): a file that merely
+        # has the same name inside an application tree is not the root document.
+        for path in (str(state.ROOT / "src" / "app" / "CLAUDE.md"),
+                     str(state.ROOT / "CLAUDE.md.py")):
+            with self.subTest(path=path):
+                self.assertEqual(2, agent_gate.handle_docs("Write", {"file_path": path}))
+
+    def test_every_earlier_documentation_path_is_still_allowed(self):
+        # The trap this function is known for: one allowance added, another lost.
+        for path in (".claude/CLAUDE.md", "README.md", "README.rst", "docs/technical/a.md",
+                     ".claude/rules/testing.md", ".agentry/tasks/handoffs/task-0075.md",
+                     str(state.ROOT / ".claude" / "CLAUDE.md"),
+                     str(state.ROOT / "README.rst")):
+            with self.subTest(path=path):
+                self.assertEqual(0, agent_gate.handle_docs("Write", {"file_path": path}))
+
+    def test_application_source_is_still_denied_to_docs(self):
+        for path in ("src/app/main.py", str(state.ROOT / "app.py"),
+                     "docs/../src/app/main.py", "readme_generator.py"):
+            with self.subTest(path=path):
+                self.assertEqual(2, agent_gate.handle_docs("Write", {"file_path": path}))
+
+    def test_readonly_write_to_root_claude_md_is_still_denied(self):
+        proc = run_agent_gate("readonly", "Write", self.root_claude)
+        self.assertEqual(2, proc.returncode)
+        self.assertEqual(2, agent_gate.handle_readonly("Edit", {"file_path": self.root_claude}))
+
+
+class DocsProfileProtectedStateTest(unittest.TestCase):
+    """task-0075 (absorbed 0050 / FR-8): is_docs_path() accepts all of .agentry/,
+    and the approvals level, workflow mode, run.db approval flags, solo trunk_push
+    approval and memory stamps live in .agentry/state/, so a docs agent could set
+    what clears without the CEO. The whole state tree is denied."""
+
+    PROTECTED = (".agentry/state/approvals", ".agentry/state/mode",
+                 ".agentry/state/trunk_push", ".agentry/state/run.db",
+                 ".agentry/state/memory/task-0001.json")
+
+    def test_the_hook_denies_a_docs_write_to_anything_under_agentry_state(self):
+        for rel in self.PROTECTED:
+            path = str(state.ROOT / rel)
+            with self.subTest(path=path):
+                proc = run_agent_gate("docs", "Write", path)
+                self.assertEqual(2, proc.returncode, proc.stderr.decode("utf-8", "replace"))
+
+    def test_lane_suffixed_files_are_protected_too(self):
+        # mode.py / approvals.py add state.LANE_SUFFIX when PIPELINE_LANE is set.
+        for path in (".agentry/state/approvals.plan", ".agentry/state/mode.build_2",
+                     ".agentry/state/Approvals.Lane-1"):
+            with self.subTest(path=path):
+                self.assertEqual(2, agent_gate.handle_docs("Write", {"file_path": path}))
+
+    def test_every_spelling_of_the_path_is_protected(self):
+        for path in (r".agentry\state\approvals", ".AGENTRY/STATE/MODE",
+                     str(state.ROOT / ".agentry" / "state" / "approvals"),
+                     ".agentry/tasks/../state/approvals",
+                     "docs/../.agentry/state/mode",
+                     ".agentry/state/approvals.",
+                     ".agentry/state/trunk_push", r".agentry\state\RUN.DB",
+                     ".agentry/state/memory/task-0001.json",
+                     str(state.ROOT / ".agentry" / "state" / "trunk_push"),
+                     # Windows resolves a trailing dot or space on the directory
+                     # segment to the same directory (measured).
+                     ".agentry/state./trunk_push", ".agentry/state /run.db",
+                     ".agentry/state"):
+            with self.subTest(path=path):
+                self.assertEqual(2, agent_gate.handle_docs("Edit", {"file_path": path}))
+
+    def test_the_deny_names_the_real_reason(self):
+        proc = run_agent_gate("docs", "Write", ".agentry/state/trunk_push")
+        stderr = proc.stderr.decode("utf-8", "replace")
+        self.assertIn("is under .agentry/state/", stderr)
+        self.assertIn("Report the level or mode change you need to the orchestrator", stderr)
+        self.assertNotIn("outside that scope", stderr)
+        self.assertNotIn("approvals.py", stderr)
+
+    def test_the_rest_of_agentry_stays_writable_to_docs(self):
+        # Scoped to the state directory: siblings and files that merely carry the
+        # word are still documentation.
+        for path in (".agentry/tasks/active/task-0075.md", ".agentry/tasks/approvals.md",
+                     ".agentry/plans/mode.md", ".agentry/specs/spec-0001.md",
+                     ".agentry/statement.md", ".agentry/state-of-play.md",
+                     ".agentry/plans/state/design.md"):
+            with self.subTest(path=path):
+                self.assertEqual(0, agent_gate.handle_docs("Write", {"file_path": path}))
 
 
 if __name__ == "__main__":
