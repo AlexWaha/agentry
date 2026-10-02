@@ -33,9 +33,13 @@ GIT_TIMEOUT = 20
 
 def _git(repo: Path, *args: str, timeout: int = GIT_TIMEOUT) -> tuple[int, str]:
     try:
+        # CREATE_NO_WINDOW: the supervisor daemon is started DETACHED, with no
+        # console, so a console child would allocate a window of its own. Utf-8
+        # because git writes paths in it whatever the Windows code page is.
         p = subprocess.run(
             ["git", "-C", str(repo), *args],
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True, encoding="utf-8", errors="replace", timeout=timeout,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         return p.returncode, (p.stdout or "").strip()
     except (OSError, subprocess.SubprocessError):

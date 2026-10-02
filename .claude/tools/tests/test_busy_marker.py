@@ -151,7 +151,7 @@ class OwnerLivenessTest(MarkerCase):
         with unittest.mock.patch.object(supervisor, "pid_alive", return_value=False) as probe:
             marker = busy.read("task-0007")
 
-        probe.assert_called_once_with(os.getpid())
+        probe.assert_called_once_with(os.getpid(), marker.started)
         self.assertEqual(busy.OWNER_GONE, marker.status)
 
     def test_the_helper_never_signals_a_process(self):
@@ -159,6 +159,47 @@ class OwnerLivenessTest(MarkerCase):
         # is a second, worse answer to a question pid_alive already owns.
         source = (PIPELINE_DIR / "busy.py").read_text(encoding="utf-8")
         self.assertNotIn("os.kill", source)
+
+
+class MarkerStartTimeTest(MarkerCase):
+    """task-0073: the supervisor ages a dispatch from Marker.started."""
+
+    RECORDED_AT = 1_700_000_000.0
+
+    def record(self, timeout=900):
+        with unittest.mock.patch.object(busy.time, "time", return_value=self.RECORDED_AT):
+            busy.acquire("task-0007", "implement", timeout)
+
+    def test_started_is_the_time_the_dispatch_was_recorded(self):
+        self.record(timeout=10**10)
+        marker = busy.read("task-0007")
+
+        self.assertEqual(busy.FRESH, marker.status)
+        self.assertEqual(self.RECORDED_AT, marker.started)
+
+    def test_started_survives_an_expired_marker(self):
+        self.record(timeout=1)
+        marker = busy.read("task-0007")
+
+        self.assertEqual(busy.EXPIRED, marker.status)
+        self.assertEqual(self.RECORDED_AT, marker.started)
+
+    def test_started_survives_a_gone_owner(self):
+        os.environ[busy.SESSION_PID_ENV] = str(os.getpid())
+        self.record(timeout=10**10)
+        with unittest.mock.patch.object(supervisor, "pid_alive", return_value=False):
+            marker = busy.read("task-0007")
+
+        self.assertEqual(busy.OWNER_GONE, marker.status)
+        self.assertEqual(self.RECORDED_AT, marker.started)
+
+    def test_there_is_no_start_time_without_a_usable_record(self):
+        self.assertEqual(0.0, busy.read("task-0007").started)
+
+        busy.path("task-0007").write_text("{not json", encoding="utf-8")
+        marker = busy.read("task-0007")
+        self.assertEqual(busy.INVALID, marker.status)
+        self.assertEqual(0.0, marker.started)
 
 
 class ExpiredIsNotAbsentTest(MarkerCase):

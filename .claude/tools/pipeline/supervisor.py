@@ -27,6 +27,8 @@ in tools/tests/test_supervisor.py, which pins that by reading this file.
 
 CLASSIFICATION (exactly one label per run, checked in this order)
 -----------------------------------------------------------------
+Five labels. HUNG is the fifth, added in task-0073, and it is the one label that
+is reported and never acted on - see HUNG below.
 LOOPING  two readings, both of `continuations` growing while `stage` does not:
          reaching the pipeline's own continuation_ceiling (VOLUME), or having
          climbed within a stage whose supervisor-spawned session has since
@@ -41,16 +43,26 @@ LOOPING  two readings, both of `continuations` growing while `stage` does not:
          is absent from RELAUNCHABLE, and relaunch() refuses any label outside
          that set before it can spawn.
 DEAD     a session THIS supervisor spawned has exited while its run still sits
-         in the stage it was spawned for. Process liveness, not a clock.
-         Note honestly what this cannot see: a session the supervisor did not
-         spawn has no known owner pid, so it can never be classified DEAD and
-         falls through to STALLED instead. The busy marker WAS no help here -
-         `advance.py --busy` recorded the pid of the advance.py process itself,
-         which had already exited by the time the marker was read, so its pid
-         was dead for every healthy run. Since task-0057 it records the
-         SESSION's pid (busy.read(task).owner_pid), which is the missing owner;
-         this detector does not read it yet and still tracks only its own
-         registry.
+         in the stage it was spawned for, or the session that recorded the
+         dispatch for this stage has exited. Process liveness, not a clock.
+         The second half is the one the registry alone could never see: a
+         session the supervisor did not spawn has no pid in it. The busy marker
+         WAS no help here - `advance.py --busy` recorded the pid of the
+         advance.py process itself, which had already exited by the time the
+         marker was read, so its pid was dead for every healthy run. Since
+         task-0057 it records the SESSION's pid, and classify() reads it through
+         busy.read(task).owner_pid (busy.py probes it with pid_alive, the one
+         liveness probe in this file, and reports OWNER_GONE). An owner that is
+         gone, on the stage the marker names, is DEAD only once the stage has
+         also been frozen for stall_seconds (a grace window: a human may be
+         restarting the session) and nothing has nagged within that time (a
+         recent nag means a new session is on the run, which then goes to the
+         HUNG check instead). Only a session THIS process spawned is DEAD
+         immediately. A reused pid cannot hide a dead owner on Windows: busy.py
+         hands the probe the marker's start time, and a process created after it
+         is not the owner. What it still cannot see: a session started outside
+         Claude Code records no owner pid, and on POSIX a reused pid reads as
+         alive.
          A spawned session that has exited is SETTLED before anything else is
          decided (settle_spawn): its exit code is read while it is still
          readable, and the relaunch counts as successful only if that code was 0
@@ -58,6 +70,10 @@ DEAD     a session THIS supervisor spawned has exited while its run still sits
          broken remedy cannot spend the budget of a working one. No clock is
          involved anywhere in that - see the startup measurement above _SPAWNED
          for why a clock cannot answer this question.
+HUNG     the run has a dispatch record for its stage, or sits on a frozen stage
+         that the Stop hook is still nagging, AND nothing has progressed (no gate
+         log row, no changed file in the task's repo, no task file edit) for
+         `hung_seconds`. Reported only: never relaunched, parked or signalled.
 STALLED  in flight, nothing above applies, the STAGE has not changed for
          `stall_seconds`, and nothing has written `continuations` for that long
          either - a stage frozen with a RECENT nag behind it is a live session,
@@ -126,12 +142,138 @@ Three facts, none of which is "this session is looping rather than working":
    parking there is right whatever the cause - which is exactly why it never
    names one.
 
-No loop-versus-slow-worker distinction is claimed anywhere, because none is
-available from `continuations`. What would provide one is progress evidence from
-outside that column - the gate log, the working tree, the task file - and none of
-it is consulted here. That gap is filed as its own task rather than folded into
-this one; task-0057 is its other half, since a busy marker that suppressed the
-nag would remove the contamination at the source.
+No loop-versus-slow-worker distinction is claimed from `continuations`, because
+none is available from it. The distinction that IS available comes from progress
+evidence outside that column - the gate log, the working tree, the task file -
+and since task-0073 (which absorbed task-0068, closed as its duplicate) it is
+consulted by progress_at(), but only for a run that has a dispatch record or a
+nagged frozen stage, and only to decide HUNG against HEALTHY. It is not used to
+call anything a loop; see HUNG. task-0057 was the other half: it gave the busy
+marker an owner and a lifecycle, so the dispatch record exists and expires.
+
+HUNG: A DISPATCH OR A NAGGED STAGE WITH NOTHING TO SHOW
+------------------------------------------------------
+Two situations, one question. (1) The run has a DISPATCH RECORD for its stage.
+The record is the busy marker and nothing else: busy.py owns it, this process
+reads it through busy.read() and keeps no second one, which is the duplication
+task-0057 and task-0073 were both written to avoid. It carries the task, the
+stage, the start time and the owner, and it clears itself - on the owner's death
+(OWNER_GONE) or its timeout (EXPIRED) - so the orchestrator cannot forget it. A
+FRESH record counts as a live dispatch, and so does an EXPIRED one whose owner is
+recorded and not gone: every harness marker expires at 900s, well inside the
+longest dispatches, so the clock alone cannot say the agent stopped. An EXPIRED
+record with NO recorded owner says nothing about whether anyone is on the run:
+once it has also shown no progress for hung_seconds the run falls back to the
+STALLED path, and a record that outlived its dispatch is itself the finding: the
+STALLED reason names it. (2) The stage has been frozen for stall_seconds while the
+Stop hook is still nagging, which is a live session going nowhere - the shape an
+idle orchestrator takes (see THE IDLE ORCHESTRATOR below).
+
+The question for both: has ANYTHING moved since the dispatch (or the stage)
+began, from outside `continuations`? progress_at() reads the gate log, the
+working tree and the task file. Nothing for `hung_seconds` is HUNG; anything
+more recent is HEALTHY, and the reason says what moved and when.
+
+HUNG IS REPORTED AND NOTHING ELSE. It is not in RELAUNCHABLE, handle_run() never
+parks it, and nothing in this file signals an agent (the only os.kill is stop(),
+aimed at this lane's own daemon; pid_alive() only probes with signal 0, which
+delivers nothing). Why the one place this process does less than
+it could: a live owner or dispatch is, by definition, on the tree, so a relaunch
+is a second writer racing the first; parking costs a CEO intervention to
+surface something the evidence cannot prove is stuck; and killing is the failure
+this label exists to avoid - a watchdog that stops work to report that work had
+stopped. The report lands in the supervisor log and in `--status`. It does NOT
+reach the live session: a session blocked on its own agent emits no stop event,
+and no external process can inject a turn into it.
+
+A BEHAVIOUR CHANGE, deliberately: before task-0073 a frozen stage with a
+dispatch record and no nags was STALLED and relaunched after stall_seconds. A
+record only five minutes old on a stage twenty minutes old qualified, so a
+healthy agent got a second session started on its tree. Now such a run, while the
+record is FRESH, or EXPIRED with an owner on record, is HEALTHY while progress is
+recent and HUNG (reported) when it is not, however old the dispatch (the 900s
+marker timeout does not end it). Relaunch stays for the runs where no live
+session is known to be on the tree: DEAD, and STALLED with no record, or with an
+EXPIRED record that names no owner and has shown no progress for hung_seconds.
+
+SLOW VERSUS HUNG, MEASURED
+--------------------------
+What separates a slow-but-working agent from a hung one, in the evidence this
+process can see? Measured over every subagent transcript this project holds
+(~/.claude/projects/<project>/<session>/subagents/agent-*.jsonl; 237 dispatches
+of 12 agent types, 2026-09-14 to 2026-10-01), by the longest stretch inside one
+dispatch with no file written. A write is an Edit, Write, MultiEdit or
+NotebookEdit tool call, a LOWER BOUND on what the working tree would show, since
+a shell command can write files too. Stretch = dispatch start, each write and
+dispatch end, largest gap between neighbours:
+
+    longest evidence-free stretch    dispatches   writer agents   read-only agents
+                                      (of 237)       (of 176)        (of 61)
+    >= 600s                              48            22              26
+    >= 900s                              33            17              16
+    >= 1200s                             21            11              10
+    >= 1800s                             10             6               4
+    >= 3600s                              4             2               2
+    p50 179s, p90 1119s, p95 1658s, p99 4161s, max 13345s
+
+Read-only agents (reviewer, architect) write no file by construction, so for
+them the whole run is one evidence-free stretch: reviewer, 57 dispatches,
+p50 533s, p90 1566s, max 4161s. qa-engineer p90 is 2687s, senior-backend-dev
+p90 1159s.
+
+CONCLUSION, and its limit. These signals cannot tell a read-only agent that is
+thinking from a hung one, and no interval is free of false reports: 1200s (this
+file's stall_seconds) would flag 21 of 237 dispatches that went on to finish
+(8.9 percent), 1800s flags 10 (4.2 percent), 3600s flags 4 (1.7 percent) but
+takes an hour to speak. `hung_seconds` is 1800, and the label is report-only so
+that the cost of a false one is a log line, not live work. The residual - a
+read-only agent past thirty minutes - is stated here, not hidden. A stronger
+signal exists: the agent's own transcript is appended on every tool call. It is
+not used because its path is a Claude Code internal (a per-user home directory, a
+mangled project name, a session id) and the task named the three signals above;
+it is the obvious next input if the false report rate turns out to matter.
+
+DEBT: REPORTED, NEVER ACTED ON
+------------------------------
+"Never acted on" means this process never spawns, parks or approves because of a
+debt. It does NOT mean the readers are pure, and two things about them are
+stated here rather than found later: they have side effects (the handoff reader
+drops a handoff scaffold marker once its doc validates, which is the cleanup the
+hook performs on the same call, and the memory reader prepends a path to
+sys.path), and they fail open to no debt, so a transient error reads as "cleared"
+and the next good poll notifies the same debt again. A duplicate notice after a
+transient error is accepted.
+
+Handoff and memory debt (a finished task whose handoff doc is not valid, or whose
+memory review is unstamped) are read every poll through the Stop hook's own two
+readers and notified when the set CHANGES (outstanding_debt, report_debt), so
+this process and the hook cannot disagree about what is owed. Decision: REPORT
+ONLY. (1) Paying it is context absorption by the NEXT task's assignee, in its own
+words (rules/pipeline.md); a headless session started for it would do it blind,
+and nothing here knows which task that is. (2) relaunch() is bound to a run row
+and to the RELAUNCHABLE labels, and a debt has no run. (3) Where it matters it
+already enforces itself: advance.py refuses a registration and the Stop hook
+refuses to let a session end while it stands. What this process adds is the case
+those two cannot cover, which is no session at all - the daemon outlives
+sessions, so a debt left by a session that ended is otherwise visible to nobody
+until the next one starts.
+
+THE IDLE ORCHESTRATOR: DETECTED, NOT REMEDIED
+---------------------------------------------
+The CEO's case: the orchestrator finishes a step and writes prose instead of
+starting the next. DETECTED: the Stop hook is nagging (`continuations` written
+within stall_seconds) on a stage frozen for stall_seconds, and for hung_seconds
+nothing has moved - no gate log row, no changed file, no task file edit. That is
+HUNG and is reported. REMEDY IS OUT OF SCOPE, for a reason and not for want of
+time: the only levers an external process has are a headless session, a file read
+at SessionStart, and a notification. A headless session would be a second writer
+on a tree whose session is alive, which is what RELAUNCHABLE exists to prevent. A
+SessionStart file reaches a session only when it starts, and an idle orchestrator
+is mid-session. A notification lands in a log. The one actor that can speak to a
+live idle orchestrator is the Stop hook, and it does so on every stop it
+receives. What stays as it was: an idle orchestrator the hook is NOT nagging, on a
+stage with no dispatch record, is indistinguishable from a dead session, so it is
+STALLED and relaunched exactly as before task-0073. That is accepted.
 
 SURFACING A BLOCKED RUN: THE STOP HOOK OWNS IT, NOT THIS PROCESS
 ----------------------------------------------------------------
@@ -188,6 +330,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -195,21 +338,26 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import busy
+import git_state
 import mode
 import state
 
-# The four classifications. Exactly one is assigned per run.
+# The five classifications. Exactly one is assigned per run.
 HEALTHY = "HEALTHY"
 STALLED = "STALLED"
 LOOPING = "LOOPING"
 DEAD = "DEAD"
-CLASSIFICATIONS = (HEALTHY, STALLED, LOOPING, DEAD)
+HUNG = "HUNG"
+CLASSIFICATIONS = (HEALTHY, STALLED, LOOPING, DEAD, HUNG)
 
-# The ONLY labels a relaunch may ever act on. LOOPING is absent on purpose and
-# must stay absent: it is the one classification where another session is the
-# wrong answer. relaunch() checks membership here before doing anything, so the
-# guard cannot be bypassed by a caller that forgets it, and it is not a config
-# key because no project setting should be able to turn it off.
+# The ONLY labels a relaunch may ever act on. LOOPING and HUNG are absent on
+# purpose and must stay absent: they are the two classifications where another
+# session is the wrong answer (a loop is amplified by a second session, and a
+# hung run has a LIVE session or dispatch on it that a second one would race).
+# relaunch() checks membership here before doing anything, so the guard cannot be
+# bypassed by a caller that forgets it, and it is not a config key because no
+# project setting should be able to turn it off.
 RELAUNCHABLE = frozenset({STALLED, DEAD})
 
 # The mark every spawned session carries, set in its environment by relaunch().
@@ -243,6 +391,11 @@ _STILL_ACTIVE = 259
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _ERROR_ACCESS_DENIED = 5
 _ERROR_INVALID_PARAMETER = 87
+# GetProcessTimes reports creation as 100ns ticks since 1601; this is 1970 in the
+# same unit. REUSE_SLACK is how much later than `since` a creation time may be
+# before the pid is read as recycled (clock rounding between the two writers).
+_FILETIME_UNIX_EPOCH = 116444736000000000
+REUSE_SLACK = 5.0
 
 # Windows process-creation flags for spawn_detached(). DETACHED_PROCESS gives
 # the child no console to inherit, so closing the session's terminal cannot take
@@ -303,6 +456,10 @@ DEFAULTS = {
     # longer than a slow exit gate (advance.py's own GATE_TIMEOUT is 900) so a
     # legitimately long test run is not mistaken for a dead session.
     "stall_seconds": 1200,
+    # A dispatch (or a nagged stage) with no progress evidence for this long is
+    # HUNG: reported, never relaunched or interrupted. 1800 is measured, not
+    # chosen: see SLOW VERSUS HUNG, MEASURED in the module docstring.
+    "hung_seconds": 1800,
     # NO `loop_ticks` KEY, deliberately, and it is gone from pipeline.json too.
     # It set the threshold for a verdict that no longer exists (see FREQUENCY WAS
     # RETIRED). A knob that quietly does nothing is worse than no knob: config()
@@ -385,7 +542,7 @@ def config() -> dict:
 
 # --- process liveness -------------------------------------------------------
 
-def pid_alive(pid: int) -> bool:
+def pid_alive(pid: int, since: float | None = None) -> bool:
     """Whether a pid is still running. On Windows, asked through kernel32 rather
     than os.kill - for the access right, NOT because signal 0 is dangerous.
 
@@ -434,8 +591,12 @@ def pid_alive(pid: int) -> bool:
     reports alive. The fail-safe direction is always "do less": a missed
     relaunch costs one poll interval, a wrong one costs a duplicate session.
 
-    A recycled pid reads as alive. Nothing here solves that; the window is one
-    poll interval wide and the consequence is a relaunch not happening."""
+    A recycled pid reads as alive UNLESS the caller passes `since`, the epoch time
+    the pid was recorded as owning something (busy.py passes the marker's start).
+    A process CREATED after that moment cannot be the one that recorded it, so on
+    Windows (GetProcessTimes) it reads as gone. POSIX has no stdlib creation time,
+    so there a recycled pid still reads as alive; the window is one poll interval
+    and the consequence is a relaunch not happening."""
     try:
         pid = int(pid)
     except (TypeError, ValueError):
@@ -456,7 +617,15 @@ def pid_alive(pid: int) -> bool:
             try:
                 code = ctypes.c_ulong()
                 ok = k32.GetExitCodeProcess(handle, ctypes.byref(code))
-                return bool(ok) and code.value == _STILL_ACTIVE
+                if not (ok and code.value == _STILL_ACTIVE):
+                    return False
+                if since is None:
+                    return True
+                created, other = ctypes.c_ulonglong(), ctypes.c_ulonglong()
+                if not k32.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(other),
+                                           ctypes.byref(other), ctypes.byref(other)):
+                    return True  # cannot tell
+                return (created.value - _FILETIME_UNIX_EPOCH) / 1e7 <= float(since) + REUSE_SLACK
             finally:
                 k32.CloseHandle(handle)
         except Exception:
@@ -479,7 +648,7 @@ def pid_alive(pid: int) -> bool:
 # --- registry ---------------------------------------------------------------
 
 def empty_registry() -> dict:
-    return {"tasks": {}, "actions": []}
+    return {"tasks": {}, "actions": [], "debt": []}
 
 
 def load_registry() -> dict:
@@ -504,9 +673,11 @@ def load_registry() -> dict:
         tasks = {task: entry for task, entry in tasks.items() if isinstance(entry, dict)}
     else:
         tasks = {}
+    debt = data.get("debt")
     return {
         "tasks": tasks,
         "actions": actions if isinstance(actions, list) else [],
+        "debt": debt if isinstance(debt, list) else [],
     }
 
 
@@ -835,10 +1006,86 @@ def observe(entry: dict, run: dict, now_ts: float) -> dict:
     return entry
 
 
+# --- progress evidence ------------------------------------------------------
+
+# One `git status --porcelain -z` entry: the two status letters, a space, the
+# path. git_state._git strips its output, which can eat the leading space of the
+# first entry, hence one or two status characters.
+_STATUS_ENTRY = re.compile(r"([ MADRCU?!]{1,2}) (.+)", re.DOTALL)
+
+def progress_at(task: str) -> tuple[float | None, str]:
+    """The newest sign that work is happening on `task`, and where it was seen.
+
+    The three signals the task named, and none of them is `continuations`, which
+    the Stop hook writes to count its own nags and so cannot tell a worker from
+    an idle session being nagged (see FREQUENCY WAS RETIRED):
+
+    1. the gate log - a row means a stage gate really ran;
+    2. the task file's mtime - the task was edited (criteria ticked, sections
+       filled);
+    3. the working tree - the newest mtime among the files the task's repo(s)
+       report as changed or untracked.
+
+    Read-only throughout. `--no-optional-locks` keeps the status call from taking
+    the index lock, which an agent's own repo command could collide with. A
+    deleted file leaves no mtime to read, so a pure deletion is not seen; the
+    other two signals usually are. Fails open to "no evidence" - which leads to a
+    REPORT at worst (see HUNG), never to an action."""
+    best: tuple[float | None, str] = (None, "")
+    now = time.time()
+
+    def newer(at: float | None, source: str) -> None:
+        # A stamp from the future (a clock step, a restored file) is not evidence
+        # that anything moved: it would read as progress "just now" on every poll
+        # and keep a dead run HEALTHY for good.
+        nonlocal best
+        if at is not None and at <= now and (best[0] is None or at > best[0]):
+            best = (at, source)
+
+    try:
+        conn = state.connect()
+        try:
+            found = conn.execute("SELECT max(at) FROM gate_log WHERE task = ?", (task,)).fetchone()
+        finally:
+            conn.close()
+        newer(parse_updated(found[0]) if found else None, "the gate log")
+    except Exception:
+        pass
+    try:
+        folder = state.task_dir(task)
+        if folder:
+            newer((state.TASK_DIRS[folder] / f"{task}.md").stat().st_mtime, "the task file")
+    except Exception:
+        pass
+    try:
+        for repo in git_state.repos_for_task(task):
+            code, out = git_state._git(repo, "--no-optional-locks", "status", "--porcelain",
+                                       "-z", "-uall")
+            # -z: NUL-separated and never quoted, so a path with a space or a
+            # non-ASCII character is still a path. A rename is `XY new` followed by
+            # a bare `old` entry, which is skipped (it no longer exists).
+            skip = False
+            for entry in (out.split("\0") if code == 0 else []):
+                if skip:
+                    skip = False
+                    continue
+                found = _STATUS_ENTRY.fullmatch(entry)
+                if not found:
+                    continue
+                skip = "R" in found.group(1) or "C" in found.group(1)
+                try:
+                    newer((repo / found.group(2)).stat().st_mtime, "the working tree")
+                except OSError:
+                    continue
+    except Exception:
+        pass
+    return best
+
+
 # --- classification ---------------------------------------------------------
 
 def classify(run: dict, entry: dict, cfg: dict, now_ts: float) -> tuple[str, str]:
-    """Exactly one of the four labels, plus the fact it was derived from.
+    """Exactly one of the five labels, plus the fact it was derived from.
 
     Call observe() first: this reads the climb counts off the entry rather than
     recomputing them, so the evidence is accumulated in one place."""
@@ -907,6 +1154,22 @@ def classify(run: dict, entry: dict, cfg: dict, now_ts: float) -> tuple[str, str
     # question from whether it ever did. See the stall branch below.
     climb_age = climb_seconds(entry, now_ts)
     driven = climb_age is not None and climb_age < stall
+    # The dispatch record, through the one reader of it (busy.py). It only speaks
+    # for THIS stage: a record naming another stage (a handoff scaffold, a gate
+    # on a stage the run has left) is about something else.
+    marker = busy.read(run.get("task") or "")
+    on_stage = marker.stage == stage
+    owner_gone = marker.status == busy.OWNER_GONE and on_stage
+    # FRESH or EXPIRED. Every record the harness writes expires at 900s, well
+    # inside the longest dispatches (task-0073 review, C1), so an EXPIRED record
+    # whose owner busy.read() did not find gone is still a dispatch that may be
+    # running: it is asked the same HUNG question as a FRESH one. What an EXPIRED
+    # record with NO recorded owner says is that nobody is known to be on the
+    # run, so once it has also shown no progress for hung_seconds it falls back
+    # to the STALLED path below, which names the record (`abandoned`).
+    expired = marker.status == busy.EXPIRED and on_stage
+    dispatched = (marker.status == busy.FRESH and on_stage) or expired
+    abandoned = expired and not marker.owner_pid and not driven
 
     # THE BOUNDARY between a loop and a plain stall, and the third guard on
     # LOOPING (RELAUNCHABLE and handle_run's park branch are the other two; all
@@ -945,6 +1208,53 @@ def classify(run: dict, entry: dict, cfg: dict, now_ts: float) -> tuple[str, str
     if dead:
         return DEAD, (f"supervisor-spawned session pid {pid} exited with the run still at "
                       f"stage '{stage}' (spawned for that stage)")
+    if owner_gone:
+        # The session that recorded the dispatch is gone (busy.read probed the
+        # owner_pid it carries through pid_alive, the one liveness probe here),
+        # and this supervisor did not spawn it, so this is the case the registry
+        # alone could never see. Unlike a session we spawned, this one may be
+        # replaced by a human restarting or resuming it, so there is a grace
+        # window: the stage must also have been frozen for stall_seconds. And a
+        # RECENT nag means a new session is on the run (only a live session makes
+        # the Stop hook write `continuations`): a relaunch would race it, so it
+        # falls through to the HUNG check below, which still sees an idle one.
+        if stalled and not driven:
+            return DEAD, (f"the session that dispatched work on stage '{stage}' (pid "
+                          f"{marker.owner_pid}, from its busy marker) is gone and the stage "
+                          f"has not changed for {int(age)}s")
+    if dispatched or (stalled and driven):
+        # HUNG, or proof that a slow run is working. A dispatch is "in flight"
+        # from the moment it was recorded; a nagged stage from the moment the
+        # stage began. Either way the question is the same and `continuations`
+        # cannot answer it: has ANYTHING moved since, outside that column?
+        # progress_at() is only asked once the window is old enough to matter,
+        # which keeps the git call off every healthy poll.
+        hung = float(cfg.get("hung_seconds", DEFAULTS["hung_seconds"]))
+        # A stamp from the future (a clock step) is no start time: skip it and
+        # measure from the stage instead.
+        started = marker.started if dispatched and 0 < marker.started <= now_ts else None
+        since = started if started is not None else (now_ts - age if stalled else now_ts)
+        quiet = now_ts - since
+        seen, source = (None, "")
+        if quiet >= hung:
+            seen, source = progress_at(run.get("task") or "")
+            if seen is not None:
+                quiet = min(quiet, max(0.0, now_ts - seen))
+        what = (f"a dispatch recorded {int(now_ts - started)}s ago for stage '{stage}' (busy "
+                f"record {marker.status}, owner pid {marker.owner_pid or 'unknown'})"
+                if started is not None else
+                f"stage '{stage}', unchanged for {int(age or 0)}s"
+                + (f" with the Stop hook nagging within the last {int(climb_age)}s"
+                   if climb_age is not None else ""))
+        if quiet >= hung and not abandoned:
+            return HUNG, (f"{what}, and nothing has progressed for {int(quiet)}s (no gate log "
+                          f"row, no working tree change, no task file change; hung_seconds="
+                          f"{int(hung)}). Reported only: a live session or agent may still be "
+                          f"on it, so it is never relaunched, parked or interrupted")
+        if dispatched and quiet < hung:
+            return HEALTHY, (f"{what}; " + (
+                f"progress seen {int(now_ts - seen)}s ago in {source}" if seen is not None
+                else f"it is reported HUNG only after {int(hung)}s without progress"))
     if stalled and driven:
         # A FROZEN STAGE WITH A RECENT NAG IS NEITHER RELAUNCHED NOR PARKED, and
         # this is the second half of task-0067. `continuations` belongs to two
@@ -999,7 +1309,10 @@ def classify(run: dict, entry: dict, cfg: dict, now_ts: float) -> tuple[str, str
     if stalled:
         return STALLED, (f"stage '{stage}' unchanged for {int(age)}s with no continuations "
                          f"growth within it for at least that long "
-                         f"({source}; stall_seconds={int(stall)})")
+                         f"({source}; stall_seconds={int(stall)})"
+                         + (f". A dispatch record for this stage expired uncleared "
+                            f"(owner pid {marker.owner_pid or 'unknown'}), so nobody is "
+                            f"known to be on it" if expired else ""))
 
     return HEALTHY, (f"stage '{stage}' unchanged for {int(age)}s ({source})"
                      if age is not None else f"stage '{stage}', age unknown")
@@ -1268,6 +1581,14 @@ def handle_run(run: dict, reg: dict, cfg: dict, now_ts: float, act: bool) -> dic
     if label == HEALTHY:
         return event
 
+    if label == HUNG:
+        # REPORT ONLY, whether or not this pass acts: the notify above is the whole
+        # response. Not in RELAUNCHABLE, not parked, never signalled - see HUNG
+        # in the module docstring for why a hung run is the one place this process
+        # does less than it could.
+        event["action"] = "reported only"
+        return event
+
     if not act:
         event["action"] = f"would {'park blocked' if label == LOOPING else 'relaunch'}"
         return event
@@ -1309,12 +1630,36 @@ def handle_run(run: dict, reg: dict, cfg: dict, now_ts: float, act: bool) -> dic
     return event
 
 
+def outstanding_debt() -> list[str]:
+    """The handoff and memory debts the Stop hook gates on, as sorted
+    'kind:task' keys - the SAME two readers (stop_gate.handoff_debt and
+    memory_debt, each fail-open to no debt), so this process and the hook cannot
+    disagree about what is owed."""
+    import stop_gate
+    return sorted([f"handoff:{d['task']}" for d in stop_gate.handoff_debt()]
+                  + [f"memory:{d['task']}" for d in stop_gate.memory_debt()])
+
+
+def report_debt(reg: dict) -> list[str]:
+    """Notify when the outstanding debt CHANGES, and never act on it. Returns the
+    current debt. See DEBT in the module docstring for why this only reports."""
+    try:
+        debt = outstanding_debt()
+    except Exception:
+        return list(reg.get("debt", []))
+    if debt != reg.get("debt", []):
+        notify(f"outstanding debt: {', '.join(debt)}" if debt else "outstanding debt cleared")
+        reg["debt"] = debt
+    return debt
+
+
 def poll_once(cfg: dict, act: bool = True) -> dict:
     """One pass over every run in this lane's run.db.
 
-    Returns {"events": [...], "stop": "<reason or ''>"}. The `stop` reason is
-    set when a cap is hit or the pass itself failed; main() then stops the
-    supervisor and notifies rather than polling on."""
+    Returns {"events": [...], "stop": "<reason or ''>", "debt": [...]}. The
+    `stop` reason is set when a cap is hit or the pass itself failed; main()
+    then stops the supervisor and notifies rather than polling on. `debt` is the
+    outstanding handoff and memory debt, reported and never acted on."""
     reg = load_registry()
     events: list[dict] = []
     stop = ""
@@ -1354,6 +1699,7 @@ def poll_once(cfg: dict, act: bool = True) -> dict:
             break
 
     prune_registry(reg, runs)
+    debt = report_debt(reg)
     if not save_registry(reg):
         # LOUD, and every time. The registry holds the stall clock, so a
         # supervisor that cannot write it silently degrades to the row-touch
@@ -1365,7 +1711,7 @@ def poll_once(cfg: dict, act: bool = True) -> dict:
                f"clock cannot persist, so every poll re-seeds it from the run row and a "
                f"stalled run may read HEALTHY indefinitely. Fix the path or the permissions; "
                f"detection is degraded until then.")
-    return {"events": events, "stop": stop}
+    return {"events": events, "stop": stop, "debt": debt}
 
 
 def prune_registry(reg: dict, runs: list[dict]) -> int:
@@ -1388,6 +1734,8 @@ def prune_registry(reg: dict, runs: list[dict]) -> int:
 def print_pass(result: dict) -> None:
     for event in result["events"]:
         print(json.dumps(event), flush=True)
+    if result.get("debt"):
+        print(json.dumps({"debt": result["debt"]}), flush=True)
 
 
 # --- the singleton lock -----------------------------------------------------
