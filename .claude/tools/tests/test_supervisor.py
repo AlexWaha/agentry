@@ -43,9 +43,18 @@ sys.path.insert(0, str(PIPELINE_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
 import approvals
+import busy
+import git_state
 import pretool_gate
 import state
+import stop_gate
 import supervisor
+
+# The real readers, kept before Sandbox replaces them with hermetic stand-ins, so
+# the tests of those readers themselves can still reach them.
+REAL_PROGRESS_AT = supervisor.progress_at
+REAL_OUTSTANDING_DEBT = supervisor.outstanding_debt
+REAL_GIT = git_state._git
 
 # tmproot resolves the sandbox root AT IMPORT TIME, which makes this module's
 # import depend on the environment rather than only on sys.path. Anything that
@@ -142,6 +151,16 @@ class Sandbox(unittest.TestCase):
         patcher = unittest.mock.patch.object(supervisor, "notify", self.notices.append)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # Hermetic by default. progress_at() reads the real working tree and
+        # outstanding_debt() the real task folders, so left alone they would make
+        # every test here depend on what happens to be checked out. Progress reads
+        # as "just now", which keeps the tests written before HUNG existed about
+        # their own subject; the HUNG tests patch both again.
+        for attr, value in (("progress_at", lambda task: (1e18, "the sandbox")),
+                            ("outstanding_debt", list)):
+            patcher = unittest.mock.patch.object(supervisor, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def make_row(self, task="task-0001", stage="implement", **fields) -> dict:
         """A REAL row in the sandboxed run store, for the tests that have to read
@@ -2074,6 +2093,505 @@ class SlowLoopBoundaryTest(Sandbox):
         self.assertNotIn(supervisor.LOOPING, labels)
         # Not parked: a stalled run is restarted, not surfaced to the CEO.
         self.assertEqual(state.ST_IN_PROGRESS, self.read_row()["stage_status"])
+
+
+class HungDispatchTest(Sandbox):
+    """task-0073: a dispatch (or a nagged, frozen stage) with nothing to show.
+
+    The property under test is the DISTINCTION, so the pairs matter more than any
+    single case: the same dispatch, the same age, the same stage - and the only
+    thing that differs between HUNG and HEALTHY is whether progress evidence
+    from outside `continuations` exists. A clock alone cannot separate them
+    (see SLOW VERSUS HUNG, MEASURED in supervisor.py)."""
+
+    LONG = 7200  # a timeout long enough for the record to still be FRESH at any age here
+
+    def dispatch(self, age, task="task-0001", stage="implement", owner=None, timeout=900):
+        """Record a dispatch that started `age` seconds ago, through busy.py - the
+        only writer of the record. `owner` is the session pid the record names."""
+        env = {k: v for k, v in os.environ.items() if k != busy.SESSION_PID_ENV}
+        if owner is not None:
+            env[busy.SESSION_PID_ENV] = str(owner)
+        with unittest.mock.patch.dict(os.environ, env, clear=True), \
+                unittest.mock.patch.object(busy.time, "time", return_value=time.time() - age):
+            busy.acquire(task, stage, timeout)
+
+    def seen(self, ago, source="the working tree"):
+        """Make progress_at() answer: something moved `ago` seconds ago (None for
+        nothing at all). Returns the mock, so a test can assert it was or was
+        not consulted."""
+        found = (None, "") if ago is None else (time.time() - ago, source)
+        patcher = unittest.mock.patch.object(supervisor, "progress_at", return_value=found)
+        mock = patcher.start()
+        self.addCleanup(patcher.stop)
+        return mock
+
+    def frozen(self, age=5000, **over) -> dict:
+        """A registry entry for a stage that has not changed for `age` seconds."""
+        entry = {"stage": "implement", "continuations": 0, "stage_since": time.time() - age,
+                 "stage_since_observed": True}
+        entry.update(over)
+        return entry
+
+    def dead_child(self) -> subprocess.Popen:
+        proc = spawn_child()
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        proc.terminate()
+        proc.wait(timeout=30)
+        return proc
+
+    # --- the distinction ----------------------------------------------------
+
+    def test_a_dispatch_with_no_progress_for_hung_seconds_is_hung_and_only_reported(self):
+        self.make_row("task-0001")
+        self.dispatch(age=3000, timeout=self.LONG)
+        progress = self.seen(None)
+
+        label, why = supervisor.classify(row(), self.frozen(), cfg(), time.time())
+        self.assertEqual(supervisor.HUNG, label, why)
+        self.assertIn("never relaunched", why)
+        progress.assert_called_once_with("task-0001")
+
+        # Through the real handler: reported, and nothing else happens.
+        before = self.read_row()
+        reg = supervisor.empty_registry()
+        with unittest.mock.patch.object(state, "task_dir", return_value="active"), \
+                unittest.mock.patch.object(supervisor.subprocess, "Popen") as popen:
+            event = supervisor.handle_run(row(), reg, cfg(), time.time(), act=True)
+        popen.assert_not_called()
+        self.assertEqual(supervisor.HUNG, event["classification"])
+        self.assertEqual("reported only", event["action"])
+        self.assertTrue(any("is HUNG" in n for n in self.notices), self.notices)
+        self.assertEqual([], reg["actions"], "a report is not an action and spends no cap")
+        self.assertEqual(before, self.read_row(), "the run row must be untouched")
+
+    def test_the_same_dispatch_with_recent_progress_is_a_slow_worker_not_a_hung_one(self):
+        for source in ("the gate log", "the working tree", "the task file"):
+            with self.subTest(source=source):
+                self.dispatch(age=3000, timeout=self.LONG)
+                self.seen(120, source)
+                label, why = supervisor.classify(row(), self.frozen(), cfg(), time.time())
+                self.assertEqual(supervisor.HEALTHY, label, why)
+                self.assertIn(f"progress seen 120s ago in {source}", why)
+
+    def test_progress_from_before_the_dispatch_does_not_count(self):
+        self.dispatch(age=3000, timeout=self.LONG)
+        self.seen(5000)
+        label, why = supervisor.classify(row(), self.frozen(), cfg(), time.time())
+        self.assertEqual(supervisor.HUNG, label, why)
+
+    def test_hung_seconds_is_the_boundary_and_evidence_is_not_read_before_it(self):
+        hung = supervisor.DEFAULTS["hung_seconds"]
+        self.dispatch(age=hung - 10, timeout=self.LONG)
+        progress = self.seen(None)
+        label, why = supervisor.classify(row(), self.frozen(), cfg(), time.time())
+        self.assertEqual(supervisor.HEALTHY, label, why)
+        progress.assert_not_called()
+
+        self.dispatch(age=hung + 10, timeout=self.LONG)
+        label, why = supervisor.classify(row(), self.frozen(), cfg(), time.time())
+        self.assertEqual(supervisor.HUNG, label, why)
+
+    def test_a_fresh_dispatch_on_a_long_frozen_stage_is_not_relaunched(self):
+        # The double-writer defect this task fixed: a record five minutes old on a
+        # stage twenty minutes old read as STALLED, so a healthy agent got a
+        # second session started on its tree.
+        self.dispatch(age=300)
+        self.seen(None)
+        stale = row(updated=aged(5000))
+        label, why = supervisor.classify(stale, self.frozen(age=5000), cfg(), time.time())
+        self.assertEqual(supervisor.HEALTHY, label, why)
+
+        # The control: with no record the same entry IS a stall, so the record is
+        # what changed the answer.
+        busy.release("task-0001")
+        label, _ = supervisor.classify(stale, self.frozen(age=5000), cfg(), time.time())
+        self.assertEqual(supervisor.STALLED, label)
+
+    def test_a_record_for_another_stage_is_not_this_stages_dispatch(self):
+        self.dispatch(age=3000, stage="handoff")
+        label, why = supervisor.classify(row(updated=aged(5000)), self.frozen(age=5000),
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.STALLED, label, why)
+
+    # --- the idle orchestrator ------------------------------------------------
+
+    def test_a_nagged_frozen_stage_with_nothing_moving_is_hung(self):
+        entry = self.frozen(age=3600, continuations=8, stage_climbs=4,
+                            last_climb=time.time() - 30)
+        self.seen(None)
+        label, why = supervisor.classify(row(continuations=8), entry, cfg(), time.time())
+        self.assertEqual(supervisor.HUNG, label, why)
+        self.assertIn("Stop hook nagging", why)
+
+        # The pair: the same stage with a changed file behind it is working.
+        self.seen(60)
+        label, why = supervisor.classify(row(continuations=8), entry, cfg(), time.time())
+        self.assertEqual(supervisor.HEALTHY, label, why)
+        self.assertIn("still driving this run", why)
+
+    # --- the dispatching session ----------------------------------------------
+
+    def test_a_dispatching_session_that_exited_is_dead_though_we_never_spawned_it(self):
+        proc = self.dead_child()
+        self.dispatch(age=60, owner=proc.pid)
+        label, why = supervisor.classify(row(updated=aged(5000)), self.frozen(age=5000),
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.DEAD, label, why)
+        self.assertIn(str(proc.pid), why)
+        self.assertIn(label, supervisor.RELAUNCHABLE)
+
+    def test_a_dead_dispatcher_gets_a_grace_window_before_it_is_relaunched(self):
+        # A restart 90 seconds ago is not a dead run. Only a session WE spawned is
+        # DEAD immediately; a dispatcher we did not spawn needs a frozen stage too.
+        proc = self.dead_child()
+        self.dispatch(age=60, owner=proc.pid)
+        label, why = supervisor.classify(row(), self.frozen(age=90), cfg(), time.time())
+        self.assertEqual(supervisor.HEALTHY, label, why)
+        label, why = supervisor.classify(row(), self.frozen(age=5000), cfg(), time.time())
+        self.assertEqual(supervisor.DEAD, label, why)
+
+    def test_a_live_dispatching_session_is_not_dead(self):
+        proc = spawn_child()
+        self.addCleanup(lambda: (proc.kill(), proc.wait(timeout=30)))
+        self.dispatch(age=60, owner=proc.pid)
+        label, why = supervisor.classify(row(), {"stage": "implement", "continuations": 0},
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.HEALTHY, label, why)
+
+    def test_a_dead_dispatcher_with_a_recent_nag_is_not_relaunched_but_can_still_be_hung(self):
+        # A nag means a session is on the run again, so no relaunch - but that
+        # session may be the idle orchestrator, so it must reach the HUNG check
+        # rather than being answered HEALTHY on the spot.
+        proc = self.dead_child()
+        self.dispatch(age=60, owner=proc.pid)
+        entry = self.frozen(age=5000, continuations=1, stage_climbs=1,
+                            last_climb=time.time() - 30)
+        self.seen(None)
+        label, why = supervisor.classify(row(continuations=1, updated=aged(5000)), entry,
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.HUNG, label, why)
+        self.assertNotIn(label, supervisor.RELAUNCHABLE)
+
+        self.seen(60)
+        label, why = supervisor.classify(row(continuations=1, updated=aged(5000)), entry,
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.HEALTHY, label, why)
+
+    def test_an_expired_record_naming_no_owner_and_no_progress_is_still_relaunched(self):
+        # The regression: an EXPIRED record with no owner on record used to read HUNG
+        # forever and was never relaunched, where before this task it was STALLED.
+        # Nobody is known to be on the run, so it stays STALLED - but only after the
+        # progress evidence has been asked for and found nothing.
+        self.dispatch(age=3000)  # the default 900s timeout: expired, no owner recorded
+        self.assertEqual(busy.EXPIRED, busy.read("task-0001").status)
+        progress = self.seen(None)
+        label, why = supervisor.classify(row(updated=aged(5000)), self.frozen(age=5000),
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.STALLED, label, why)
+        self.assertIn("expired uncleared", why, "the stale record is named as the finding")
+        self.assertIn(label, supervisor.RELAUNCHABLE)
+        progress.assert_called_once_with("task-0001")
+
+    def test_an_expired_record_naming_no_owner_but_with_recent_progress_is_healthy(self):
+        self.dispatch(age=3000)
+        self.assertEqual(busy.EXPIRED, busy.read("task-0001").status)
+        self.seen(120, "the working tree")
+        label, why = supervisor.classify(row(updated=aged(5000)), self.frozen(age=5000),
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.HEALTHY, label, why)
+        self.assertIn("progress seen 120s ago in the working tree", why)
+
+    # --- a dispatch longer than its marker timeout (task-0073 review, C1) -------
+    # Every marker the harness writes expires at state.BUSY_TIMEOUT (900s), so these
+    # run through the real timeout: age 3000, timeout 900, the record EXPIRED.
+
+    def owned_expired_dispatch(self):
+        self.dispatch(age=3000, owner=4242, timeout=state.BUSY_TIMEOUT)
+        patcher = unittest.mock.patch.object(supervisor, "pid_alive", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        marker = busy.read("task-0001")
+        self.assertEqual(busy.EXPIRED, marker.status)
+        self.assertEqual(4242, marker.owner_pid)
+
+    def test_a_dispatch_past_its_marker_timeout_with_recent_progress_is_healthy(self):
+        self.owned_expired_dispatch()
+        self.seen(120, "the gate log")
+        label, why = supervisor.classify(row(updated=aged(5000)), self.frozen(age=5000),
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.HEALTHY, label, why)
+        self.assertIn("progress seen 120s ago in the gate log", why)
+        self.assertNotIn(label, supervisor.RELAUNCHABLE)
+
+    def test_a_dispatch_past_its_marker_timeout_with_no_progress_is_hung_not_relaunched(self):
+        self.make_row("task-0001")
+        self.owned_expired_dispatch()
+        progress = self.seen(None)
+        label, why = supervisor.classify(row(updated=aged(5000)), self.frozen(age=5000),
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.HUNG, label, why)
+        progress.assert_called_once_with("task-0001")
+
+        # Through the real handler: reported, no second session.
+        reg = supervisor.empty_registry()
+        stale = dict(self.read_row(), updated=aged(5000))
+        with unittest.mock.patch.object(state, "task_dir", return_value="active"), \
+                unittest.mock.patch.object(supervisor.subprocess, "Popen") as popen:
+            event = supervisor.handle_run(stale, reg, cfg(), time.time(), act=True)
+        popen.assert_not_called()
+        self.assertEqual(supervisor.HUNG, event["classification"], event["why"])
+        self.assertEqual([], reg["actions"])
+
+    def test_a_dispatch_stamped_in_the_future_does_not_claim_the_hook_is_nagging(self):
+        self.dispatch(age=-500)
+        self.seen(None)
+        label, why = supervisor.classify(row(updated=aged(5000)), self.frozen(age=5000),
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.HUNG, label, why)
+        self.assertNotIn("nagging", why)
+
+    @unittest.skipUnless(os.name == "nt", "creation time is read through kernel32")
+    def test_a_recycled_pid_does_not_make_a_dead_owner_look_alive(self):
+        # The case pid_alive alone cannot see: the pid is running, but the process
+        # was created AFTER the marker was written, so it is not the owner.
+        proc = spawn_child()
+        self.addCleanup(lambda: (proc.kill(), proc.wait(timeout=30)))
+        self.assertTrue(supervisor.pid_alive(proc.pid))
+        self.assertTrue(supervisor.pid_alive(proc.pid, since=time.time()))
+        self.assertFalse(supervisor.pid_alive(proc.pid, since=time.time() - 3000))
+
+        self.dispatch(age=3000, owner=proc.pid, timeout=self.LONG)
+        marker = busy.read("task-0001")
+        self.assertEqual(busy.OWNER_GONE, marker.status)
+        label, why = supervisor.classify(row(updated=aged(5000)), self.frozen(age=5000),
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.DEAD, label, why)
+
+    def test_a_relaunch_for_a_dead_dispatcher_is_marked_unattended_and_approves_nothing(self):
+        # The new route onto a relaunch must go through the one spawn that carries
+        # the refusal of push, merge and approval (task-0067, task-0090).
+        self.make_row("task-0001")
+        proc = self.dead_child()
+        self.dispatch(age=60, owner=proc.pid)
+        reg = supervisor.empty_registry()
+        stale = dict(self.read_row(), updated=aged(5000))
+        with unittest.mock.patch.object(state, "task_dir", return_value="active"), \
+                unittest.mock.patch.object(supervisor.subprocess, "Popen") as popen:
+            popen.return_value = unittest.mock.Mock(pid=99)
+            event = supervisor.handle_run(stale, reg, cfg(), time.time(), act=True)
+        self.assertEqual(supervisor.DEAD, event["classification"], event["why"])
+        self.assertEqual(supervisor.ACTION_RELAUNCH, event["action"])
+        self.assertEqual("1", popen.call_args.kwargs["env"].get(supervisor.UNATTENDED_ENV))
+        after = self.read_row()
+        self.assertEqual((0, 0), (after["commit_approved"], after["push_approved"]))
+        self.assertEqual("implement", after["stage"])
+
+    # --- what HUNG may never do -------------------------------------------------
+
+    def test_hung_is_not_relaunchable_and_relaunch_refuses_it(self):
+        self.assertNotIn(supervisor.HUNG, supervisor.RELAUNCHABLE)
+        with unittest.mock.patch.object(supervisor.subprocess, "Popen") as popen:
+            result = supervisor.relaunch(supervisor.HUNG, "task-0001", "implement", "hung", cfg())
+        self.assertEqual((False, [], 0, ""), result)
+        popen.assert_not_called()
+
+    def test_nothing_outside_stop_signals_a_process(self):
+        # "Nothing it does can kill or interrupt a live agent." The one os.kill is
+        # stop(), aimed at this lane's own daemon and gated on its heartbeat. The
+        # probe in pid_alive is a liveness check, not a signal, so its region is
+        # set aside as well.
+        src = (PIPELINE_DIR / "supervisor.py").read_text(encoding="utf-8")
+        stop_body = src[src.index("def stop()"):src.index("def main()")]
+        probe = src[src.index("def pid_alive"):src.index("def empty_registry")]
+        outside = src.replace(stop_body, "").replace(probe, "")
+        self.assertIn("os.kill(pid, signal.SIGTERM)", stop_body)
+        for token in ("os.kill(", "os.killpg", ".terminate(", ".kill(", "taskkill",
+                      "TerminateProcess", "send_signal"):
+            with self.subTest(token=token):
+                self.assertNotIn(token, outside)
+
+
+class ProgressEvidenceTest(Sandbox):
+    """progress_at(): the three signals, from outside `continuations`."""
+
+    def setUp(self):
+        super().setUp()
+        self.repo = self.tmp / "repo"
+        self.active = self.tmp / "active"
+        for folder in (self.repo, self.active):
+            folder.mkdir()
+        for target, attr, value in (
+                (state.TASK_DIRS, None, {"active": self.active, "backlog": self.tmp / "none",
+                                         "done": self.tmp / "none"}),
+                (git_state, "repos_for_task", lambda task: [self.repo]),
+                (git_state, "_git", lambda *a, **k: (0, ""))):
+            patcher = (unittest.mock.patch.dict(target, value, clear=True) if attr is None
+                       else unittest.mock.patch.object(target, attr, value))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def touch(self, path: Path, ago: float) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+        os.utime(path, (time.time() - ago, time.time() - ago))
+
+    def gate_row(self, ago: float) -> None:
+        conn = state.connect()
+        try:
+            conn.execute("INSERT INTO gate_log (task, stage, cmd, exit, at) VALUES (?, ?, ?, ?, ?)",
+                         ("task-0001", "implement", "cmd", 0, stamp(time.time() - ago)))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def status(self, *lines: str) -> None:
+        """What `status --porcelain -z` prints, as git_state._git hands it back:
+        NUL-separated, never quoted, and stripped, so the first entry has lost its
+        leading space."""
+        text = "\0".join(lines).strip()
+        patcher = unittest.mock.patch.object(git_state, "_git", return_value=(0, text))
+        self.status_mock = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_nothing_anywhere_is_no_evidence(self):
+        self.assertEqual((None, ""), REAL_PROGRESS_AT("task-0001"))
+
+    def test_the_newest_of_the_three_signals_wins_and_is_named(self):
+        self.gate_row(900)
+        at, source = REAL_PROGRESS_AT("task-0001")
+        self.assertEqual("the gate log", source)
+        self.assertAlmostEqual(time.time() - 900, at, delta=2)
+
+        self.touch(self.active / "task-0001.md", 600)
+        self.assertEqual("the task file", REAL_PROGRESS_AT("task-0001")[1])
+
+        self.touch(self.repo / "a.txt", 300)
+        self.status(" M a.txt")
+        at, source = REAL_PROGRESS_AT("task-0001")
+        self.assertEqual("the working tree", source)
+        self.assertAlmostEqual(time.time() - 300, at, delta=2)
+
+    def test_status_lines_are_read_in_every_shape_git_prints_them(self):
+        self.touch(self.repo / "new.txt", 700)
+        self.touch(self.repo / "sub" / "b.txt", 500)
+        self.touch(self.repo / "has space.txt", 100)
+        self.status(" M gone.txt", "R  new.txt", "old.txt", "?? sub/b.txt",
+                    "D  deleted.txt", "?? has space.txt")
+        at, source = REAL_PROGRESS_AT("task-0001")
+        self.assertEqual("the working tree", source)
+        self.assertAlmostEqual(time.time() - 100, at, delta=2,
+                               msg="the newest file wins; the deleted and missing ones are skipped")
+
+        # Without the newest file the rename target and the untracked file decide.
+        (self.repo / "has space.txt").unlink()
+        at, _ = REAL_PROGRESS_AT("task-0001")
+        self.assertAlmostEqual(time.time() - 500, at, delta=2)
+
+    def test_a_path_git_would_have_quoted_is_still_a_path(self):
+        # Without -z git prints "caf\303\251.txt" in quotes, which no stat can open.
+        self.touch(self.repo / "caf\u00e9 au lait.txt", 40)
+        self.status("?? caf\u00e9 au lait.txt")
+        at, source = REAL_PROGRESS_AT("task-0001")
+        self.assertEqual("the working tree", source)
+        self.assertAlmostEqual(time.time() - 40, at, delta=2)
+
+    def test_the_old_name_in_a_rename_is_not_read_as_an_entry(self):
+        # `R  new` is followed by a bare `old`. Here the old name happens to read
+        # like a status entry for a file that exists and is newer: if it were
+        # parsed as one, it would win. The rename target alone is the evidence.
+        self.touch(self.repo / "new.txt", 200)
+        self.touch(self.repo / "fresh.txt", 5)
+        self.status("R  new.txt", "A  fresh.txt")
+        at, _ = REAL_PROGRESS_AT("task-0001")
+        self.assertAlmostEqual(time.time() - 200, at, delta=2)
+
+    def test_a_stamp_from_the_future_is_not_progress(self):
+        self.touch(self.repo / "a.txt", -3600)
+        self.status(" M a.txt")
+        self.assertEqual((None, ""), REAL_PROGRESS_AT("task-0001"))
+        self.touch(self.active / "task-0001.md", -3600)
+        self.gate_row(-3600)
+        self.assertEqual((None, ""), REAL_PROGRESS_AT("task-0001"))
+
+        # The control: the same file stamped in the past is evidence.
+        self.touch(self.repo / "a.txt", 30)
+        self.assertEqual("the working tree", REAL_PROGRESS_AT("task-0001")[1])
+
+    def test_git_is_spawned_without_a_console_window_and_read_as_utf8(self):
+        with unittest.mock.patch.object(git_state.subprocess, "run") as run:
+            run.return_value = unittest.mock.Mock(returncode=0, stdout="x")
+            REAL_GIT(self.repo, "status")
+        kwargs = run.call_args.kwargs
+        self.assertEqual(getattr(subprocess, "CREATE_NO_WINDOW", 0), kwargs["creationflags"])
+        self.assertEqual("utf-8", kwargs["encoding"])
+
+    def test_the_status_call_is_read_only_and_scoped_to_the_tasks_repos(self):
+        self.status("?? a.txt")
+        REAL_PROGRESS_AT("task-0001")
+        args = self.status_mock.call_args.args
+        self.assertEqual(self.repo, args[0])
+        self.assertIn("--no-optional-locks", args)
+        self.assertIn("status", args)
+        self.assertIn("-z", args)
+
+    def test_a_failed_status_call_leaves_the_other_signals(self):
+        self.gate_row(900)
+        patcher = unittest.mock.patch.object(git_state, "_git", return_value=(1, ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.assertEqual("the gate log", REAL_PROGRESS_AT("task-0001")[1])
+
+    def test_an_exception_in_a_signal_is_no_evidence_not_an_error(self):
+        patcher = unittest.mock.patch.object(git_state, "repos_for_task", side_effect=OSError)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.assertEqual((None, ""), REAL_PROGRESS_AT("task-0001"))
+
+
+class DebtInputTest(Sandbox):
+    """Handoff and memory debt as inputs to the supervisor: reported, never acted
+    on (the decision is stated under DEBT in supervisor.py)."""
+
+    def test_the_debt_is_the_stop_hooks_own_two_readers(self):
+        with unittest.mock.patch.object(stop_gate, "handoff_debt",
+                                        return_value=[{"task": "task-0002", "reason": "x"}]), \
+                unittest.mock.patch.object(stop_gate, "memory_debt",
+                                           return_value=[{"task": "task-0001", "reason": "y"}]):
+            self.assertEqual(["handoff:task-0002", "memory:task-0001"], REAL_OUTSTANDING_DEBT())
+
+    def test_a_debt_is_reported_once_per_change_and_never_acted_on(self):
+        debts = [["handoff:task-0057"], ["handoff:task-0057"], []]
+        results = []
+        with unittest.mock.patch.object(supervisor, "outstanding_debt", side_effect=debts), \
+                unittest.mock.patch.object(state, "all_runs", return_value=[row()]), \
+                unittest.mock.patch.object(supervisor.subprocess, "Popen") as popen:
+            for _ in debts:
+                results.append(supervisor.poll_once(cfg(), act=True))
+        popen.assert_not_called()
+        self.assertEqual([["handoff:task-0057"], ["handoff:task-0057"], []],
+                         [r["debt"] for r in results])
+        self.assertEqual(["outstanding debt: handoff:task-0057", "outstanding debt cleared"],
+                         [n for n in self.notices if "debt" in n],
+                         "once when it appears, nothing while it stands, once when it clears")
+        self.assertEqual([], supervisor.load_registry()["actions"])
+
+    def test_a_debt_with_nothing_in_flight_is_still_reported(self):
+        # The case the Stop hook cannot cover: no session at all.
+        with unittest.mock.patch.object(supervisor, "outstanding_debt",
+                                        return_value=["memory:task-0057"]), \
+                unittest.mock.patch.object(state, "all_runs", return_value=[]):
+            result = supervisor.poll_once(cfg(), act=False)
+        self.assertEqual(["memory:task-0057"], result["debt"])
+        self.assertEqual([], result["events"])
+        self.assertIn("outstanding debt: memory:task-0057", self.notices)
+
+    def test_a_debt_reader_that_raises_does_not_stop_the_pass(self):
+        with unittest.mock.patch.object(supervisor, "outstanding_debt", side_effect=OSError), \
+                unittest.mock.patch.object(state, "all_runs", return_value=[row()]):
+            result = supervisor.poll_once(cfg(), act=False)
+        self.assertEqual(1, len(result["events"]))
+        self.assertEqual([], result["debt"])
 
 
 class DocstringIntegrityTest(unittest.TestCase):

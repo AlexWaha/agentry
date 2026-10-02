@@ -358,9 +358,11 @@ gate), `handoff.py` and the Stop hook all go through it. Three consequences:
   however young it is, probed through `supervisor.pid_alive()`. Outside Claude
   Code there is no `CLAUDE_PID`, so no owner is recorded and only the timeout
   ends the marker - `--busy` says so in its output. The probe's limit:
-  `supervisor.pid_alive()` reads every "cannot tell" (a reused pid, an
-  OpenProcess failure other than 87, a probe exception) as ALIVE, so such a
-  marker stays FRESH until its timeout, and only the timeout ends it.
+  `supervisor.pid_alive()` reads every "cannot tell" (an OpenProcess failure
+  other than 87, a probe exception, and on POSIX a reused pid) as ALIVE, so such
+  a marker stays FRESH until its timeout, and only the timeout ends it. On
+  Windows a reused pid is caught: the probe is given the marker's start time and
+  a process created after it cannot be the owner.
 - **The timeout is a backstop and it is now reported.** When a marker has expired,
   lost its owner or is unreadable, the Stop hook's nag for that task ends with a
   sentence saying which, and the `--idle` command that clears it. A stale marker
@@ -380,8 +382,14 @@ looping" to the supervisor, and nagging about an idle task is indistinguishable
 from the task looping. `task-0067` did not fix that root - it cannot be fixed
 from that column - it removed the readings that claimed to see a loop in it and
 left the budget reading, which claims only that the budget is spent. Separating a
-loop from a slow worker needs progress evidence from outside `continuations`
-(the gate log, the working tree, the task file) and has its own task.
+loop from a slow worker needs progress evidence from outside `continuations`.
+`task-0073` added it (the gate log, the working tree, the task file), but only to
+tell a hung dispatch from a slow one: the supervisor reports that as HUNG and
+never relaunches, parks or signals it (`supervisor.py`, HUNG and SLOW VERSUS
+HUNG, MEASURED). The dispatch record is the busy marker, and it counts past its
+900s timeout while its owner is on record and alive; an expired marker that
+names no owner and shows no progress for `hung_seconds` is STALLED and is
+relaunched, since nobody is known to be on the run.
 
 **What to do meanwhile:** prefer the nagging. It is noise; the other is a halt,
 and a halt that reports nothing is the only failure mode this pipeline cannot

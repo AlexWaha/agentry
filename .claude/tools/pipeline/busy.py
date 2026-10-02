@@ -45,9 +45,11 @@ than walking processes: one measured fact instead of a heuristic over image name
 WHAT THIS CANNOT SEE. A script run outside Claude Code (a human terminal) has no
 CLAUDE_PID, so its marker records no owner and only the timeout ends it - the
 pre-existing behaviour, never a guess. supervisor.pid_alive reads every "cannot
-tell" (a reused pid, an OpenProcess failure other than ERROR_INVALID_PARAMETER
-(87), a probe exception) as ALIVE, so such a marker stays FRESH until its timeout
-and only the timeout ends it.
+tell" (an OpenProcess failure other than ERROR_INVALID_PARAMETER (87), a probe
+exception, and on POSIX a reused pid) as ALIVE, so such a marker stays FRESH until
+its timeout and only the timeout ends it. On Windows a reused pid is NOT such a
+case: the probe is given the marker's start time, and a process created after it
+cannot be the owner, so it reads OWNER_GONE (task-0073).
 
 FAIL-OPEN. Any error reading a marker returns INVALID, which is not fresh: the
 hook nags, it never goes silent. Any error writing one is the caller's to
@@ -86,12 +88,15 @@ INVALID = "invalid"        # unreadable, malformed, or naming another task
 @dataclass(frozen=True)
 class Marker:
     """What read() found. `owner_pid` is the session pid (None when unknown), so
-    a supervisor can ask the same question of it without re-parsing the file."""
+    a supervisor can ask the same question of it without re-parsing the file, and
+    `started` is when the dispatch was recorded (epoch seconds, 0.0 when there is
+    no usable record), which is how the supervisor ages a dispatch."""
     task: str
     status: str
     stage: str = ""
     owner_pid: int | None = None
     timeout: float = 0.0
+    started: float = 0.0
 
     @property
     def fresh(self) -> bool:
@@ -164,15 +169,17 @@ def read(task: str) -> Marker:
             return Marker(task, INVALID)
         stage = str(data.get("stage", ""))
         timeout = float(data["timeout"])
-        age = time.time() - float(data["started"])
+        started = float(data["started"])
+        age = time.time() - started
         owner = data.get("owner_pid")
         owner = None if owner is None else int(owner)
         if owner is not None:
             # Imported here, not at the top: supervisor pulls in mode and the
             # process-spawning code, and this module is loaded by every hook.
             from supervisor import pid_alive
-            if not pid_alive(owner):
-                return Marker(task, OWNER_GONE, stage, owner, timeout)
-        return Marker(task, FRESH if age < timeout else EXPIRED, stage, owner, timeout)
+            if not pid_alive(owner, started):
+                return Marker(task, OWNER_GONE, stage, owner, timeout, started)
+        return Marker(task, FRESH if age < timeout else EXPIRED, stage, owner, timeout,
+                      started)
     except Exception:
         return Marker(task, INVALID)

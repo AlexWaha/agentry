@@ -1145,8 +1145,8 @@ def decide() -> int:
                 f"Handoff debt on completed task {d['task']}",
                 f"Documentation debt is outstanding and there is no other work to drive: "
                 f"completed task {d['task']} has no valid handoff doc ({d['reason']}). "
-                f"Nothing else in the harness reports this - the supervisor does not read "
-                f"handoff debt at all. Dispatch the assignee of the next task to scaffold it: "
+                f"Nothing else in the harness can act on this - the supervisor only logs "
+                f"it, and cannot reach this session. Dispatch the assignee of the next task to scaffold it: "
                 f"python .claude/tools/pipeline/handoff.py --for {d['task']}, then fill every "
                 f"section of .agentry/tasks/handoffs/{d['task']}.md in its own words from "
                 f".agentry/tasks/done/{d['task']}.md, its merge diff on main and the gate log. "
