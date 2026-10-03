@@ -347,7 +347,8 @@ excluded too. Adding a rule here costs every dispatch its size.
 
 A rule that belongs to one repository rather than to the whole workspace does
 not belong in this list at all - it belongs in that repo's nested `CLAUDE.md`,
-which loads only when an agent reads a file inside the repo. Mechanism, audit
+which loads when an agent reads, writes or edits a file inside the repo (Write
+and Edit trigger it since build 2.1.288; before that, Read only). Mechanism, audit
 and measurement: `docs/technical/nested-claude-md.md`. Adding or removing an
 entry in the list below means re-running that document's audit table, which is
 the only check that a repo-specific rule has not crept into the core set.
