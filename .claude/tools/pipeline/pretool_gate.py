@@ -59,6 +59,7 @@ import re
 import shlex
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import state
@@ -122,10 +123,21 @@ def gates_cfg() -> dict:
 # `/dev/null` discards. Only the first kind is a mutation. The lookbehind
 # `(?<![-\w<>])` skips arrows like `->` / `-->` and glued word chars.
 #
+# Operators (task-0095): `>`, `>>`, `>|` (clobber) and `<>` (read-write open)
+# always name a file. `>&word` is a file too (both streams, bash manual) unless
+# the word is a descriptor - `2`, `2-`, `-` - which DUP_TARGET_RE recognises.
+#
 # A bare `NUL` is NOT a discard target and used to be listed as one (task-0074).
 # Measured under git-bash: bash has no device of that name, so the redirect
 # creates a regular file called NUL, which Windows then cannot unlink by name.
-REDIR_RE = re.compile(r"(?<![-\w<>])\d*>>?\s*(?P<t>&\d+|[^\s;|&<>]+)")
+#
+# The two-character operators come BEFORE `>>?` in the alternation: REDIR_OP_RE
+# has nothing after the operator to force a backtrack, so `>` would win on `>&x`
+# and leave `&x` as the "target".
+_REDIR_OP = r"\d*(?:>&|>\||<>|>>?)"
+REDIR_RE = re.compile(rf"(?<![-\w<>])(?P<op>{_REDIR_OP})\s*(?P<t>[^\s;|&<>]+)")
+DUP_TARGET_RE = re.compile(r"\d+-?|-")
+REDIR_OP_RE = re.compile(rf"^{_REDIR_OP}\s*")
 DISCARD_TARGETS = ("/dev/null",)
 BARE_NUL_NOTE = (
     "`NUL` is a real file on this host: bash has no device of that name, so the "
@@ -133,12 +145,21 @@ BARE_NUL_NOTE = (
     "the redirect and let the output through, or capture it with `out=$(cmd 2>&1)`.")
 
 
+def redirect_target(frag: str) -> str:
+    """The target of a fragment redirect_write_target() reported: the text after
+    its operator (`2>x`, `>&x`, `>|x` and `<>x` all give `x`)."""
+    return REDIR_OP_RE.sub("", frag, count=1).strip()
+
+
 def bare_nul_note(frag: str) -> str:
     """The explanation to append to a deny whose fragment writes a bare NUL,
     else ''. Exact name, any case, quotes and a closing `)` or backtick from a
-    command substitution ignored - `nullable.py` and `./NUL` get no note (the
-    second is denied like any path, and needs none)."""
-    target = frag.split(">")[-1].strip().strip("'\"`)")
+    command substitution ignored. `nullable.py` gets no note, and neither does a
+    path-qualified `./NUL`: readonly and docs deny it like any other path and
+    test_nul_entry pins that no note is added. check_bare_nul() DOES deny a
+    path-qualified NUL, with the note, because the dev profile has no other
+    reason to."""
+    target = redirect_target(frag).strip("'\"`)")
     return " " + BARE_NUL_NOTE if target.lower() == "nul" else ""
 QUOTED_RE = re.compile(r"'[^']*'|\"[^\"]*\"", re.DOTALL)
 
@@ -714,6 +735,31 @@ def unscannable_depth(command: str, _depth: int) -> bool:
     return _depth >= MAX_SHELL_DEPTH and bool(nested_command_bodies(command))
 
 
+def redirect_write_fragments(command: str, _depth: int = 0) -> Iterator[str]:
+    """Yield every file-writing redirect fragment of `command`, nested bodies
+    included. The first one is redirect_write_target(); the whole sequence is
+    what check_bare_nul() needs, because a bare NUL can follow a legitimate
+    write (`ls > out.txt 2>NUL`)."""
+    command = strip_heredocs(command)
+    for m in REDIR_RE.finditer(mask_quoted(command)):
+        # Offsets index the original, so the reported fragment and the target
+        # test both read the real text rather than the mask's filler.
+        target = command[m.start("t"):m.end("t")].strip("'\"")
+        # A `)` or backtick that closes a command substitution is glued to the
+        # target class (`$(ls 2>&1)` reads `1)`), so it is dropped for the dup
+        # test only. `>&x)` and `>&2-x` still name a file.
+        if m.group("op").endswith("&") and DUP_TARGET_RE.fullmatch(target.rstrip(")`")):
+            continue  # descriptor dup, e.g. 2>&1 - not a file write
+        if target.lower() in DISCARD_TARGETS:
+            continue  # discard sink - not a tree mutation
+        yield command[m.start():m.end()].strip()
+    if unscannable_depth(command, _depth):
+        yield DEPTH_EXCEEDED
+        return
+    for body in nested_command_bodies(command):
+        yield from redirect_write_fragments(body, _depth + 1)
+
+
 def redirect_write_target(command: str, _depth: int = 0) -> str:
     """Return the file-writing redirect fragment, or '' if the command only dups
     descriptors (2>&1) or discards output (/dev/null). A bare NUL is a write.
@@ -730,23 +776,60 @@ def redirect_write_target(command: str, _depth: int = 0) -> str:
     building that command is harder than the runtime-body bypass above, which
     this can never catch anyway - but do not read a pass as proof of no
     redirect. Those need the profile's other layers, not a bigger regex."""
-    command = strip_heredocs(command)
-    for m in REDIR_RE.finditer(mask_quoted(command)):
-        # Offsets index the original, so the reported fragment and the target
-        # test both read the real text rather than the mask's filler.
-        target = command[m.start("t"):m.end("t")].strip("'\"")
-        if target.startswith("&"):
-            continue  # descriptor dup, e.g. 2>&1 - not a file write
-        if target.lower() in DISCARD_TARGETS:
-            continue  # discard sink - not a tree mutation
-        return command[m.start():m.end()].strip()
+    return next(redirect_write_fragments(command, _depth), "")
+
+
+# The NUL-only twin of DEV_NULL_REDIR_RE, for a redirect REDIR_RE cannot see:
+# its lookbehind refuses a word glued to the operator (`ls>NUL`), which is what
+# keeps `->` arrows out and what let every glued spelling past the NUL deny. The
+# operator list is wider than DEV_NULL_REDIR_RE's `[<>&]{0,2}[<>]`, which cannot
+# match `>&NUL` or `>|NUL` at all. A bare `<` only reads, so it is not listed.
+# A path-qualified glued NUL (`ls>./NUL`) is NOT matched: that is the general
+# glued-redirect classifier's job, not this check's.
+NUL_REDIR_RE = re.compile(
+    r"(?<![-<>=])\d*(?:&>>?|<>|>[>&|]?)\s*['\"]?nul['\"]?(?![\w./-])", re.IGNORECASE)
+
+
+def redirects_to_bare_nul(command: str, _depth: int = 0) -> bool:
+    """True when `command` redirects to a bare NUL through an operator outside
+    quotes, heredoc bodies and nested bodies included. Same layering as
+    redirects_to_dev_null(): a quoted sentence about `2>NUL` is not a redirect,
+    a quoted TARGET (`ls>"NUL"`) still is, and a nested body too deep to scan
+    counts as a hit."""
+    text = strip_heredocs(command)
+    masked = mask_quoted(text)
+    if any(masked[m.start()] == text[m.start()] for m in NUL_REDIR_RE.finditer(text)):
+        return True
     if unscannable_depth(command, _depth):
-        return DEPTH_EXCEEDED
-    for body in nested_command_bodies(command):
-        frag = redirect_write_target(body, _depth + 1)
-        if frag:
-            return frag
-    return ""
+        return True
+    return any(redirects_to_bare_nul(body, _depth + 1)
+               for body in nested_command_bodies(command))
+
+
+def check_nul_redirect(command: str) -> int:
+    """Deny the glued NUL redirect only. readonly and docs call this on top of
+    bash_mutates(), which already denies every spaced file write; check_bare_nul()
+    calls it for the dev profile and the main thread."""
+    if redirects_to_bare_nul(command):
+        return deny(f"A redirect to NUL is denied in every profile. {BARE_NUL_NOTE}")
+    return allow()
+
+
+def check_bare_nul(command: str) -> int:
+    """Deny a redirect to a NUL entry in EVERY profile (task-0095). The readonly,
+    docs and orchestrator gates already deny any file write; the dev profile
+    allows ordinary ones, so it needs this on top. It checks every fragment, not
+    just the first, so `ls > out.txt 2>NUL` is caught too, and compares the last
+    path component, so `> ./NUL` and `> /tmp/NUL` create the same undeletable
+    entry and are denied with it. `nul.txt` stays allowed: measured under
+    git-bash, it is a regular file Python can delete. A glued operator
+    (`ls>NUL`) is check_nul_redirect()'s."""
+    for frag in redirect_write_fragments(command):
+        target = redirect_target(frag).strip("'\"`)")
+        if re.split(r"[\\/]", target)[-1].lower() == "nul":
+            return deny(f"Redirect to NUL ('{frag}') is denied in every profile. "
+                        f"{BARE_NUL_NOTE}")
+    return check_nul_redirect(command)
 
 
 # --- Orchestrator gate (config: pipeline.json "orchestrator_gate") ---
@@ -836,7 +919,7 @@ def orch_check_bash(command: str) -> int:
         return allow()
     frag = redirect_write_target(command)
     if frag:
-        target = frag.split(">")[-1].strip()
+        target = redirect_target(frag)
         if target and not orch_allowed_path(target):
             return deny(f"Orchestrator never writes files via shell redirects ('{frag}'). "
                         f"Dispatch the owning agent instead. (orchestrator_gate)"
@@ -1884,6 +1967,7 @@ def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
         check_unattended(command),                 # supervisor-spawned session
         check_branch_creation(command, cwd),      # 4 (naming) + C (base)
         check_destructive_and_repl(command, low),  # A + B + G
+        check_bare_nul(command),                    # NUL is a real file
         check_piped_test_suite(command),            # H
         check_commit_attribution(command),         # D
         orch_check_bash(command) if orch else allow(),  # orchestrator profile

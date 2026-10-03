@@ -369,18 +369,19 @@ class ForbidDevNullGateTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(0, self.drive(command)[0])
 
-    def test_the_nul_forms_are_not_caught_by_this_particular_gate(self):
-        # Behaviour pinned, claim corrected (task-0070). This gate is a
-        # substring test for the Unix path, and `NUL` has no slash in it, so
-        # these forms pass HERE. That is not an endorsement, and the measurement
-        # makes it awkward: these are the forms that DO leave a file behind,
-        # while the one this gate denies does not. Since task-0074 the redirect
-        # scan denies them for the readonly and docs profiles and the
-        # orchestrator (test_nul_entry.py); this policy gate and the dev
-        # profile still pass them, which this test pins without blessing it.
+    def test_the_nul_forms_are_denied_by_the_bare_nul_check_not_by_this_gate(self):
+        # This gate is a substring test for the Unix path, and `NUL` has no
+        # slash in it, so it does not match these forms. They are the forms that
+        # DO leave a file behind, while the one this gate denies does not. Since
+        # task-0095 check_bare_nul() denies them in handle_bash for every
+        # profile, the dev profile included - so the message must be the
+        # real-file note, not this gate's policy text.
         for form in ("2>NUL", ">NUL", ">NUL 2>&1"):
             with self.subTest(redirect=form):
-                self.assertEqual(0, self.drive(form)[0])
+                code, msg = self.drive(form)
+                self.assertEqual(2, code)
+                self.assertIn("real file", msg)
+                self.assertNotIn("denied by project policy", msg)
 
     def test_the_flag_is_what_denies_it_and_not_some_other_rule(self):
         # With the flag off, the identical command is allowed. This is what
@@ -963,7 +964,7 @@ class ParserTotalityFuzzTest(unittest.TestCase):
                "command_substitutions", "substitution_bodies",
                "nested_command_bodies", "executed_names", "shell_c_bodies",
                "eval_operands", "redirect_write_target", "redirects_to_dev_null",
-               "runs_approve_script")
+               "runs_approve_script", "check_bare_nul")
 
     def test_no_parser_raises_on_any_quote_newline_heredoc_combination(self):
         for noise in self.NOISE:

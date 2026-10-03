@@ -634,6 +634,7 @@ def handle_readonly(tool: str, ti: dict, cwd: str = "") -> int:
                         f"Use Read/Grep/Glob or read-only git commands; report changes "
                         f"you would make to the orchestrator."
                         f"{pretool_gate.bare_nul_note(frag)}")
+        return pretool_gate.check_nul_redirect(command)
     return allow()
 
 
@@ -664,6 +665,7 @@ def handle_docs(tool: str, ti: dict, cwd: str = "") -> int:
             return deny(f"Docs agent: mutating Bash denied (matched: '{frag}'). "
                         f"Use Write/Edit for documents under .claude/, .agentry/ or docs/."
                         f"{pretool_gate.bare_nul_note(frag)}")
+        return pretool_gate.check_nul_redirect(command)
     return allow()
 
 
