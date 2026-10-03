@@ -292,3 +292,8 @@ Technical debt from outdated dependencies compounds exponentially. Starting with
 - No AI attribution in documents, presentations, or any other output
 
 This applies to ALL generated text: commits, PRs, code comments, documents, presentations, emails - everything.
+
+Two mechanical layers cover only the commit trailer and the PR byline, not the rest of the rule (PR text, `git commit -F`, code comments, documents):
+
+1. **Source** - `attribution` in `.claude/settings.json` is `{"commit": "", "pr": "", "sessionUrl": false}`, so Claude Code no longer asks for a `Co-Authored-By` trailer or PR byline. Keep the object form: the boolean `false` makes CLI builds older than 2.1.281 skip the whole file. `tools/tests/test_settings_attribution.py` pins it.
+2. **Backstop** - `check_commit_attribution` in `tools/pipeline/pretool_gate.py` denies a `git commit` command that carries an AI-authorship trailer.

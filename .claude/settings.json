@@ -33,6 +33,11 @@
       "Write"
     ]
   },
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  },
   "claudeMdExcludes": [
     "**/.claude/rules/business-standards.md",
     "**/.claude/rules/mobile.md",
