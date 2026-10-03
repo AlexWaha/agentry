@@ -596,7 +596,9 @@ def pid_alive(pid: int, since: float | None = None) -> bool:
     A process CREATED after that moment cannot be the one that recorded it, so on
     Windows (GetProcessTimes) it reads as gone. POSIX has no stdlib creation time,
     so there a recycled pid still reads as alive; the window is one poll interval
-    and the consequence is a relaunch not happening."""
+    and the consequence is a relaunch not happening. For the supervisor's owner
+    gate (_OWNER_SESSION) that window is not bounded: a recycled POSIX pid has no
+    timeout backstop there and can defer relaunch indefinitely."""
     try:
         pid = int(pid)
     except (TypeError, ValueError):
@@ -1423,6 +1425,39 @@ def spawn_argv(cfg: dict, task: str, stage: str, why: str) -> list[str]:
 # dead; the clock cannot tell those apart, which is why nothing here uses one.
 _SPAWNED: dict[int, subprocess.Popen] = {}
 
+# The interactive session that started this daemon, as (CLAUDE_PID, daemon start
+# time), or None. The daemon inherits CLAUDE_PID from whatever launched it - the
+# SessionStart hook, or a Bash tool call in a Claude session - and adopts that
+# session as owner. `--once` never claims one. While that session is alive it is
+# working the run the daemon would relaunch (measured, task-0103: a fresh daemon
+# read a stale in-flight run as STALLED and started a second session on the task
+# the first was resuming), so no relaunch happens until it exits. Only relaunches
+# wait: LOOPING is still parked.
+# The start time goes to pid_alive() so a recycled pid reads as gone on Windows.
+_OWNER_SESSION: tuple[int, float] | None = None
+
+
+def claim_owner_session() -> int:
+    """Record the session this daemon was started from. Returns its pid, 0 when
+    unknown (a daemon started by hand has no CLAUDE_PID and never defers)."""
+    global _OWNER_SESSION
+    pid = busy.session_pid()
+    _OWNER_SESSION = (pid, time.time()) if pid else None
+    return pid or 0
+
+
+def owner_session_alive() -> int:
+    """The starting session's pid while it is running, else 0. Forgets the owner
+    once it is gone, so the probe stops and relaunch is unchanged from then on."""
+    global _OWNER_SESSION
+    if _OWNER_SESSION is None:
+        return 0
+    pid, since = _OWNER_SESSION
+    if pid_alive(pid, since):
+        return pid
+    _OWNER_SESSION = None
+    return 0
+
 
 def spawn_exit_code(pid: int):
     """The exit code of a session we spawned, or None when it cannot be read -
@@ -1537,9 +1572,14 @@ def relaunch(classification: str, task: str, stage: str, why: str,
 
     try:
         with out.open("w", encoding="utf-8") as handle:
+            # CREATE_NO_WINDOW: this daemon runs DETACHED, with no console, and
+            # claude is a console program, so without the flag Windows allocates a
+            # new VISIBLE console for it that stays blank for the whole run
+            # (task-0103). Output still goes to the log file above. 0 off Windows.
             proc = subprocess.Popen(argv, cwd=str(state.ROOT), stdin=subprocess.DEVNULL,
                                     stdout=handle, stderr=subprocess.STDOUT, shell=False,
-                                    env={**os.environ, UNATTENDED_ENV: "1"})
+                                    env={**os.environ, UNATTENDED_ENV: "1"},
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except Exception as exc:
         notify(f"spawn FAILED for {task} ({classification}): {exc!r}. Command was: {argv}. "
                f"Pipeline state is untouched.")
@@ -1613,6 +1653,16 @@ def handle_run(run: dict, reg: dict, cfg: dict, now_ts: float, act: bool) -> dic
     if where != "active":
         event["action"] = f"skipped (task file is in {where or 'no'} folder, not active/)"
         return event
+
+    owner_pid = owner_session_alive()
+    if owner_pid:
+        if not entry.get("owner_deferred"):
+            entry["owner_deferred"] = True
+            notify(f"{task} not relaunched: the session that started this daemon "
+                   f"(pid {owner_pid}) is alive and is working it. Relaunch resumes when it exits.")
+        event["action"] = f"skipped (the session that started this daemon, pid {owner_pid}, is alive)"
+        return event
+    entry.pop("owner_deferred", None)
 
     spawned, argv, pid, spawn_log = relaunch(label, task, str(run.get("stage")), why, cfg)
     if spawned:
@@ -2147,11 +2197,12 @@ def main() -> int:
         # different process, and two daemons can result. It takes a manual start
         # timed inside a session start; --stop and a restart clears it.
         write_lock(os.getpid(), time.time())
+    owner_pid = claim_owner_session() if daemon else 0
 
     notify(f"supervisor started on lane '{lane}' (pid {os.getpid()}, "
            f"poll {cfg['poll_seconds']}s, stall {cfg['stall_seconds']}s, "
            f"caps {cfg['max_actions_per_task']}/task and {cfg['max_actions_per_hour']}/hour, "
-           f"acting={act})")
+           f"acting={act}, starting session pid {owner_pid or 'unknown'})")
 
     try:
         return poll_loop(cfg, args, act, daemon)

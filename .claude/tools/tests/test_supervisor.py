@@ -147,6 +147,10 @@ class Sandbox(unittest.TestCase):
             self.addCleanup(patcher.stop)
         supervisor._SPAWNED.clear()
         self.addCleanup(supervisor._SPAWNED.clear)
+        # main() records the running session as the daemon's owner, and this
+        # suite runs inside one: a leaked owner would defer every later relaunch.
+        supervisor._OWNER_SESSION = None
+        self.addCleanup(setattr, supervisor, "_OWNER_SESSION", None)
         self.notices: list[str] = []
         patcher = unittest.mock.patch.object(supervisor, "notify", self.notices.append)
         patcher.start()
@@ -582,6 +586,108 @@ class RelaunchTest(Sandbox):
         self.assertIn("would", event["action"])
         self.assertEqual(state.ST_IN_PROGRESS, self.read_row()["stage_status"])
         self.assertEqual([], reg["actions"])
+
+
+class RelaunchSpawnShapeAndOwnerTest(Sandbox):
+    """task-0103: the relaunch opens no console window, and a daemon does not
+    relaunch anything while the session that started it is still alive."""
+
+    def setUp(self):
+        super().setUp()
+        self.make_row("task-0001")
+
+    def stalled_pass(self, popen, reg=None):
+        popen.return_value = unittest.mock.Mock(pid=777)
+        with unittest.mock.patch.object(supervisor.subprocess, "Popen", popen), \
+                unittest.mock.patch.object(state, "task_dir", return_value="active"):
+            return supervisor.handle_run(row(updated=aged(99999)),
+                                         supervisor.empty_registry() if reg is None else reg,
+                                         cfg(), time.time(), act=True)
+
+    def start_session(self):
+        """A live child standing in for the interactive session, claimed as the
+        owner the way main() does it: from CLAUDE_PID in the environment."""
+        session = spawn_child()
+        self.addCleanup(session.wait)
+        self.addCleanup(session.kill)
+        with unittest.mock.patch.dict(os.environ, {busy.SESSION_PID_ENV: str(session.pid)}):
+            self.assertEqual(session.pid, supervisor.claim_owner_session())
+        return session
+
+    def test_the_relaunch_spawn_passes_create_no_window_and_still_logs_to_a_file(self):
+        popen = unittest.mock.Mock()
+        event = self.stalled_pass(popen)
+        self.assertEqual(supervisor.ACTION_RELAUNCH, event["action"])
+        kwargs = popen.call_args.kwargs
+        self.assertEqual(getattr(subprocess, "CREATE_NO_WINDOW", 0), kwargs["creationflags"])
+        if os.name == "nt":
+            self.assertNotEqual(0, kwargs["creationflags"])
+        self.assertEqual(subprocess.STDOUT, kwargs["stderr"])
+        log_file = Path(kwargs["stdout"].name)
+        self.assertEqual(supervisor.run_log_dir(), log_file.parent)
+        self.assertTrue(log_file.name.startswith("task-0001-") and log_file.suffix == ".log")
+
+    def test_no_relaunch_while_the_starting_session_is_alive(self):
+        self.start_session()
+        popen = unittest.mock.Mock()
+        event = self.stalled_pass(popen)
+        popen.assert_not_called()
+        self.assertEqual(supervisor.STALLED, event["classification"])
+        self.assertIn("skipped", event["action"])
+
+    def test_relaunch_resumes_after_the_starting_session_is_gone(self):
+        session = self.start_session()
+        session.kill()
+        session.wait()
+        popen = unittest.mock.Mock()
+        event = self.stalled_pass(popen)
+        popen.assert_called_once()
+        self.assertEqual(supervisor.ACTION_RELAUNCH, event["action"])
+        self.assertIsNone(supervisor._OWNER_SESSION)
+
+    def test_the_first_deferral_is_noted_once_naming_the_task_and_the_owner(self):
+        session = self.start_session()
+        popen = unittest.mock.Mock()
+        reg = supervisor.empty_registry()
+        self.stalled_pass(popen, reg)
+        self.stalled_pass(popen, reg)
+        noted = [n for n in self.notices if "task-0001" in n and str(session.pid) in n]
+        self.assertEqual(1, len(noted), self.notices)
+
+    def test_a_looping_run_is_still_parked_while_the_starting_session_is_alive(self):
+        self.start_session()
+        self.make_row("task-0002", continuations=30)
+        reg = supervisor.empty_registry()
+        supervisor.entry_for(reg, "task-0002").update({"stage": "implement", "continuations": 29})
+        with unittest.mock.patch.object(supervisor.subprocess, "Popen") as popen, \
+                unittest.mock.patch.object(state, "task_dir", return_value="active"):
+            event = supervisor.handle_run(looping_row("task-0002"), reg, cfg(), time.time(),
+                                          act=True)
+        popen.assert_not_called()
+        self.assertEqual(supervisor.ACTION_PARK, event["action"])
+
+    @unittest.skipUnless(os.name == "nt", "pid_alive() reads creation time on Windows only")
+    def test_an_owner_pid_that_started_after_the_daemon_is_a_recycled_pid(self):
+        # The recorded owner start (60s ago) is BEFORE this process was created, so
+        # the pid cannot be the session that started the daemon: it was recycled.
+        live = spawn_child()
+        self.addCleanup(live.wait)
+        self.addCleanup(live.kill)
+        supervisor._OWNER_SESSION = (live.pid, time.time() - 60)
+        self.assertEqual(0, supervisor.owner_session_alive())
+        popen = unittest.mock.Mock()
+        event = self.stalled_pass(popen)
+        popen.assert_called_once()
+        self.assertEqual(supervisor.ACTION_RELAUNCH, event["action"])
+
+    def test_a_daemon_with_no_known_starting_session_relaunches_as_before(self):
+        with unittest.mock.patch.dict(os.environ):
+            os.environ.pop(busy.SESSION_PID_ENV, None)
+            self.assertEqual(0, supervisor.claim_owner_session())
+        popen = unittest.mock.Mock()
+        event = self.stalled_pass(popen)
+        popen.assert_called_once()
+        self.assertEqual(supervisor.ACTION_RELAUNCH, event["action"])
 
 
 class SpawnSettlementTest(Sandbox):
@@ -3782,6 +3888,25 @@ class DaemonLifecycleTest(Sandbox):
         self.assertTrue(any("is now held by pid" in n for n in self.notices))
         # And it left the newcomer's lock alone on the way out.
         self.assertEqual(newcomer.pid, supervisor.read_lock()["pid"])
+
+    def test_the_daemon_adopts_the_session_in_claude_pid_as_owner_but_a_single_pass_does_not(self):
+        session = spawn_child()
+        self.addCleanup(session.wait, 30)
+        self.addCleanup(lambda: session.poll() is None and session.kill())
+        owners = []
+
+        def sleeper(_seconds):
+            owners.append(supervisor._OWNER_SESSION)
+            raise KeyboardInterrupt
+        with unittest.mock.patch.dict(os.environ, {busy.SESSION_PID_ENV: str(session.pid)}):
+            code, _ = self.run_daemon([], sleeper=sleeper)
+            self.assertEqual(0, code)
+            self.assertEqual(session.pid, owners[0][0])
+            self.assertTrue(any(f"starting session pid {session.pid}" in n for n in self.notices))
+            supervisor._OWNER_SESSION = None
+            code, _ = self.run_daemon(["--once"])
+            self.assertEqual(0, code)
+            self.assertIsNone(supervisor._OWNER_SESSION)
 
     def test_a_single_pass_never_touches_the_lock(self):
         for flags in (["--once"], ["--status"]):
