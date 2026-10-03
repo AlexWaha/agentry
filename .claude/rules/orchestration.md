@@ -125,8 +125,11 @@ More enforcement points live inside `advance.py` (not hooks, but deterministic g
 - **Backlog -> active on start:** `advance.py` itself moves the task file `backlog/ -> active/` when a task first registers - there is no separate "take" step for the model to do by hand.
 - **Merge-gated done:** a task reaches `done` only when `git_state.py` confirms `main` carries it (branch merged, or a `[task-id]` commit on `main`) - not when the branch was merely pushed. Until then `advance.py` parks the task saying a merge is still needed, and re-running it later is what actually moves the file `active/ -> done/`.
 
-All gates **fail open**: a bug in a hook allows the action rather than bricking
-the agent.
+Our gate scripts **fail open**: a bug inside a hook script allows the action
+rather than bricking the agent. The platform layer in front of them does not: since
+build 2.1.288 Claude Code BLOCKS a `PreToolUse` / `PermissionRequest` call when hook
+matching fails or the tool input cannot be serialized to JSON, before any of our
+scripts run. What that block looks like has not been measured here.
 
 ## The orchestrator operating loop
 

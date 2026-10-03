@@ -61,8 +61,8 @@ Everything under `.agentry/project/` is placeholder content from the previous pr
 
 If the workspace holds more than one repository, stack facts that are true of
 only one of them (its commands, ports, framework conventions) go in that repo's
-own nested `CLAUDE.md`, which is loaded only when an agent reads a file inside
-that repo. See `docs/technical/nested-claude-md.md`.
+own nested `CLAUDE.md`, which is loaded when an agent reads, writes or edits a
+file inside that repo (Write and Edit since build 2.1.288). See `docs/technical/nested-claude-md.md`.
 
 ## 2. Fill in placeholders across the template
 

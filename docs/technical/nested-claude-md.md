@@ -1,9 +1,9 @@
 # Per-repo nested CLAUDE.md
 
-**Date:** 2026-09-15
-**Author:** devops-engineer
+**Date:** 2026-10-03
+**Author:** technical-writer
 **Status:** In Review
-**Version:** 1.0
+**Version:** 1.1
 
 ---
 
@@ -30,7 +30,7 @@ full against that criterion:
 |---|---|---|
 | `quality-standard.md` | No, but read the caveat below | Verification discipline, pre-flight checks, punctuation and authorship bans. 4 distinct placeholders across 7 lines (`{{BUILD_CMD}}`, `{{LANG}}`, `{{FRAMEWORK}}`, `{{VERSION}}`, 9 occurrences), all deferring to `.agentry/project/stack.md` by name. Its "FORBIDDEN: Hardcoded Fallback Locale" section (lines 11-13) is the most stack-specific content anywhere in the core set: a backend config key, a frontend `DEFAULT_LOCALE` constant, a hardcoded `'en'` literal, ORM vocabulary, and a cross-reference into `i18n.md`, which is one of the 12 excluded rules. It still scores No because FR-31's unit is the whole rule file and the rest of the file is workspace policy. |
 | `communication.md` | No | Language, tone, report format. One non-stack placeholder (`{{COMM_LANG}}`, line 10), zero stack tokens, zero path references into any repo. |
-| `git-workflow.md` | No | Branch naming, gate order, checkpoints. 3 distinct placeholders across 4 lines, deferring to `stack.md` in the file's own opening note, and its "Multi-repo workspaces" section is workspace-level by construction: it is the rule that tells you to run git per sub-repo. Its Deploy Actions table (lines 418-422) carries five concrete `[EXAMPLE - Laravel]`, `[EXAMPLE - Composer]` and `[EXAMPLE - Node]` commands; they score No because they are labelled examples of a category, not instructions this workspace executes, and the categories themselves are stack-neutral. |
+| `git-workflow.md` | No | Branch naming, gate order, checkpoints. 3 distinct placeholders across 4 lines, deferring to `stack.md` in the file's own opening note, and its "Multi-repo workspaces" section is workspace-level by construction: it is the rule that tells you to run git per sub-repo. Its "Deploy Actions Reporting" section carries five concrete `[EXAMPLE - Laravel]`, `[EXAMPLE - Composer]` and `[EXAMPLE - Node]` commands; they score No because they are labelled examples of a category, not instructions this workspace executes, and the categories themselves are stack-neutral. |
 | `task-creation.md` | No | Task file structure and the cross-layer impact check. Zero stack tokens. |
 | `code-retrieval.md` | No | Codegraph query discipline. The index is per project root, not per repo. |
 | `self-learning.md` | No | Lesson capture and the distill-and-stamp loop. Zero stack tokens. |
@@ -52,7 +52,17 @@ document is the procedure for moving it. `repos{}` (task-0028) will make the
 split explicit in config; it is not a precondition for using the mechanism.
 
 The audit is auditable rather than final: re-run it per rule against the table
-above whenever the core list or the repository count changes. Two rows carry
+above whenever the core list or the repository count changes.
+
+**Re-checked 2026-10-03 for build 2.1.288.** The Write/Edit loading change does
+not alter any verdict: the table judges whether a rule's content is specific to
+one repository, which does not depend on which tool triggers a nested load. The
+repository count is still one (`src/`), so the set stays empty. The table still
+lists 8 rules; `.claude/CLAUDE.md` now carries 6 in its `@rules/` list and
+delivers `git-workflow.md` and `orchestration.md` to the main thread through
+`main_thread_rules.py`. All 8 remain in the audit and none is repo-specific.
+
+Two rows carry
 stack-shaped content that a re-runner must weigh rather than skim, and the
 verdict column alone will not warn them:
 
@@ -80,8 +90,8 @@ Both of these load, and either spelling works:
 
 `<repo>/CLAUDE.local.md` also loads and is the personal, uncommitted variant.
 In this workspace that means `src/CLAUDE.md` and `src/.claude/CLAUDE.md`, both
-of which already exist and are already loaded this way whenever an agent reads a
-file under `src/`.
+of which already exist and are already loaded this way whenever an agent reads,
+writes or edits a file under `src/`.
 
 A nested directory's `.claude/rules/` directory is walked too, so a repo may
 carry rule files of its own, not just a `CLAUDE.md`. Measured, twice: those rule
@@ -91,9 +101,17 @@ must therefore carry a name that no exclude entry matches.
 
 ## When Claude Code loads it
 
-On a file read, not at session start, and not on a shell command.
+On a file read, write or edit, not at session start, and not on a shell command.
 
-When the Read tool reads a file, Claude Code walks from that file's directory
+Since build 2.1.288 the Write and Edit tools trigger the same load as Read: path-scoped
+`.claude/rules` and nested `CLAUDE.md` files attach when a file in their scope is
+created or changed, not only when it is read (source:
+[claude-code-2.1.288-delta.md](claude-code-2.1.288-delta.md), section 1). Before
+2.1.288 only Read did (measured on 2.1.269). The walk described below was measured on 2.1.269 and has not
+been re-measured for the Write and Edit trigger; treat the trigger list as taken
+from the changelog and the walk itself as unchanged.
+
+When the Read, Write or Edit tool touches a file, Claude Code walks from that file's directory
 upward to the session's working directory and loads the memory files of every
 directory in between. The working directory itself is excluded from this walk -
 its `CLAUDE.md` is already loaded by the normal session-start path. Directories
@@ -109,9 +127,14 @@ Consequences to plan around:
 - Each path is attached at most once per session. Reading a second file in the
   same directory does not re-attach it.
 - It works inside a subagent dispatch, not only on the main thread.
-- Reading a file with `cat`, `sed` or any other shell command does NOT attach
-  it. Only the file-reading tools push the trigger.
-- Editing the file requires reading it, so an edit attaches it the same way.
+- Reading a file with `cat` or any other shell command does NOT attach it
+  (measured on 2.1.269); shell writes (`sed`, `tee`, a redirect) are expected to
+  behave the same (inferred, not measured). Only the file tools push the trigger.
+- Before 2.1.288 an edit attached the file only because the Edit tool requires a
+  prior Read. Now Write and Edit attach it directly, so creating a new file in a
+  repo attaches that repo's nested `CLAUDE.md` before any Read happens.
+- A `dev` agent that only writes into a repo therefore pays for that repo's
+  nested `CLAUDE.md`, which earlier per-dispatch cost estimates did not count.
 
 ## What belongs in it
 
@@ -168,7 +191,7 @@ editing one takes effect on the next read with no restart.
 ## Limits worth knowing
 
 - **The attachment is a feature-gated code path.** A flag named
-  `tengu_paper_halyard`, default off in build 2.1.269, filters project-scoped
+  `tengu_paper_halyard`, default off in build 2.1.269 (not re-checked on 2.1.288), filters project-scoped
   and local-scoped entries out of the nested-directory result. Off, nested
   `CLAUDE.md` files attach as described here. Were it turned on, only rule files
   would survive the filter. Re-measure before assuming this document still holds
@@ -185,14 +208,15 @@ editing one takes effect on the next read with no restart.
 Asserting this mechanism would have repeated the mistake task-0014 uncovered, so
 it was measured twice, independently.
 
-**In the binary** (`2.1.269`, the build in use). The directory computation
+**In the binary** (`2.1.269`, the build in use when measured; 2.1.288 is installed now). The directory computation
 splits a triggering file path into the directories between the working directory
 and the file, and the ancestors above the working directory; the first group is
 loaded with `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md` and a
 `.claude/rules/` walk, the second with glob-scoped rules only. The per-path
 attach guard and the trigger reason string `nested_traversal` sit in the same
 loader. The trigger itself is pushed by the file-read tool paths (text, notebook
-and image reads), which is why a shell read does not fire it.
+and image reads), which is why a shell read does not fire it. 2.1.288 adds the
+Write and Edit paths.
 
 **In this workspace, unplanned - and it proves less than it appears to.**
 Opening `src/.claude/CLAUDE.md` with the Read tool attached `src/CLAUDE.md` and
