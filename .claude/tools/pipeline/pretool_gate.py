@@ -121,7 +121,10 @@ def gates_cfg() -> dict:
 # A file-writing redirect (mutation) vs a read-only-safe descriptor dup / discard.
 # `> file` and `2>> log` write files; `2>&1`, `>&2` only dup descriptors;
 # `/dev/null` discards. Only the first kind is a mutation. The lookbehind
-# `(?<![-\w<>])` skips arrows like `->` / `-->` and glued word chars.
+# `(?<![-<>])` skips arrows like `->` / `-->` and the second `>` of `>>` / `<>`.
+# It does NOT skip a word character: `echo hi>src/app.py`, `cat a.txt>f` and
+# `ls 2>&1>f` are real redirects, and refusing a glued word (task-0095's
+# lookbehind did) let readonly and docs agents overwrite any file (task-0102).
 #
 # Operators (task-0095): `>`, `>>`, `>|` (clobber) and `<>` (read-write open)
 # always name a file. `>&word` is a file too (both streams, bash manual) unless
@@ -135,7 +138,7 @@ def gates_cfg() -> dict:
 # has nothing after the operator to force a backtrack, so `>` would win on `>&x`
 # and leave `&x` as the "target".
 _REDIR_OP = r"\d*(?:>&|>\||<>|>>?)"
-REDIR_RE = re.compile(rf"(?<![-\w<>])(?P<op>{_REDIR_OP})\s*(?P<t>[^\s;|&<>]+)")
+REDIR_RE = re.compile(rf"(?<![-<>])(?P<op>{_REDIR_OP})\s*(?P<t>[^\s;|&<>]+)")
 DUP_TARGET_RE = re.compile(r"\d+-?|-")
 REDIR_OP_RE = re.compile(rf"^{_REDIR_OP}\s*")
 DISCARD_TARGETS = ("/dev/null",)
@@ -779,13 +782,12 @@ def redirect_write_target(command: str, _depth: int = 0) -> str:
     return next(redirect_write_fragments(command, _depth), "")
 
 
-# The NUL-only twin of DEV_NULL_REDIR_RE, for a redirect REDIR_RE cannot see:
-# its lookbehind refuses a word glued to the operator (`ls>NUL`), which is what
-# keeps `->` arrows out and what let every glued spelling past the NUL deny. The
-# operator list is wider than DEV_NULL_REDIR_RE's `[<>&]{0,2}[<>]`, which cannot
-# match `>&NUL` or `>|NUL` at all. A bare `<` only reads, so it is not listed.
-# A path-qualified glued NUL (`ls>./NUL`) is NOT matched: that is the general
-# glued-redirect classifier's job, not this check's.
+# The NUL-only twin of DEV_NULL_REDIR_RE, kept as a second net behind REDIR_RE
+# (which since task-0102 sees a glued `ls>NUL` too). The operator list is wider
+# than DEV_NULL_REDIR_RE's `[<>&]{0,2}[<>]`, which cannot match `>&NUL` or
+# `>|NUL` at all. A bare `<` only reads, so it is not listed. A path-qualified
+# glued NUL (`ls>./NUL`) is NOT matched here: redirect_write_fragments() yields
+# it and check_bare_nul() compares its last path component.
 NUL_REDIR_RE = re.compile(
     r"(?<![-<>=])\d*(?:&>>?|<>|>[>&|]?)\s*['\"]?nul['\"]?(?![\w./-])", re.IGNORECASE)
 
@@ -917,8 +919,7 @@ def orch_check_bash(command: str) -> int:
     tooling, read-only git and the approval-gated commit/push flow stay intact."""
     if not orch_enabled():
         return allow()
-    frag = redirect_write_target(command)
-    if frag:
+    for frag in redirect_write_fragments(command):
         target = redirect_target(frag)
         if target and not orch_allowed_path(target):
             return deny(f"Orchestrator never writes files via shell redirects ('{frag}'). "
