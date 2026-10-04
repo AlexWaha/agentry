@@ -191,10 +191,10 @@ def main_thread(command: str) -> tuple[int, str]:
 
 
 class GluedNulRedirectIsDeniedInEveryProfileTest(unittest.TestCase):
-    """REDIR_RE refuses a word glued to the operator, so `ls>NUL` was never a
+    """REDIR_RE refused a word glued to the operator, so `ls>NUL` was never a
     fragment and slipped past every NUL deny. The CEO rule is NUL in no profile.
-    The general glued-redirect classifier (`echo hi>src/app.py`) is a separate
-    follow-up and is deliberately not exercised here."""
+    The general glued-redirect classifier (`echo hi>src/app.py`) and the glued
+    path-qualified NUL are exercised in test_glued_redirects (task-0102)."""
 
     GLUED = ("ls>NUL", "x>nul", "cmd>NUL 2>&1", "ls>&NUL", "ls>|NUL", "ls 2>&1>NUL",
              "ls&>NUL", "ls>>NUL", "ls>\"NUL\"", "bash -c 'ls>NUL'", "echo $(ls>NUL)",
