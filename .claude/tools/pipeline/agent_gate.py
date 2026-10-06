@@ -25,7 +25,9 @@ profiles:
 
 Every profile also denies SETTING the approvals level or workflow mode
 (approvals.py / mode.py with an argument other than --show); reading is allowed.
-The dev profile is also denied Write/Edit on anything under .agentry/state/.
+The dev profile is also denied Write/Edit on anything under .agentry/state/, and
+Bash that writes there (a redirect target, or an operand of tee, sed -i, cp, mv,
+rm, truncate).
 
 Deny = exit 2 with a one-line reason on stderr (same convention as
 pretool_gate.py). Fail-open: any internal error allows the tool (exit 0) - a
@@ -121,7 +123,7 @@ MUTATING_BASH = [
 # other gate here uses and is fail-closed on text it cannot tokenise.
 # handoff.py --waive records a CEO waiver - orchestrator-only, same trust
 # boundary as approve.py. --for / --check stay allowed for every profile.
-HANDOFF_SCRIPT_RE = re.compile(r"(?:^|[\\/])handoff\.py$", re.IGNORECASE)
+HANDOFF_SCRIPT_RE = re.compile(r"(?:^|[\\/])handoff\.py[. )]*$", re.IGNORECASE)
 
 runs_approve_script = pretool_gate.runs_approve_script
 
@@ -137,21 +139,17 @@ runs_approve_script = pretool_gate.runs_approve_script
 #
 # Matching is by FILE NAME only, as it is for approve.py: an unrelated
 # `app/mode.py` invoked with an argument is denied the same way.
-STATE_SETTER_RE = re.compile(r"(?:^|[\\/])(?:approvals|mode)\.py$", re.IGNORECASE)
+STATE_SETTER_RE = re.compile(r"(?:^|[\\/])(?:approvals|mode)\.py[. )]*$", re.IGNORECASE)
 STATE_SETTER_MSG = ("{script} is orchestrator-only when it SETS the approvals level or the "
                     "workflow mode - that decides what clears without the CEO. Ask the "
                     "orchestrator to change it; --show (or no argument) still reads it.")
 
-# A redirect operator opens with an optional descriptor: `>`, `>>`, `2>`, `<`. Alone
-# (`>`, `2>>`) its target is the NEXT token; glued (`>file`, `2>1`) the token is
-# whole.
-REDIRECT_TOKEN_RE = re.compile(r"^\d*(?:>>?|<)")
-BARE_REDIRECT_RE = re.compile(r"^\d*(?:>>?|<)$")
-# An `&` glued to a redirect operator (`2>&1`, `&>file`, `>&file`) is part of the
-# operator, but pad_separators() reads it as a command separator and moves
-# everything after it into a NEW simple command - so `x.py 2>&1 auto` would show
-# the script no arguments at all. Dropping that `&` first keeps the operator whole.
-AMP_REDIRECT_RE = re.compile(r"&(?=>)|(?<=[<>])&")
+# A redirect operator opens with an optional descriptor: `>`, `>>`, `2>`, `<`, and
+# the `&` forms `&>`, `>&`, `2>&1`. Alone (`>`, `2>>`, `>&`) its target is the NEXT
+# token; glued (`>file`, `2>1`, `2>&1`) the token is whole. One definition, shared
+# with the interpreter walk in pretool_gate, so the two cannot disagree on `>&`.
+REDIRECT_TOKEN_RE = pretool_gate.REDIR_TOKEN_RE
+BARE_REDIRECT_RE = pretool_gate.REDIR_BARE_RE
 
 
 def real_arguments(tokens: list) -> list:
@@ -176,32 +174,30 @@ def real_arguments(tokens: list) -> list:
 def state_setter_call(segment: list) -> tuple | None:
     """(script name, its arguments) for the approvals.py / mode.py that ONE simple
     command runs, or None when it runs neither. The script is found the way the
-    approval-script check finds it (exec_names_of: argv0 or an interpreter's
+    approval-script check finds it (exec_tokens: argv0 or an interpreter's
     script, `-m` included); its arguments are whatever follows the token that
     named it."""
-    if not any(STATE_SETTER_RE.search(n) for n in pretool_gate.exec_names_of(segment)):
+    hits = [(i, n) for i, n in pretool_gate.exec_tokens(segment) if STATE_SETTER_RE.search(n)]
+    if not hits:
         return None
-    # `python - auto < x/approvals.py` runs the script from stdin: whatever
-    # follows the interpreter is not the script's argument list to judge.
-    for operand in pretool_gate.stdin_operands(segment):
-        if STATE_SETTER_RE.search(operand):
-            return pretool_gate.basename_no_ext(operand), ["<stdin>"]
-    for i in range(pretool_gate.argv0_index(segment), len(segment)):
-        module = segment[i].replace(".", "/") + ".py"
-        if STATE_SETTER_RE.search(segment[i]):
-            script = segment[i]
-        elif i and segment[i - 1] == "-m" and STATE_SETTER_RE.search(module):
-            script = module
-        else:
-            continue
-        name = pretool_gate.basename_no_ext(script)
-        args = real_arguments(segment[i + 1:])
-        # `xargs python x.py` appends its stdin as arguments, so a bare
-        # invocation behind it is not a read.
-        if not args and any(pretool_gate.basename_no_ext(t) == "xargs" for t in segment[:i]):
-            args = ["<stdin>"]
-        return name, args
-    return None
+    # `python - auto < x/approvals.py` runs the script from stdin (index -1):
+    # whatever follows the interpreter is not the script's argument list to judge.
+    for i, name in hits:
+        if i < 0:
+            return script_label(name), ["<stdin>"]
+    i, name = hits[0]
+    args = real_arguments(segment[i + 1:])
+    # `xargs python x.py` appends its stdin as arguments, so a bare
+    # invocation behind it is not a read.
+    if not args and any(pretool_gate.basename_no_ext(t) == "xargs" for t in segment[:i]):
+        args = ["<stdin>"]
+    return script_label(name), args
+
+
+def script_label(name: str) -> str:
+    """`dir/Mode.py.` as the `mode.py` the deny message names: Windows runs the
+    script under its dotted name, and the label must not carry the dot."""
+    return pretool_gate.basename_no_ext(name).rstrip(". )")
 
 
 def piped_setter(command: str, segments: list) -> str:
@@ -219,11 +215,11 @@ def piped_setter(command: str, segments: list) -> str:
     executed = pretool_gate.executed_names(command) or []
     own = Counter(n for seg in segments for n in pretool_gate.exec_names_of(seg))
     pairs = pretool_gate.segments_with_separators(command) or []
-    for i, (sep, seg) in enumerate(pairs):
-        names = pretool_gate.exec_names_of(seg)
-        if i and sep == "|" and names and pretool_gate.INTERPRETER_RE.match(names[0]):
-            own.update(pretool_gate.exec_names_of(pairs[i - 1][1]))
-    return next((pretool_gate.basename_no_ext(n) for n in (Counter(executed) - own)
+    for i, (_, seg) in enumerate(pairs):
+        if pretool_gate.runs_interpreter(pretool_gate.exec_names_of(seg)):
+            for k in pretool_gate.pipe_sources(pairs, i):
+                own.update(pretool_gate.exec_names_of(pairs[k][1]))
+    return next((script_label(n) for n in (Counter(executed) - own)
                  if STATE_SETTER_RE.search(n)), "")
 
 
@@ -233,7 +229,6 @@ def sets_pipeline_state(command: str, _depth: int = 0) -> str:
     it to an interpreter through a pipe or `<`, else ''.
     Fail-closed on text that cannot be tokenised; nested `sh -c` bodies are
     unwrapped like runs_waive does."""
-    command = AMP_REDIRECT_RE.sub("", command)
     segments = pretool_gate.command_segments(command)
     if segments is None:
         return "approvals.py and mode.py"
@@ -504,6 +499,56 @@ def bash_mutates(command: str, _depth: int = 0) -> str:
     return ""
 
 
+def target_directory(args: list) -> list:
+    """The directory `cp -t DIR`, `-tDIR`, `-rt DIR`, `--target-directory DIR` or
+    `--target-directory=DIR` names, as a one-item list, else []. With it every other
+    operand is a SOURCE, so the last operand is no longer the destination. `-S`
+    takes a value that may itself hold a `t` (`-Sbackup`), so a cluster with an
+    `S` ahead of the `t` is not read as the option."""
+    for n, tok in enumerate(args):
+        if tok.startswith("--target-directory="):
+            return [tok.partition("=")[2]]
+        if tok == "--target-directory":
+            return args[n + 1:n + 2]
+        if tok.startswith("-") and not tok.startswith("--"):
+            head, found, glued = tok[1:].partition("t")
+            if found and "S" not in head:
+                return [glued] if glued else args[n + 1:n + 2]
+    return []
+
+
+def writes_protected_state(command: str, _depth: int = 0) -> str:
+    """The `.agentry/state/` path a Bash command writes through a redirect or a
+    mutating command (`tee`, `sed -i`, `cp` onto it, `rm`, ...), else ''.
+
+    task-0097 denied the dev profile a Write or Edit there, but `echo auto >
+    .agentry/state/approvals` set the same level from Bash. Only paths named in
+    the command are seen: a relative target after a `cd` into the tree, and code
+    an interpreter runs (`python -c "open(...)"`), are not (task-0100: readonly
+    is not hermetic against inline interpreter code either, so no heuristic is
+    claimed for it)."""
+    for frag in pretool_gate.redirect_write_fragments(command):
+        target = pretool_gate.redirect_target(frag).strip("'\"")
+        if is_protected_state(target):
+            return target
+    for segment in pretool_gate.command_segments(command) or []:
+        if not mutating_command(segment):
+            continue
+        i = pretool_gate.argv0_index(segment)
+        operands = real_arguments(segment[i + 1:])
+        if base_name(segment[i]) == "cp":
+            operands = target_directory(operands) or operands[-1:]
+        for tok in operands:
+            if is_protected_state(tok):
+                return tok
+    if _depth < pretool_gate.MAX_SHELL_DEPTH:
+        for body in pretool_gate.nested_command_bodies(command):
+            hit = writes_protected_state(body, _depth + 1)
+            if hit:
+                return hit
+    return ""
+
+
 def handle_dev(tool: str, ti: dict, cwd: str = "") -> int:
     if tool == "Bash":
         command = str(ti.get("command", ""))
@@ -516,6 +561,9 @@ def handle_dev(tool: str, ti: dict, cwd: str = "") -> int:
         setter = sets_pipeline_state(command)
         if setter:
             return deny(STATE_SETTER_MSG.format(script=setter))
+        written = writes_protected_state(command)
+        if written:
+            return deny(PROTECTED_STATE_MSG.format(who="Dev agent", path=written))
         if is_force_push(command):
             return deny("Force push is forbidden for all agents (rules/git-workflow.md).")
         hit = unnarrowed_test_cmd(command)
