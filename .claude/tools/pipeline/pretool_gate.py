@@ -250,7 +250,11 @@ SHELL_RESERVED = frozenset({"!", "{", "(", "((", "if", "then", "elif", "else",
 # Words that only CLOSE a group. Alone in a segment (`{ cat x; } | python -` leaves
 # a `}` between the `;` and the `|`) they are no command, and must not stand as a
 # segment of their own: that segment would break the pipe chain.
-SHELL_CLOSERS = frozenset({"}", ")", "fi", "done"})
+SHELL_CLOSERS = frozenset({"}", "fi", "done"})
+# What pad_separators emits for the `)` that ends a group. A control character in
+# front keeps it distinct from a quoted `")"` after shlex has stripped the quotes.
+GROUP_CLOSE_MARK = "\x1f"
+GROUP_CLOSE = GROUP_CLOSE_MARK + ")"
 # argv0 forms that run their first non-flag argument as a script, so the script
 # name is an invocation rather than a path argument. Shells are absent on
 # purpose: their `-c` body is handled by shell_c_bodies() instead.
@@ -408,6 +412,10 @@ def ungroup(segment: list) -> list:
             out[0] = head.lstrip("(")
         else:
             break
+    # pad_separators leaves a group's `)` as a marker token of its own; it ends the
+    # group and is no argument of the command in front of it (`(git push origin main)`).
+    # Only the marker goes: a quoted `")"` is an operand (`git -C ")" push`).
+    out = [tok for tok in out if tok != GROUP_CLOSE]
     return [] if len(out) == 1 and out[0] in SHELL_CLOSERS else out
 
 
@@ -665,7 +673,9 @@ def piped_test_suite_sink(command: str) -> str:
 
 
 def command_substitutions(command: str) -> list:
-    """The inner text of every `$( ... )` and backtick substitution.
+    """The inner text of every `$( ... )` and backtick substitution, and of every
+    process substitution `<( ... )` / `>( ... )` - bash runs that body as a command
+    too (`cat <(git commit -m x)`), and an unquoted one is no word shlex can read.
 
     The shell runs these as commands; shlex does not know them, so
     `echo $(git push origin main)` tokenises to `$(git`, `push`, `main)` and no
@@ -708,7 +718,7 @@ def command_substitutions(command: str) -> list:
                 break
             i = j + 1
             continue
-        if ch == "$" and command.startswith("$(", i):
+        if ch in "$<>" and command.startswith(ch + "(", i) and (ch == "$" or not dq):
             if command.startswith("$((", i):
                 j = command.find("))", i + 3)
                 i = n if j < 0 else j + 2
@@ -1131,9 +1141,24 @@ def pad_separators(command: str) -> str:
     An unquoted NEWLINE terminates a command too, and shlex swallows it as
     ordinary whitespace - so `echo hi\\nrm -rf src` came back as one simple
     command whose argv0 is `echo`, and the second line read as an argument.
-    It is emitted as `;` for that reason."""
+    It is emitted as `;` for that reason.
+
+    A parenthesis that GROUPS commands is padded as well: `(git commit -m x)`
+    tokenised as `(git` ... `x)`, so no `git` token existed and the commit gate never
+    fired, and `(git push origin main)` resolved the target `main)`. Only a group
+    is padded. A `(` after `$`, `<`, `>` or `=` opens a substitution, a process
+    substitution or an array, and a backslash-escaped paren is an argument
+    (`find \\( ... \\)`): those stay one word, and so does everything inside a
+    substitution, which the nested-body scan unwraps on its own.
+
+    A group's `)` is emitted as GROUP_CLOSE, not as a plain `)`, so that a quoted
+    `")"` (a git option's operand, a commit message) stays a different token: `ungroup`
+    drops only the marker. A marker character already in the text is blanked first,
+    so it cannot be forged."""
+    command = command.replace(GROUP_CLOSE_MARK, " ")
     out = []
     quote = ""
+    frames = []  # one entry per open `(` outside quotes: True when it groups commands
     i = 0
     while i < len(command):
         ch = command[i]
@@ -1152,9 +1177,24 @@ def pad_separators(command: str) -> str:
             i += 1
             continue
         if ch == "\n":
+            frames.clear()  # a newline ends whatever substitution was left open
             out.append(" ; ")
             i += 1
             continue
+        if ch in "()":
+            backslashes = 0
+            while backslashes < i and command[i - 1 - backslashes] == "\\":
+                backslashes += 1
+            if backslashes % 2 == 0:  # an ODD run escapes the paren, an even one does not
+                if ch == "(":
+                    frames.append(False not in frames
+                                  and command[i - 1:i] not in ("$", "<", ">", "="))
+                    out.append(" ( " if frames[-1] else ch)
+                else:  # an unmatched `)` (a case pattern) is padded like a group's
+                    group = frames.pop() if frames else True
+                    out.append(f" {GROUP_CLOSE} " if group else ch)
+                i += 1
+                continue
         # An `&` that is part of a redirect operator (`2>&1`, `>&f`, `&>f`) is not a
         # separator: splitting there moved everything behind it into a new command,
         # so `python 2>&1 approve.py` showed the interpreter no script. `&<` is no
@@ -1183,7 +1223,10 @@ def git_invocations(command: str) -> list:
 
     Glued separators are normalised first (pad_separators), so
     `git status&&git add -A` resolves to [('status', []), ('add', ['-A'])]
-    instead of hiding the second call inside one token.
+    instead of hiding the second call inside one token. The walk is per simple
+    command (command_segments), the same split every script gate reads, so a
+    group (`(git push origin main)`, `{ git commit -m x; }`) and a control word
+    (`then`, `do`) are stripped there rather than patched in here.
 
     The failure mode is deliberately fail-CLOSED: when the text mentions git but
     shlex cannot tokenise it, the subcommand is GIT_UNKNOWN and callers must
@@ -1193,34 +1236,35 @@ def git_invocations(command: str) -> list:
     """
     if not MENTIONS_GIT_RE.search(command):
         return []
-    tokens = gate_tokens(command)
-    if tokens is None:
+    segments = command_segments(command)
+    if segments is None:
         return [(GIT_UNKNOWN, [])]
     found = []
-    i = 0
-    while i < len(tokens):
-        if not GIT_TOKEN_RE.match(tokens[i]):
-            i += 1
-            continue
-        j, sub = i + 1, ""
-        while j < len(tokens):
-            tok = tokens[j]
-            if SEGMENT_BREAK_RE.match(tok):
-                break
-            if tok.startswith("-"):
-                j += 2 if tok in GIT_OPTS_WITH_ARG else 1
+    for tokens in segments:
+        i = 0
+        while i < len(tokens):
+            if not GIT_TOKEN_RE.match(tokens[i]):
+                i += 1
                 continue
-            sub = tok.lower()
-            j += 1
-            break
-        if sub:
-            args = []
-            while (j < len(tokens) and not SEGMENT_BREAK_RE.match(tokens[j])
-                   and not GIT_TOKEN_RE.match(tokens[j])):
-                args.append(tokens[j])
+            j, sub = i + 1, ""
+            while j < len(tokens):
+                tok = tokens[j]
+                if SEGMENT_BREAK_RE.match(tok):
+                    break
+                if tok.startswith("-"):
+                    j += 2 if tok in GIT_OPTS_WITH_ARG else 1
+                    continue
+                sub = tok.lower()
                 j += 1
-            found.append((sub, args))
-        i = max(j, i + 1)
+                break
+            if sub:
+                args = []
+                while (j < len(tokens) and not SEGMENT_BREAK_RE.match(tokens[j])
+                       and not GIT_TOKEN_RE.match(tokens[j])):
+                    args.append(tokens[j])
+                    j += 1
+                found.append((sub, args))
+            i = max(j, i + 1)
     return found
 
 
