@@ -240,7 +240,17 @@ def mask_quoted(command: str) -> str:
 HEREDOC_RE = re.compile(r"(?<!<)<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 # Same set as SHELL_SEPARATORS below, spelled out because that constant is
 # defined further down the file; a test pins the two together.
-SEPARATOR_TOKENS = frozenset({"&&", "||", ";", "|", "&"})
+SEPARATOR_TOKENS = frozenset({"&&", "||", "|&", ";", "|", "&"})
+# Both feed the next command's stdin; `|&` sends stderr as well.
+PIPE_SEPS = frozenset({"|", "|&"})
+# Words that open or continue a compound command and run nothing themselves: the
+# command that runs is the word behind them (`then python x`, `{ python x; }`).
+SHELL_RESERVED = frozenset({"!", "{", "(", "((", "if", "then", "elif", "else",
+                            "while", "until", "do"})
+# Words that only CLOSE a group. Alone in a segment (`{ cat x; } | python -` leaves
+# a `}` between the `;` and the `|`) they are no command, and must not stand as a
+# segment of their own: that segment would break the pipe chain.
+SHELL_CLOSERS = frozenset({"}", ")", "fi", "done"})
 # argv0 forms that run their first non-flag argument as a script, so the script
 # name is an invocation rather than a path argument. Shells are absent on
 # purpose: their `-c` body is handled by shell_c_bodies() instead.
@@ -252,7 +262,20 @@ ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 # argv0 `env`, which is not an interpreter, and the script argument was never
 # read as executed - the gate saw a path.
 WRAPPER_RE = re.compile(
-    r"^(?:.*[\\/])?(?:env|command|nohup|time|sudo|xargs|exec)(?:\.exe)?$", re.IGNORECASE)
+    r"^(?:.*[\\/])?(?:env|command|nohup|time|sudo|xargs|exec|timeout|uv|cmd"
+    r"|nice|stdbuf|setsid|uvx|pipenv)(?:\.exe)?$",
+    re.IGNORECASE)
+# What a wrapper takes ahead of the command it runs that is not a flag: timeout's
+# duration (`30`, `1.5`, `30s`; also the `10` of `nice -n 10`), the `run` of uv and
+# pipenv, cmd's `/c` (`//c` under git-bash, which rewrites a lone `/c` into a drive
+# path).
+WRAPPER_OPERAND_RE = re.compile(r"^(?:\d+(?:\.\d+)?[smhd]?|run|/{1,2}[ck])$", re.IGNORECASE)
+CMD_RE = re.compile(r"^(?:.*[\\/])?cmd(?:\.exe)?$", re.IGNORECASE)
+PYTHON_RE = re.compile(r"^(?:.*[\\/])?(?:python[\d.]*|pythonw|py)(?:\.exe)?$", re.IGNORECASE)
+# A redirect operator opening a token: `>`, `>>`, `2>`, `&>`, `>&`, `<`, `<<<`, `2>&1`.
+# A token that is ONLY the operator takes the NEXT token as its target.
+REDIR_TOKEN_RE = re.compile(r"^(?:\d*|&)(?:>>?|<{1,3})&?")
+REDIR_BARE_RE = re.compile(r"^(?:\d*|&)(?:>>?|<{1,3})&?$")
 # `< file`, `<file`, `0< file` - stdin redirection. An interpreter reading a
 # script this way RUNS it, exactly as it would as an argument. The negative
 # lookahead keeps a heredoc / herestring operator out.
@@ -371,6 +394,23 @@ def gate_tokens(command: str) -> list | None:
         return None
 
 
+def ungroup(segment: list) -> list:
+    """`segment` without the shell grouping syntax that opens it: `(python x)`
+    and `( python x )` open with `(`, `{ python x; }` with `{`, and a compound
+    command's keyword (`then`, `do`, `else`, ...) sits in front of the command it
+    introduces. None of those runs anything, so the word behind them is argv0."""
+    out = list(segment)
+    while out:
+        head = out[0]
+        if head in SHELL_RESERVED or not head.strip("("):
+            out.pop(0)
+        elif head.startswith("("):
+            out[0] = head.lstrip("(")
+        else:
+            break
+    return [] if len(out) == 1 and out[0] in SHELL_CLOSERS else out
+
+
 def segments_with_separators(command: str) -> list | None:
     """[(separator-before, tokens), ...] - one entry per simple command. The
     separator of the first entry is ''. None when the text cannot be tokenised.
@@ -383,11 +423,13 @@ def segments_with_separators(command: str) -> list | None:
     pairs, current, sep = [], [], ""
     for tok in tokens:
         if tok in SEPARATOR_TOKENS:
+            current = ungroup(current)
             if current:
                 pairs.append((sep, current))
             current, sep = [], tok
         else:
             current.append(tok)
+    current = ungroup(current)
     if current:
         pairs.append((sep, current))
     return pairs
@@ -400,19 +442,33 @@ def command_segments(command: str) -> list | None:
     return None if pairs is None else [seg for _, seg in pairs]
 
 
-def argv0_index(segment: list) -> int | None:
-    """Index of the word a simple command actually RUNS: past leading
-    `VAR=value` assignments, past flags, and past wrapper commands that run
-    their own argument (`env`, `sudo`, `nohup`, `xargs`, ...). None when the
-    segment runs nothing."""
-    i = 0
+def _argv0(segment: list) -> tuple:
+    """(index of the word a simple command RUNS, whether a wrapper stood in
+    front of it). The index is None when the segment runs nothing."""
+    i, wrapped = 0, False
     while i < len(segment):
         tok = segment[i]
-        if ASSIGNMENT_RE.match(tok) or tok.startswith("-") or WRAPPER_RE.match(tok):
+        if REDIR_TOKEN_RE.match(tok):
+            i += 2 if REDIR_BARE_RE.match(tok) else 1
+        elif ASSIGNMENT_RE.match(tok) or tok.startswith("-"):
             i += 1
-            continue
-        return i
-    return None
+        elif WRAPPER_RE.match(tok):
+            wrapped = True
+            i += 1
+        elif wrapped and WRAPPER_OPERAND_RE.match(tok):
+            i += 1
+        else:
+            return i, wrapped
+    return None, wrapped
+
+
+def argv0_index(segment: list) -> int | None:
+    """Index of the word a simple command actually RUNS: past leading
+    `VAR=value` assignments, redirects (`2>&1 python x`), flags, and wrapper
+    commands that run their own argument (`env`, `sudo`, `nohup`, `xargs`,
+    `timeout 30`, `uv run`, `cmd /c`, ...). None when the segment runs
+    nothing."""
+    return _argv0(segment)[0]
 
 
 def stdin_operands(segment: list) -> list:
@@ -429,55 +485,122 @@ def stdin_operands(segment: list) -> list:
     return out
 
 
-def exec_names_of(segment: list) -> list:
-    """The words ONE simple command actually runs: argv0 (see argv0_index),
-    plus - when argv0 is an interpreter - the script it is handed, whether as
-    its first non-flag argument, on stdin, or as a `-m` module. `python
-    .../approve.py`, `python < .../approve.py` and `python -m approve` all run
-    that script; `git show -- x.py` does not run x.py.
+def script_operand(segment: list, i: int) -> tuple | None:
+    """(index, word) of the script the interpreter at segment[i] is handed as
+    its first operand, or the `-m` module resolved to its file path
+    (`pipeline.approve` -> `pipeline/approve.py`), else None.
+
+    Redirects between the interpreter and the script are not operands. For
+    python the flags are read the way python reads them, as short-option
+    clusters: `-X utf8` and `-W ignore` take the NEXT word as their value, and
+    `-m` ends a cluster with the module glued on (`-mapprovals`, `-Bmapprovals`)
+    or as the next word (`-m approvals`, `-Bm approvals`). Taking `utf8` for the
+    script is what let `python -X utf8 approve.py` through."""
+    python = bool(PYTHON_RE.match(segment[i]))
+    n = i + 1
+    while n < len(segment):
+        tok = segment[n]
+        if REDIR_TOKEN_RE.match(tok):
+            n += 2 if REDIR_BARE_RE.match(tok) else 1
+            continue
+        if not tok.startswith("-"):
+            return n, tok
+        n += 1
+        if python and not tok.startswith("--"):
+            for k, c in enumerate(tok[1:], 1):
+                if not c.isalpha():
+                    break
+                glued = tok[k + 1:]
+                if c == "m":
+                    module = glued or (segment[n] if n < len(segment) else "")
+                    return (n - 1 if glued else n), module.replace(".", "/") + ".py"
+                if c in "XW":
+                    n += 0 if glued else 1
+                    break
+                if c == "c":
+                    break
+        elif python and tok == "--check-hash-based-pycs":
+            n += 1  # the one long python option that takes its value as the next word
+        elif tok == "-m" and n < len(segment):
+            return n, segment[n].replace(".", "/") + ".py"
+    return None
+
+
+def exec_tokens(segment: list) -> list:
+    """[(index, word), ...] for the words ONE simple command actually runs: argv0
+    (see argv0_index), plus - when argv0 is an interpreter - the script it is
+    handed, whether as its first non-flag argument, on stdin (index -1), or as a
+    `-m` module. `python .../approve.py`, `python < .../approve.py` and `python -m
+    approve` all run that script; `git show -- x.py` does not run x.py.
 
     The `-m` operand went unread, and that was the whole of a bypass: the flag
     loop skipped `-m` as a flag and `approve` as its value, so
     `cd .claude/tools/pipeline && python3 -m approve --gate commit` named no
-    script and passed every profile. A module is resolved to its file path
-    (`pipeline.approve` -> `pipeline/approve.py`) so the script regexes, which
-    anchor on a path separator, match it the same way they match the argument
-    spelling."""
-    i = argv0_index(segment)
+    script and passed every profile. A module is resolved to its file path so the
+    script regexes, which anchor on a path separator, match it the same way they
+    match the argument spelling.
+
+    A wrapper has options of its own that this file cannot enumerate per wrapper
+    (`sudo -u root`, `uv run --with pkg`, `timeout --signal KILL`), and the word
+    behind such an option is then taken for argv0. So behind a wrapper every
+    interpreter further along the segment counts as run too: more names than the
+    shell runs is a deny at worst, fewer is a bypass."""
+    i, wrapped = _argv0(segment)
     if i is None:
         return []
-    names = [segment[i]]
+    found = [(i, segment[i])]
     if INTERPRETER_RE.match(segment[i]):
-        stdin = stdin_operands(segment)
-        names.extend(stdin)
-        rest = segment[i + 1:]
-        for n, tok in enumerate(rest):
-            if tok == "-m" and n + 1 < len(rest):
-                names.append(rest[n + 1].replace(".", "/") + ".py")
-            if tok.startswith("-") or STDIN_REDIR_RE.match(tok) or tok in stdin:
-                continue
-            names.append(tok)
-            break
-    return names
+        found.extend((-1, name) for name in stdin_operands(segment))
+        script = script_operand(segment, i)
+        if script:
+            found.append(script)
+    if wrapped:
+        for j in range(i + 1, len(segment)):
+            if INTERPRETER_RE.match(segment[j]):
+                found.extend((j + k if k >= 0 else k, name)
+                             for k, name in exec_tokens(segment[j:]))
+    return found
+
+
+def exec_names_of(segment: list) -> list:
+    """The words ONE simple command actually runs; see exec_tokens()."""
+    return [name for _, name in exec_tokens(segment)]
+
+
+def runs_interpreter(names: list) -> bool:
+    """True when `names` (exec_names_of output) include an interpreter - not only
+    as argv0, because a wrapper's option value can push the real one behind it."""
+    return any(INTERPRETER_RE.match(name) for name in names)
+
+
+def pipe_sources(pairs: list, n: int) -> list:
+    """Indices of every earlier command in the unbroken pipe chain that feeds
+    pairs[n]: `cat x | cat | python -` feeds the interpreter from BOTH cats."""
+    out = []
+    while n and pairs[n][0] in PIPE_SEPS:
+        n -= 1
+        out.append(n)
+    return out
 
 
 def executed_names(command: str) -> list | None:
     """Every word `command` actually runs, across all its simple commands.
     None when the text cannot be tokenised (callers gate that).
 
-    A pipe INTO an interpreter runs what the previous command emitted, so its
-    operands count as executed: `cat x/approve.py | python` and
-    `echo x/approve.py | xargs python` both run the script the gate would
-    otherwise have read as a path argument."""
+    A pipe INTO an interpreter runs what the commands before it emitted, so
+    their operands count as executed: `cat x/approve.py | python`,
+    `echo x/approve.py | xargs python` and `cat x/approve.py | cat | python -`
+    all run the script the gate would otherwise have read as a path argument."""
     pairs = segments_with_separators(command)
     if pairs is None:
         return None
     names = []
-    for n, (sep, seg) in enumerate(pairs):
+    for n, (_, seg) in enumerate(pairs):
         seg_names = exec_names_of(seg)
         names.extend(seg_names)
-        if n and sep == "|" and seg_names and INTERPRETER_RE.match(seg_names[0]):
-            names.extend(tok for tok in pairs[n - 1][1][1:] if not tok.startswith("-"))
+        if runs_interpreter(seg_names):
+            for k in pipe_sources(pairs, n):
+                names.extend(tok for tok in pairs[k][1][1:] if not tok.startswith("-"))
     return names
 
 
@@ -530,7 +653,7 @@ def piped_test_suite_sink(command: str) -> str:
         return ""
     for n in range(1, len(pairs)):
         sep, seg = pairs[n]
-        if sep != "|" or not is_test_suite_segment(pairs[n - 1][1]):
+        if sep not in PIPE_SEPS or not is_test_suite_segment(pairs[n - 1][1]):
             continue
         i = argv0_index(seg)
         if i is None:
@@ -642,7 +765,10 @@ def eval_redirect(command: str, _depth: int = 0) -> str:
     return ""
 
 
-APPROVE_SCRIPT_RE = re.compile(r"(?:^|[\\/])approve\.py$", re.IGNORECASE)
+# Windows drops trailing dots and spaces from a file name (measured: `python
+# .../mode.py. --show` runs the script), and a `)` closing a `( ... )` group is
+# glued to the last word, so the name may carry either behind `.py`.
+APPROVE_SCRIPT_RE = re.compile(r"(?:^|[\\/])approve\.py[. )]*$", re.IGNORECASE)
 
 
 def runs_approve_script(command: str, _depth: int = 0) -> bool:
@@ -674,6 +800,15 @@ def shell_c_bodies(command: str) -> list:
         return []
     bodies = []
     for i, tok in enumerate(tokens):
+        if CMD_RE.match(tok):
+            # `cmd /c "python x"`: cmd's switches open with `/` (`//` under git-bash).
+            for j in range(i + 1, len(tokens)):
+                if not tokens[j].startswith("/"):
+                    break
+                if WRAPPER_OPERAND_RE.match(tokens[j]) and j + 1 < len(tokens):
+                    bodies.append(tokens[j + 1])
+                    break
+            continue
         if not SHELL_TOKEN_RE.match(tok):
             continue
         for j in range(i + 1, len(tokens)):
@@ -983,7 +1118,7 @@ SEGMENT_BREAK_RE = re.compile(r"^(?:&&|\|\||;|\||&|\d*[<>])")
 # NOT split on them, so `git status&&git add -A` tokenises as one glued token
 # ('status&&git'), the second `git` is never seen, and every argv-based gate goes
 # blind. Longest first so `&&` / `||` win over `&` / `|`.
-SHELL_SEPARATORS = ("&&", "||", ";", "|", "&")
+SHELL_SEPARATORS = ("&&", "||", "|&", ";", "|", "&")
 
 
 def pad_separators(command: str) -> str:
@@ -1018,6 +1153,14 @@ def pad_separators(command: str) -> str:
             continue
         if ch == "\n":
             out.append(" ; ")
+            i += 1
+            continue
+        # An `&` that is part of a redirect operator (`2>&1`, `>&f`, `&>f`) is not a
+        # separator: splitting there moved everything behind it into a new command,
+        # so `python 2>&1 approve.py` showed the interpreter no script. `&<` is no
+        # operator, so there the `&` still ends the command.
+        if ch == "&" and (command[i - 1:i] in (">", "<") or command.startswith("&>", i)):
+            out.append(ch)
             i += 1
             continue
         sep = next((s for s in SHELL_SEPARATORS if command.startswith(s, i)), "")

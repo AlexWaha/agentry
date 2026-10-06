@@ -217,20 +217,13 @@ class SettingStateIsOrchestratorOnlyTest(unittest.TestCase):
                 code, err = run_profile("handle_dev", command)
                 self.assertEqual(0, code, err)
 
-    def test_an_ampersand_glued_to_a_redirect_is_kept_only_where_bash_has_the_operator(self):
-        # `&>`, `>&` and `<&` are redirect operators; `&<` is not, so there the
-        # `&` is a real background separator and must survive.
-        for command in ("x 2>&1 y", "x &>f y", "x >&f y", "x <&3 y"):
-            with self.subTest(command=command):
-                self.assertNotIn("&", agent_gate.AMP_REDIRECT_RE.sub("", command))
-        self.assertEqual("x &<f y", agent_gate.AMP_REDIRECT_RE.sub("", "x &<f y"))
-
     def test_an_ampersand_less_than_still_splits_the_command_in_two(self):
-        # Asserted on the split itself, not on the verdict: the second command
-        # here starts with a redirect (`<x python ...`), and a redirect ahead of
-        # the script is a separate gap (task-0100) that would allow it anyway.
+        # `&>`, `>&` and `<&` are redirect operators that pad_separators() keeps
+        # whole; `&<` is not one, so there the `&` is a real background separator
+        # (test_script_gate_evasions pins the operator side). Asserted on the split
+        # itself, not on the verdict.
         command = f"python {PIPE}/mode.py --show &<x python {PIPE}/mode.py talk"
-        segments = pretool_gate.command_segments(agent_gate.AMP_REDIRECT_RE.sub("", command))
+        segments = pretool_gate.command_segments(command)
         self.assertEqual(2, len(segments))
         self.assertEqual(["python", f"{PIPE}/mode.py", "--show"], segments[0])
 
