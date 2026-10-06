@@ -499,22 +499,61 @@ def bash_mutates(command: str, _depth: int = 0) -> str:
     return ""
 
 
+# What `cp` takes as the NEXT word: `-t`/`-S` in a cluster, and the long options with a
+# required value. getopt matches any unambiguous prefix of a long option (`--target=`,
+# `--suf x`), and an ambiguous one is an error, so a prefix of any of these counts.
+CP_TARGET_OPTION = "--target-directory"
+CP_VALUE_OPTIONS = (CP_TARGET_OPTION, "--suffix", "--sparse", "--no-preserve")
+
+
+def is_long_option_prefix(name: str, option: str) -> bool:
+    """True when `name` (`--target`, `--t`) abbreviates `option`; a bare `--` ends the
+    options and abbreviates nothing."""
+    return len(name) > 2 and option.startswith(name)
+
+
 def target_directory(args: list) -> list:
     """The directory `cp -t DIR`, `-tDIR`, `-rt DIR`, `--target-directory DIR` or
-    `--target-directory=DIR` names, as a one-item list, else []. With it every other
-    operand is a SOURCE, so the last operand is no longer the destination. `-S`
-    takes a value that may itself hold a `t` (`-Sbackup`), so a cluster with an
-    `S` ahead of the `t` is not read as the option."""
+    `--target-directory=DIR` (or any abbreviation of the long name, `--target=DIR`,
+    `--t DIR`) names, as a one-item list, else []. With it every other operand is a
+    SOURCE, so the last operand is no longer the destination. `-S` takes a value that
+    may itself hold a `t` (`-Sbackup`), so a cluster with an `S` ahead of the `t` is
+    not read as the option."""
     for n, tok in enumerate(args):
-        if tok.startswith("--target-directory="):
-            return [tok.partition("=")[2]]
-        if tok == "--target-directory":
-            return args[n + 1:n + 2]
-        if tok.startswith("-") and not tok.startswith("--"):
+        if tok == "--":
+            break
+        if tok.startswith("--"):
+            name, eq, value = tok.partition("=")
+            if is_long_option_prefix(name, CP_TARGET_OPTION):
+                return [value] if eq else args[n + 1:n + 2]
+        elif tok.startswith("-"):
             head, found, glued = tok[1:].partition("t")
             if found and "S" not in head:
                 return [glued] if glued else args[n + 1:n + 2]
     return []
+
+
+def destination_operand(args: list) -> list:
+    """The last operand of a `cp` that is neither an option nor an option's value, as
+    a one-item list, else []. GNU permutes options, so `cp a b -v` and `cp a b -S .bak`
+    copy onto `b`: taking the last word whole named `-v` or `.bak` as the destination."""
+    operands, skip, n = [], False, 0
+    while n < len(args):
+        tok, n = args[n], n + 1
+        if skip:
+            skip = False
+        elif tok == "--":
+            operands.extend(args[n:])
+            break
+        elif tok.startswith("--"):
+            name, eq, _ = tok.partition("=")
+            skip = not eq and any(is_long_option_prefix(name, o) for o in CP_VALUE_OPTIONS)
+        elif tok.startswith("-") and len(tok) > 1:
+            # a cluster ends in the option that takes the value: `-vS .bak`, but not `-S.bak`
+            skip = tok[-1] in "St" and not any(c in "St" for c in tok[1:-1])
+        else:
+            operands.append(tok)
+    return operands[-1:]
 
 
 def writes_protected_state(command: str, _depth: int = 0) -> str:
@@ -537,7 +576,7 @@ def writes_protected_state(command: str, _depth: int = 0) -> str:
         i = pretool_gate.argv0_index(segment)
         operands = real_arguments(segment[i + 1:])
         if base_name(segment[i]) == "cp":
-            operands = target_directory(operands) or operands[-1:]
+            operands = target_directory(operands) or destination_operand(operands)
         for tok in operands:
             if is_protected_state(tok):
                 return tok
