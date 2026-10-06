@@ -560,22 +560,22 @@ class ProtectedPushTest(unittest.TestCase):
         finally:
             state.load_pipeline = original
 
-    def test_refspec_destinations_are_resolved(self):
+    def test_refspec_sources_and_destinations_are_resolved(self):
         cases = {
-            "origin main": ["main"],
-            "origin HEAD:main": ["main"],
-            "origin +main": ["main"],
-            "origin :main": ["main"],
-            "origin refs/heads/master": ["master"],
-            "--force origin feature/x:staging": ["staging"],
-            "-o ci.skip origin production": ["production"],
+            "origin main": [("main", "main")],
+            "origin HEAD:main": [("HEAD", "main")],
+            "origin +main": [("main", "main")],
+            "origin :main": [("", "main")],
+            "origin refs/heads/master": [("master", "master")],
+            "--force origin feature/x:staging": [("feature/x", "staging")],
+            "-o ci.skip origin production": [("production", "production")],
             "origin": [],
             "": [],
         }
         for args, expected in cases.items():
             with self.subTest(args=args):
                 self.assertEqual(
-                    pretool_gate.push_refspec_targets(args.split()), expected)
+                    pretool_gate.push_refspec_pairs(args.split()), expected)
 
 
 class GitArgvResolutionTest(unittest.TestCase):
@@ -1296,7 +1296,9 @@ class TrunkPushApprovalTest(unittest.TestCase):
             repo.commit()
             repo.checkout_new("bugfix/task-0092")
             marker = self.approve()
-            code, err = denial_reason("git push origin main", repo.path)
+            # The trunk alone is no longer a task push (task-0111), so the later
+            # refusal is the task branch named beside it.
+            code, err = denial_reason("git push origin main bugfix/task-0092", repo.path)
             self.assertEqual(2, code)
             self.assertIn("no row in the run store", err)
             self.assertTrue(marker.exists())
