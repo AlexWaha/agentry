@@ -251,6 +251,10 @@ SHELL_RESERVED = frozenset({"!", "{", "(", "((", "if", "then", "elif", "else",
 # a `}` between the `;` and the `|`) they are no command, and must not stand as a
 # segment of their own: that segment would break the pipe chain.
 SHELL_CLOSERS = frozenset({"}", "fi", "done"})
+# Words that OPEN a group a closer above ends; `for` and `select` open one too, but
+# only as the first word of a command (their `in` list is not a command).
+GROUP_OPENERS = frozenset({"{", "(", "((", "if", "while", "until"})
+GROUP_LOOPS = frozenset({"for", "select"})
 # What pad_separators emits for the `)` that ends a group. A control character in
 # front keeps it distinct from a quoted `")"` after shlex has stripped the quotes.
 GROUP_CLOSE_MARK = "\x1f"
@@ -267,7 +271,7 @@ ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 # read as executed - the gate saw a path.
 WRAPPER_RE = re.compile(
     r"^(?:.*[\\/])?(?:env|command|nohup|time|sudo|xargs|exec|timeout|uv|cmd"
-    r"|nice|stdbuf|setsid|uvx|pipenv)(?:\.exe)?$",
+    r"|nice|stdbuf|setsid|uvx|pipenv|ionice|taskset|flock|chrt|numactl|doas|unbuffer)(?:\.exe)?$",
     re.IGNORECASE)
 # What a wrapper takes ahead of the command it runs that is not a flag: timeout's
 # duration (`30`, `1.5`, `30s`; also the `10` of `nice -n 10`), the `run` of uv and
@@ -416,7 +420,38 @@ def ungroup(segment: list) -> list:
     # group and is no argument of the command in front of it (`(git push origin main)`).
     # Only the marker goes: a quoted `")"` is an operand (`git -C ")" push`).
     out = [tok for tok in out if tok != GROUP_CLOSE]
-    return [] if len(out) == 1 and out[0] in SHELL_CLOSERS else out
+    # A closer is no command, with or without the redirects that follow it
+    # (`{ cat x; } 2>&1 | python -`): kept as a segment it would break the pipe chain.
+    if out and out[0] in SHELL_CLOSERS and (len(out) == 1 or REDIR_TOKEN_RE.match(out[1])):
+        return []
+    return out
+
+
+class SegmentPairs(list):
+    """The result of segments_with_separators(): a plain list of (separator,
+    tokens), plus `groups` - the (first, last) indices of every group (`{ ...; }`,
+    `( ... )`, `if ... fi`, `for ... done`) that holds more than one command. A
+    group's closing word is no segment, so without the spans a pipe after it
+    could only see the command right behind the closer."""
+
+    def __init__(self):
+        super().__init__()
+        self.groups = []
+
+
+def group_marks(raw: list) -> tuple:
+    """(openers, closers) the RAW tokens of one segment carry: the group openers
+    leading it (`{`, `(`, `if`, `while`, `until`, `for`) and the closers - a group's
+    `)` marker, or a lone `}` / `fi` / `done` (see ungroup)."""
+    opens, i = 0, 0
+    while i < len(raw) and (raw[i] in SHELL_RESERVED or not raw[i].strip("(")):
+        opens += raw[i] in GROUP_OPENERS
+        i += 1
+    opens += i < len(raw) and raw[i] in GROUP_LOOPS
+    closes = raw.count(GROUP_CLOSE)
+    if raw and raw[0] in SHELL_CLOSERS and (len(raw) == 1 or REDIR_TOKEN_RE.match(raw[1])):
+        closes += 1
+    return opens, closes
 
 
 def segments_with_separators(command: str) -> list | None:
@@ -424,22 +459,33 @@ def segments_with_separators(command: str) -> list | None:
     separator of the first entry is ''. None when the text cannot be tokenised.
 
     The separator is kept because a PIPE changes what the next command runs:
-    `cat script.py | python` executes the script on the left."""
+    `cat script.py | python` executes the script on the left. The list also
+    carries `.groups` (SegmentPairs) for `{ cat script.py; echo; } | python`."""
     tokens = gate_tokens(command)
     if tokens is None:
         return None
-    pairs, current, sep = [], [], ""
+    pairs, starts = SegmentPairs(), []
+
+    def take(raw: list, sep: str) -> None:
+        opens, closes = group_marks(raw)
+        starts.extend([len(pairs)] * opens)
+        cmd = ungroup(raw)
+        if cmd:
+            pairs.append((sep, cmd))
+        for _ in range(closes):
+            if starts:
+                first = starts.pop()
+                if first < len(pairs) - 1:
+                    pairs.groups.append((first, len(pairs) - 1))
+
+    current, sep = [], ""
     for tok in tokens:
         if tok in SEPARATOR_TOKENS:
-            current = ungroup(current)
-            if current:
-                pairs.append((sep, current))
+            take(current, sep)
             current, sep = [], tok
         else:
             current.append(tok)
-    current = ungroup(current)
-    if current:
-        pairs.append((sep, current))
+    take(current, sep)
     return pairs
 
 
@@ -583,11 +629,14 @@ def runs_interpreter(names: list) -> bool:
 
 def pipe_sources(pairs: list, n: int) -> list:
     """Indices of every earlier command in the unbroken pipe chain that feeds
-    pairs[n]: `cat x | cat | python -` feeds the interpreter from BOTH cats."""
-    out = []
+    pairs[n]: `cat x | cat | python -` feeds the interpreter from BOTH cats, and
+    `{ cat x; echo; } | python -` from every command of the group."""
+    out, groups = [], getattr(pairs, "groups", ())
     while n and pairs[n][0] in PIPE_SEPS:
-        n -= 1
-        out.append(n)
+        last = n - 1
+        first = min((f for f, g in groups if g == last), default=last)
+        out.extend(range(first, last + 1))
+        n = first
     return out
 
 
@@ -1131,6 +1180,42 @@ SEGMENT_BREAK_RE = re.compile(r"^(?:&&|\|\||;|\||&|\d*[<>])")
 SHELL_SEPARATORS = ("&&", "||", "|&", ";", "|", "&")
 
 
+# Every control character but TAB and LF. shlex splits a word on CR; bash does not
+# (CR is a word character), and the group closer marker is one of these. Mapping each
+# to a non-whitespace placeholder keeps the word whole, which is what bash sees.
+CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+# A CR that ends a word or a line is a line ending (CRLF) and belongs to no word: it
+# is dropped, so a CRLF script is read as written.
+LINE_END_CR_RE = re.compile(r"(?<=\S)\r+(?=\s|\Z)")
+
+
+def normalise_controls(command: str) -> str:
+    """`command` with its control characters made harmless to the tokeniser: a CR
+    that ends a word is dropped, every other control character becomes `?`.
+
+    Blanking a character to whitespace SPLITS the word it sat in, which is how
+    `git -c user.name=a<US>b commit` lost its `commit`; a placeholder keeps the
+    word whole. It applies inside quotes too: a quoted marker character forges the
+    group closer just as well once shlex has stripped the quotes."""
+    return CONTROL_RE.sub("?", LINE_END_CR_RE.sub("", command))
+
+
+def escaped(command: str, i: int) -> bool:
+    """True when the character at `i` follows an ODD run of backslashes: an odd run
+    escapes it, an even one cancels out."""
+    backslashes = 0
+    while backslashes < i and command[i - 1 - backslashes] == "\\":
+        backslashes += 1
+    return backslashes % 2 == 1
+
+
+def ends_substitution(command: str, i: int) -> bool:
+    """False when the closer at `i` is glued to a path that carries on behind it
+    (`$(pwd)/x`, `$(pwd).py`): padding it would cut the word the interpreter is
+    handed as its script."""
+    return command[i + 1:i + 2] not in ("/", "\\", ".")
+
+
 def pad_separators(command: str) -> str:
     """Insert whitespace around glued shell separators, outside quotes.
 
@@ -1153,12 +1238,24 @@ def pad_separators(command: str) -> str:
 
     A group's `)` is emitted as GROUP_CLOSE, not as a plain `)`, so that a quoted
     `")"` (a git option's operand, a commit message) stays a different token: `ungroup`
-    drops only the marker. A marker character already in the text is blanked first,
-    so it cannot be forged."""
-    command = command.replace(GROUP_CLOSE_MARK, " ")
+    drops only the marker. Control characters are normalised first (normalise_controls),
+    so a marker character in the text cannot be forged.
+
+    The `)` that closes a substitution is padded the same way, but only when the
+    substitution held a separator (`$(echo x; git push origin main)` otherwise
+    resolved the target `main)`: behind a separator the git is its own command and the
+    top-level scan reads it) and only when it ends a word. A closer glued to a path
+    (`$(pwd)/x/approve.py`) stays in its word, which is the script the interpreter is
+    handed. A closing backtick is padded alike. `$(date)`, `$((1+2))` and `a=(x y)`
+    are not rewritten."""
+    command = normalise_controls(command)
     out = []
     quote = ""
     frames = []  # one entry per open `(` outside quotes: True when it groups commands
+    backtick = False
+    n_seps = 0  # separators emitted so far; a frame compares it with its value at the opener
+    opened_at = []  # n_seps at each open `(`, parallel to `frames`
+    backtick_at = 0
     i = 0
     while i < len(command):
         ch = command[i]
@@ -1178,23 +1275,37 @@ def pad_separators(command: str) -> str:
             continue
         if ch == "\n":
             frames.clear()  # a newline ends whatever substitution was left open
+            opened_at.clear()
+            backtick = False
+            n_seps += 1
             out.append(" ; ")
             i += 1
             continue
-        if ch in "()":
-            backslashes = 0
-            while backslashes < i and command[i - 1 - backslashes] == "\\":
-                backslashes += 1
-            if backslashes % 2 == 0:  # an ODD run escapes the paren, an even one does not
-                if ch == "(":
-                    frames.append(False not in frames
-                                  and command[i - 1:i] not in ("$", "<", ">", "="))
-                    out.append(" ( " if frames[-1] else ch)
-                else:  # an unmatched `)` (a case pattern) is padded like a group's
-                    group = frames.pop() if frames else True
-                    out.append(f" {GROUP_CLOSE} " if group else ch)
-                i += 1
-                continue
+        if ch == "`" and not escaped(command, i):
+            backtick = not backtick
+            backtick_at = n_seps if backtick else backtick_at
+            pad = not backtick and n_seps > backtick_at and ends_substitution(command, i)
+            out.append(f" {GROUP_CLOSE} " if pad else ch)
+            i += 1
+            continue
+        if ch in "()" and not escaped(command, i):
+            if ch == "(":
+                frames.append(False not in frames
+                              and command[i - 1:i] not in ("$", "<", ">", "="))
+                opened_at.append(n_seps)
+                out.append(" ( " if frames[-1] else ch)
+            else:  # an unmatched `)` (a case pattern) is padded like a group's
+                group = frames.pop() if frames else True
+                # measured from the OUTERMOST open paren: `$(echo x; (git push main))`
+                # holds its separator outside the inner group, and the inner `)` still
+                # glues onto `main`
+                outer = opened_at[0] if opened_at else n_seps
+                if opened_at:
+                    opened_at.pop()
+                pad = group or (n_seps > outer and ends_substitution(command, i))
+                out.append(f" {GROUP_CLOSE} " if pad else ch)
+            i += 1
+            continue
         # An `&` that is part of a redirect operator (`2>&1`, `>&f`, `&>f`) is not a
         # separator: splitting there moved everything behind it into a new command,
         # so `python 2>&1 approve.py` showed the interpreter no script. `&<` is no
@@ -1205,6 +1316,7 @@ def pad_separators(command: str) -> str:
             continue
         sep = next((s for s in SHELL_SEPARATORS if command.startswith(s, i)), "")
         if sep:
+            n_seps += 1
             out.append(" " + sep + " ")
             i += len(sep)
             continue
