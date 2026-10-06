@@ -392,7 +392,7 @@ class SharedHelpersTest(unittest.TestCase):
         self.assertIn("x/approve.py", pretool_gate.executed_names("cat x/approve.py |& python -"))
 
     def test_a_lone_group_closer_is_no_command_and_keeps_the_pipe_chain_whole(self):
-        for closer in ("}", ")", "fi", "done"):
+        for closer in ("}", "fi", "done", pretool_gate.GROUP_CLOSE):
             with self.subTest(closer=closer):
                 self.assertEqual([], pretool_gate.ungroup([closer]))
         pairs = pretool_gate.segments_with_separators("{ cat x/approve.py; } | python -")
@@ -401,7 +401,15 @@ class SharedHelpersTest(unittest.TestCase):
 
     def test_a_closer_word_with_company_is_still_a_command(self):
         self.assertEqual(["done", "x"], pretool_gate.ungroup(["done", "x"]))
-        self.assertEqual(["cat", "x", ")"], pretool_gate.ungroup(["(", "cat", "x", ")"]))
+        self.assertEqual(["}", "x"], pretool_gate.ungroup(["}", "x"]))
+
+    def test_only_the_group_closer_marker_is_dropped_and_a_quoted_paren_stays(self):
+        # A group's own `)` ends the group; it is no argument (task-0109). A quoted
+        # `")"` is a plain `)` token and must survive as an operand.
+        close = pretool_gate.GROUP_CLOSE
+        self.assertEqual(["cat", "x"], pretool_gate.ungroup(["(", "cat", "x", close]))
+        self.assertEqual(["git", "-C", ")", "push"], pretool_gate.ungroup(["git", "-C", ")", "push"]))
+        self.assertEqual([")"], pretool_gate.ungroup([")"]))
 
     def test_a_python_option_that_takes_a_value_does_not_hand_it_over_as_the_script(self):
         for tokens in (["python", "--check-hash-based-pycs", "always", "s.py"],
