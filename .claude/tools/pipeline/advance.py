@@ -52,6 +52,7 @@ import sys
 
 import approvals
 import busy
+import diff_checkpoint
 import git_state
 import mode
 import pretool_gate
@@ -475,6 +476,7 @@ def main() -> int:
                 fields.update(retries=0, continuations=0)
             state.set_fields(conn, args.task, **fields)
         else:
+            fresh_park = run.get("awaiting_human") != pending
             fields = {"awaiting_human": pending}
             # approvals.granted() answers the whole question: the level's GRANTS
             # set OR the stage list approves, and NEVER_GRANTED refuses the push
@@ -517,10 +519,16 @@ def main() -> int:
             return result("advanced", args.task, run,
                           f"checkpoint(s) approved: '{cur}' -> '{nxt}' "
                           f"(owner: {stage_owner(pipeline, nxt, args.task, which)}). Proceed.")
-        return result("park", args.task, run, msgs.get(
+        message = msgs.get(
             run["awaiting_human"],
             f"awaiting human: checkpoint '{pending}' has no approval field and cannot "
-            f"be recorded - fix the stage's checkpoints in pipeline.json."))
+            f"be recorded - fix the stage's checkpoints in pipeline.json.")
+        # The one place the CEO is handed the commit diff (FR-53/54). deliver()
+        # answers "" unless the run is genuinely parked on an unapproved commit,
+        # so an auto-approved commit gets nothing here.
+        if run["awaiting_human"] == "commit":
+            message += diff_checkpoint.deliver(args.task, inject=fresh_park)
+        return result("park", args.task, run, message)
 
     # 3. Gated autonomous stage - run the exit gate deterministically.
     with busy.hold(args.task, cur, GATE_TIMEOUT):

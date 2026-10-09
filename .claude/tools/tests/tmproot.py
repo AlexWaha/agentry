@@ -107,6 +107,14 @@ for _var in ("TMPDIR", "TEMP", "TMP"):
 # it.
 os.environ["GIT_CEILING_DIRECTORIES"] = str(TMP_ROOT)
 
+# Same family of leak, different victim: advance.py parking at the commit
+# checkpoint queues "/diff" into the console input buffer (diff_checkpoint.py),
+# and a test that drives it there would type into the real prompt of whoever
+# ran the suite. Every test module that reaches advance.py imports this one, and
+# the variable also covers the children the suite spawns. test_diff_checkpoint.py
+# lifts it for itself and mocks kernel32 instead.
+os.environ["AGENTRY_NO_CONSOLE_INJECT"] = "1"
+
 # How long to keep trying to delete a sandbox. Windows releases a file handle a
 # moment after the process holding it dies, and the suite kills real children.
 _DELETE_ATTEMPTS = 12
