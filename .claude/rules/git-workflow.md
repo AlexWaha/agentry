@@ -109,10 +109,15 @@ approvals level grants it, no per-stage `auto_approve` entry may list it, and no
 "he approved the last one" carries over. A push is the moment work leaves the
 machine, and the CEO has asked for that decision to stay his without exception.
 
-This is enforced, not just written: `approvals.NEVER_GRANTED` refuses `PUSH` and
-`TRUNK_PUSH` at every level, and `granted()` checks it before both the level and the per-stage
+This is enforced, not just written: `approvals.never_granted()` refuses `PUSH` and
+`TRUNK_PUSH` at every level (`pipeline.json` `approvals_never_granted` lists both;
+`TRUNK_PUSH` and `PLAN` are also withheld in code, and a missing or unreadable list
+withholds both), and `granted()` checks it before both the level and the per-stage
 `auto_approve` list, so neither can re-grant it. `advance.py` reads the push
-checkpoint through `granted()` for the same reason.
+checkpoint through `granted()` for the same reason. The
+`skills/pipeline/SKILL.md` table lists the push of the work branch under `auto`
+only when `approvals_never_granted` does not list it (adapter key
+`approvals_grants`); the shipped config lists it.
 
 The approval is its own question. Do not fold it into a card about something
 else, however obvious the answer looks from the surrounding choice: a card that
@@ -142,7 +147,11 @@ commit and push approvals are enforced by the `PreToolUse` hook, not by goodwill
 - `git commit` is blocked until you run
   `python .claude/tools/pipeline/approve.py --task task-XXXX --gate commit`.
 - `git push` is blocked until you run the same with `--gate push`.
-- Any `git push` to the protected branch is blocked outright.
+- Any `git push` to the protected branch is blocked outright. The one-shot
+  `approve.py --trunk-push` marker (`solo` mode) lets the CEO-approved trunk push
+  through once; `pipeline.json` `allow_push_to_main` (default `false`, and `false`
+  here) would let a plain trunk push through without it, but never a force or
+  delete push.
 
 Run `approve.py` **only after the CEO explicitly approves in chat**. To send a task
 back for rework instead of approving, use `approve.py --task task-XXXX --reject`

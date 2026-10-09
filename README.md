@@ -76,7 +76,10 @@ CEO now reads the diff at the commit checkpoint, where the approval already
 waits. Rejecting there sends the task back to `implement`.
 
 `implement`, `test`, and `review` are editing stages: only one task occupies
-one at a time, so there is never a concurrent edit to the working tree. `done`
+one at a time, so there is never a concurrent edit to the working tree (a
+multi-subtask epic registered as one umbrella task is the exception: see "Swarm
+mode" in `.claude/rules/orchestration.md` and the swarm protocol in
+`.claude/skills/swarm/SKILL.md`). `done`
 is reached only when git confirms the branch is actually merged into the main
 branch, not merely pushed.
 
@@ -176,10 +179,22 @@ manifest) is planned - see [Roadmap](#roadmap) - and is not shipped today.
 | `assisted` | committing passes unasked; you start each task, and the conveyor stops after it |
 | `auto` | the above, plus taking the next ready task on its own once the current one is done |
 
-Two things no level ever grants, whatever `pipeline.json` says: **the push** and
-**merging into the main branch**. `approvals.NEVER_GRANTED` refuses the push
-before the level and before any per-stage `auto_approve` entry is consulted, so
-a config key cannot re-grant it. No level grants the merge either: in `pr` mode
+`.agentry/state/swarm` is the third dial, `on` or `off` (default `off`): whether a
+multi-subtask epic runs as a parallel agent swarm under one umbrella task. Set it
+with `python .claude/tools/pipeline/swarm.py on|off`; `python
+.claude/tools/pipeline/mode.py --show` prints all three dials, and the
+`/pipeline-*` skills set them by name. The project values for the swarm protocol
+are in `.claude/pipeline-adapter.md`.
+
+The shipped `pipeline.json` lists `push` and `trunk_push` in
+`approvals_never_granted`, so no level grants them. Subagent Write/Edit and
+explicit-path shell writes to that file are denied; cd-relative and interpreter
+writes are not yet covered (task-0116). `approvals.never_granted()` refuses the listed checkpoints before the level
+and before any per-stage `auto_approve` entry is consulted (a missing or
+unreadable list withholds both too), which is what keeps the push out of `auto`.
+Without that listing, `auto` would also grant the push of the work branch. `manual`
+grants nothing and `assisted` grants the commit only. No level grants the merge
+into the main branch either: in `pr` mode
 it happens in the web UI, by a human, and in `solo` mode the pipeline performs it
 locally once the commit is approved. At `assisted` and `auto` the level itself
 sets that commit approval, so in `solo` mode no human decides each merge there;

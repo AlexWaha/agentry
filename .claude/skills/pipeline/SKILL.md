@@ -1,153 +1,73 @@
 ---
 name: pipeline
-description: Switch the session between build, plan and talk mode, and between manual, assisted and auto approval levels. Use when the CEO wants to discuss a project, test a hypothesis or design something without the task conveyor pushing code work forward, to switch back to implementation afterwards, or to change how many checkpoints the CEO has to answer. Triggers on "/pipeline", "/pipeline talk", "/pipeline plan", "/pipeline build", "/pipeline build auto", "/pipeline approvals", "давай обсудим", "просто поговорим", "без задач", "переключи режим", "смени уровень одобрения".
-argument-hint: "[plan|talk|build] [manual|assisted|auto]"
+description: Semantics of the pipeline dials (mode, approval level, swarm flag) and the /pipeline-* command family. Use when the CEO asks to switch mode, approvals or swarm, or types "/pipeline", "переключи режим", "смени уровень одобрения", "включи swarm", "давай обсудим", "просто поговорим".
 ---
 
-# Pipeline mode and approvals
+# Pipeline dials and commands
 
-The execution conveyor is built for coding tasks. It is the wrong tool when the
-CEO wants to think out loud: the Stop hook keeps pushing the next task forward,
-and every reply drags the backlog along with it.
+This skill and the `pipeline-*` command skills belong to this project and are
+edited here. Project commands and paths live in the adapter
+`.claude/pipeline-adapter.md`.
 
-Two independent dials govern the conveyor:
+## Three dials
 
-- **mode** (`.agentry/state/mode`) - WHICH stage machine runs.
-- **approvals** (`.agentry/state/approvals`) - how many of that machine's
-  checkpoints the CEO still has to answer.
-
-Two dials rather than a matrix, because at three in the morning a matrix is
-unreadable.
-
-## Modes
-
-| Mode | Conveyor | What it is for |
+| Dial | Values | Meaning |
 |---|---|---|
-| `build` | on - `pipelines.build` | Default. Tasks advance implement -> test -> review -> ready -> done, commit gated by the CEO, and the push too in `pr` mode. |
-| `plan` | on - `pipelines.plan` | Design. Tasks advance formalize -> draft -> plan-review -> approval -> breakdown -> done. Writes a brief, a plan, a spec, and task files into `.agentry/tasks/backlog/`. No product code. |
-| `talk` | off | Discussion, hypotheses, exploration. Nothing tracked, nothing written. |
+| mode | `build`, `plan`, `talk` | which flow runs: implementation, design (brief, plan, spec, task files; no product code), or plain discussion (nothing tracked) |
+| approvals | `manual`, `assisted`, `auto` | how many checkpoints the CEO must still answer (default grants below) |
+| swarm | `on`, `off` | build only: `on` runs each epic as a parallel agent swarm (`.claude/skills/swarm/SKILL.md`), `off` runs one task at a time |
 
-`build` and `plan` both drive the conveyor, just over different stages - both
-are gated stage machines registered and advanced through the same
-`advance.py`. Only `talk` has no flow behind it at all.
+Default grants per approval level (what passes WITHOUT asking the CEO):
 
-## Approval levels
+| Level | Take a task | Commit | Push |
+|---|---|---|---|
+| `manual` | no | no | no |
+| `assisted` | no | yes | no |
+| `auto` | yes | yes | yes, work branch only, unless `approvals_never_granted` lists it |
 
-| Level | Grants without asking | What still needs the CEO |
-|---|---|---|
-| `manual` | nothing | every checkpoint: which task to take, the commit, the push |
-| `assisted` | commit | which task to take (the CEO starts each one, and the conveyor stops after it), the push |
-| `auto` | the commit, and taking the next ready task on its own when the current one is done | the push, moving a task to `done` (it follows the merge), answering planning questions - no level ever grants these; merging into `main` is the CEO's in `pr` mode, and in `solo` mode follows the commit approval |
+`manual` grants nothing. `assisted` grants the commit only and does not take the
+next task. `auto` grants take and commit, and the push of the work branch unless
+`pipeline.json` `approvals_never_granted` lists it; the shipped config lists
+`push` and `trunk_push`, so no level grants them and `auto` stops at the push.
+Subagent Write/Edit and explicit-path shell writes to that file are denied;
+cd-relative and interpreter writes are not yet covered (task-0116).
 
-The push is absent from every "grants" cell on purpose: `approvals.NEVER_GRANTED`
-refuses it at every level, and a per-stage `auto_approve` listing it does nothing
-(see `rules/git-workflow.md`, "Push is never automatic, at any approval level").
-Where the rows name the push they state the approval requirement, which holds in
-both workflow modes, not that the checkpoint exists: `solo` mode has no push
-checkpoint at all, so a run there parks at the commit.
+Push to the main branch is never granted at any level. Only the project config
+can allow it (adapter key `push_to_main`, default forbidden), and the hooks
+enforce it. In `solo` mode (`workflow.mode`) the merge into main happens locally
+after the commit approval; there is no push step.
+Trunk-based projects (adapter key `trunk_based`) commit and push on the main branch; the hooks take the task from the single active run and apply the same commit and push approvals, denying when zero or several runs are active.
 
-A per-stage `auto_approve` list in `pipeline.json` layers on top of the level
-and wins for every other checkpoint, so a single one can be automated without
-raising the whole dial. An overnight `auto` run is still bounded by the push
-approval and by the dependency chain: a
-chain of dependent tasks advances by exactly one, since the next task needs
-its predecessor merged into `main` first.
+Adapter key `approvals_grants` names the config that lists checkpoints never
+granted at any level, enforced in code. Never answered by any level: planning
+questions and moving a task to done. Merging into main needs the CEO unless the
+adapter defines a local merge mode (e.g. `solo`) and its trigger.
 
-## How to run it
+All three dials persist across sessions until changed; the SessionStart hook
+prints any non-default value.
 
-Read the arguments the CEO passed after `/pipeline`. The first is the mode, the
-optional second is the approval level, so `/pipeline build auto` sets both dials
-in one go.
+## Commands
 
-**No argument** - report the current mode and approval level, then offer the
-choice through `AskUserQuestion`: two questions, mode first, then level. The
-autocomplete only shows a static hint, so the picker is the actual UI - do not
-print a prose menu and make the CEO remember the words. If he dismisses the
-card, leave both dials untouched and say so.
+Each command sets exactly the dials in its name; the swarm flag is part of the
+name for every build command (`-swarm` = on, absent = off). Dials not in the
+name keep their value.
 
-```bash
-python .claude/tools/pipeline/mode.py --show
-python .claude/tools/pipeline/approvals.py --show
-```
+| Command | Sets |
+|---|---|
+| `/pipeline-show` | nothing, prints all three |
+| `/pipeline-plan`, `/pipeline-talk` | mode |
+| `/pipeline-build`, `/pipeline-build-swarm` | mode build, swarm off / on |
+| `/pipeline-build-manual`, `-assisted`, `-auto` | mode build, approvals, swarm off |
+| `/pipeline-build-manual-swarm`, `-assisted-swarm`, `-auto-swarm` | mode build, approvals, swarm on |
+| `/pipeline-approvals-manual`, `-assisted`, `-auto` | approvals |
+| `/pipeline-swarm-on`, `/pipeline-swarm-off` | swarm |
 
-**`build` / `plan` / `talk`** - switch the mode and confirm:
+After any switch, run the adapter's `show` and report the state in one line.
 
-```bash
-python .claude/tools/pipeline/mode.py talk
-```
+## Behaviour per mode
 
-**`<mode> <level>`** - both dials at once, which is the usual way to start a run:
+- **build**: drive the build flow through the project's gated scripts; with swarm on follow the swarm skill, with swarm off one task at a time.
+- **plan**: gated design flow; task files land in the backlog; no product code.
+- **talk**: answer, investigate, prototype in scratch; no task files, no branches, no product edits. Offer to capture anything worth keeping.
 
-```bash
-python .claude/tools/pipeline/mode.py build
-python .claude/tools/pipeline/approvals.py auto
-```
-
-`/pipeline build auto` and `/pipeline build manual` are the two that matter in
-practice: the first runs the conveyor unattended and parks at whichever
-checkpoint `workflow.mode` leaves last (the push in `pr` mode, the commit in
-`solo`, where the local merge follows), the second asks at every checkpoint that
-mode leaves in place. Neither pushes on its own - no
-level does. `talk` ignores the level: there is no conveyor to approve anything
-on, so say so instead of setting it.
-
-**`approvals <level>`** (or a request phrased as changing how much is
-auto-approved) - switch the approval level alone, leaving the mode as it is:
-
-```bash
-python .claude/tools/pipeline/approvals.py assisted
-```
-
-Then tell the CEO in one line which mode/level is active and what it means for
-the work. Do not restate the whole table.
-
-Five one-word skills cover the common settings without arguments:
-`/pipeline-build-manual`, `/pipeline-build-assisted`, `/pipeline-build-auto`,
-`/pipeline-plan`, `/pipeline-talk`. The three `build-*` ones set both dials; the
-other two set the mode and leave the level as it is.
-
-## What each mode changes for you
-
-**build.** Business as usual. Follow `rules/orchestration.md` and
-`rules/pipeline.md`: register tasks with `advance.py`, drive stages, park at the
-CEO checkpoints.
-
-**plan.** Its own gated flow (`formalize -> draft -> plan-review -> approval ->
-breakdown -> done`, `pipelines.plan` in `pipeline.json`), registered with the
-same `advance.py`. Write the brief and the plan under `.agentry/plans/`, the
-spec under `.agentry/specs/`, and land task files in
-`.agentry/tasks/backlog/` - they sit there, queued, until the CEO switches to
-`build` and says which to start. Do not implement product code on this flow.
-
-**talk.** Answer, investigate, measure, prove or disprove. Read code freely,
-run read-only queries, prototype in a scratch space if it helps you answer. Do
-not write task files, do not create branches, do not edit product code. If the
-discussion produces something worth keeping, say so and offer to capture it,
-rather than silently creating files.
-
-In both `plan` and `talk` the safety gates stay on: no push to a protected
-branch, no destructive commands, no AI-authorship trailer, no em dash. Those are
-not workflow, they are guardrails.
-
-## Switching back
-
-Nothing resets the mode or the approval level on its own. Both survive across
-sessions on purpose, so a long design conversation - or an overnight `auto` run
-- is not interrupted by a restart. The session-start hook prints the mode
-whenever it is not `build`, so a forgotten switch stays visible.
-
-When the CEO asks to implement something while `plan` or `talk` is active, do
-not silently switch. Say which flow is active and ask whether to switch to
-`build` first.
-
-## What this is not
-
-Neither dial disables the safety hooks, unlocks `main`, or skips review.
-`mode` only decides which stage machine the Stop hook drives; `approvals` only
-decides how many of that machine's checkpoints pass without asking. Answering
-questions raised during planning always stays with the CEO, at every mode and
-every approval level. Moving a task to `done` follows the merge into `main`,
-which git confirms: the CEO's merge in the web UI in `pr` mode, the pipeline's
-local merge after the commit approval in `solo` mode, gated by
-`pretool_gate.py`'s three conditions (branch name, run row, commit approved;
-see `rules/git-workflow.md`).
+When the CEO asks to implement something while `plan` or `talk` is active, say which mode is on and ask before switching. Safety gates stay on in every mode: no push to protected branches, no destructive commands, no AI attribution, no em dash.

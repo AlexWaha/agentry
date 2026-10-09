@@ -5,7 +5,7 @@ model: sonnet
 color: purple
 permissionMode: bypassPermissions
 effort: low
-maxTurns: 40
+maxTurns: 100
 tools: Read, Grep, Bash
 rules:
   - documentation.md

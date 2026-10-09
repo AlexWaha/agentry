@@ -23,6 +23,9 @@ except `talk` is whatever pipeline.json declares under `pipelines`, so a
 workspace that declares a `research` flow gets a `research` mode for free. The
 three names above are the fallback for a config that declares nothing.
 
+`--show` prints all three dials (mode, approvals, swarm), because the CEO reads
+them together; the other two are set by approvals.py and swarm.py.
+
 Fail-open by design: an unreadable or missing file means the default flow, so a
 broken mode file can never silently disable the pipeline.
 """
@@ -117,8 +120,18 @@ def main() -> int:
     args = [a for a in sys.argv[1:] if a.strip()]
 
     if not args or args[0] in ("--show", "show"):
+        # Imported here, not at the top: lanes tests reload this module and
+        # approvals on their own, and a top-level import would pin one of them
+        # to the other's stale copy.
+        import approvals
+        import swarm
+
         mode = read()
-        print(f"{mode}: {describe(mode)}")
+        level = approvals.read()
+        flag = swarm.read()
+        print(f"mode      {mode}: {describe(mode)}")
+        print(f"approvals {level}: {approvals.DESCRIPTIONS[level]}")
+        print(f"swarm     {flag}: {swarm.DESCRIPTIONS[flag]}")
         return 0
 
     requested = args[0].lstrip("-").lower()

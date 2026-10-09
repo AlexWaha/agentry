@@ -5,22 +5,31 @@ Separate axis from the mode: the mode picks WHICH stages run, this picks how
 many of their checkpoints the CEO still has to answer. Two dials rather than one
 matrix, because at three in the morning a matrix is unreadable.
 
-Levels, each a superset of the one before:
+Levels, each a superset of the one before (default grants, what passes WITHOUT
+asking the CEO):
 
   manual    ask at every checkpoint. Which task to take, the commit, the push.
             The default, and the right setting while someone is at the keyboard.
   assisted  commit without asking. The CEO starts each task, and the conveyor
-            stops after the current one. Still asks before pushing.
+            stops after the current one. `take` is not granted here: taking
+            the next task is the one thing that tells `auto` apart from
+            `assisted` (task-0050).
   auto      the same, plus taking the next ready backlog task on its own once
-            the current one is done (the Stop hook's pickup reads `take`). For
-            a night run. Still stops at the push.
+            the current one is done (the Stop hook's pickup reads `take`), plus
+            the push of the WORK branch. For a night run.
 
-What no level ever grants:
+What is withheld from every level, whatever the table above says:
 
-  - the push, including the one-shot trunk push of `solo` mode. The CEO asked
-    for that decision to stay his, every time, at every level
-    (rules/git-workflow.md, "Push is never automatic"). A push is the moment
-    work leaves the machine.
+  - everything listed in pipeline.json `approvals_never_granted`, read by
+    never_granted(). This project lists `push` and `trunk_push`, so `auto` here
+    stops at the push exactly as it always did: the CEO asked for that decision
+    to stay his, every time, at every level (rules/git-workflow.md, "Push is
+    never automatic"). A push is the moment work leaves the machine. A config
+    that omits the list, or cannot be read, withholds both too (fail-safe).
+  - `trunk_push` and `plan`, always, configured or not (ALWAYS_WITHHELD). The
+    trunk push publishes the trunk and is recorded per push by the CEO in chat
+    (approve.py --trunk-push), and a plan is the CEO's signature: every task
+    below an approved plan inherits its mistakes.
   - the merge into the main branch. No level grants it; who performs it follows
     `workflow.mode`. In `pr` mode the agent stops at a pushed branch; the CEO
     opens and merges the PR in the web UI. In `solo` mode the pipeline merges
@@ -41,8 +50,8 @@ mode an unattended session is refused the local merge (`check_unattended`), so
 the bound is the same.
 
 A per-stage `auto_approve` list in pipeline.json is layered on top and wins for
-every checkpoint EXCEPT the ones in NEVER_GRANTED - listing `push` there does
-nothing, by design.
+every checkpoint EXCEPT the withheld ones - listing `push` there does nothing
+while `approvals_never_granted` lists it, by design.
 
 Fail-open: anything unreadable resolves to `manual`, the strictest level. A
 broken file can never hand the agent more authority than it had.
@@ -76,18 +85,25 @@ TRUNK_PUSH = "trunk_push"   # solo mode: publish the trunk itself, once
 GRANTS = {
     MANUAL: frozenset(),
     ASSISTED: frozenset({COMMIT}),
-    AUTO: frozenset({TAKE, COMMIT}),
+    AUTO: frozenset({TAKE, COMMIT, PUSH}),
 }
 
-# Checkpoints no level and no per-stage auto_approve may ever grant. The push
-# was in GRANTS[AUTO] while git-workflow.md forbade it - the rule was written
-# and not enforced, so the orchestrator followed the permissive document.
-# TRUNK_PUSH joins it for the same reason and one more: it is the one step that
-# publishes the trunk, so it is recorded per push by the CEO in chat
-# (approve.py --trunk-push), never handed over wholesale by a level. PLAN is the
-# CEO's signature on a plan: closer to a push than to a commit, because every
-# task below an approved plan inherits its mistakes.
-NEVER_GRANTED = frozenset({PUSH, TRUNK_PUSH, PLAN})
+# Withheld from every level and every per-stage auto_approve list, in code, so
+# configuration can only add to it. TRUNK_PUSH is the one step that publishes
+# the trunk, so it is recorded per push by the CEO in chat (approve.py
+# --trunk-push), never handed over wholesale by a level. PLAN is the CEO's
+# signature on a plan: closer to a push than to a commit, because every task
+# below an approved plan inherits its mistakes.
+ALWAYS_WITHHELD = frozenset({TRUNK_PUSH, PLAN})
+
+# What a config that names no usable list withholds. The push was in GRANTS[AUTO]
+# once while git-workflow.md forbade it - the rule was written and not enforced,
+# so the orchestrator followed the permissive document. A missing or unreadable
+# list therefore resolves to the strict answer, never to "grant everything".
+DEFAULT_NEVER_GRANTED = frozenset({PUSH, TRUNK_PUSH})
+
+# The only names `approvals_never_granted` may carry.
+CHECKPOINTS = frozenset({TAKE, COMMIT, PUSH, PLAN, TRUNK_PUSH})
 
 # Which run.db column records each checkpoint's approval. One table for every
 # reader: advance.py parks on it, approve.py writes it.
@@ -97,9 +113,27 @@ DESCRIPTIONS = {
     MANUAL: "ask at every checkpoint: which task, the commit, the push",
     ASSISTED: "commit unasked, but you start each task and the next one waits for you. "
               "The push is never granted",
-    AUTO: "commit unasked and take the next ready task on its own. The push is never "
-          "granted",
+    AUTO: "commit unasked and take the next ready task on its own. The push of the work "
+          "branch is granted only where pipeline.json approvals_never_granted omits it",
 }
+
+
+def never_granted() -> frozenset:
+    """Checkpoints this project never grants at any level: ALWAYS_WITHHELD plus
+    pipeline.json `approvals_never_granted`. Stricter only, never looser.
+
+    Fail-SAFE: a missing key, a value that is not a list, a list with an entry that
+    is not exactly one checkpoint name (a typo, `"push,trunk_push"`, null, a nested
+    list), or a config that cannot be read all fall back to DEFAULT_NEVER_GRANTED
+    (state.load_pipeline() returns {} for an unreadable file). A broken config therefore never hands the agent
+    more authority than the shipped one. Only an explicit list changes the
+    answer, and an explicit empty list is the one way to let `auto` push the work
+    branch."""
+    configured = state.load_pipeline().get("approvals_never_granted")
+    if not isinstance(configured, list) or not all(
+            isinstance(c, str) and c in CHECKPOINTS for c in configured):
+        return ALWAYS_WITHHELD | DEFAULT_NEVER_GRANTED
+    return ALWAYS_WITHHELD | frozenset(configured)
 
 
 def read() -> str:
@@ -120,8 +154,8 @@ def granted(checkpoint: str, stage_auto: list | None = None) -> bool:
 
     `stage_auto` is the stage's own `auto_approve` list from pipeline.json; it
     is layered on top of the level, so a single checkpoint can be automated
-    without raising the dial for everything else. NEVER_GRANTED wins over both."""
-    if checkpoint in NEVER_GRANTED:
+    without raising the dial for everything else. never_granted() wins over both."""
+    if checkpoint in never_granted():
         return False
     if stage_auto and checkpoint in {str(c).lower() for c in stage_auto}:
         return True

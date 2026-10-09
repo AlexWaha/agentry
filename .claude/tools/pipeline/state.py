@@ -34,11 +34,11 @@ STATE_DIR = ROOT / ".agentry" / "state"
 # Unset is the default lane and is byte-identical to the behaviour before lanes
 # existed - the suffix is empty, so every path resolves exactly as before.
 #
-# This is the ONE place the lane is read. mode.py and approvals.py suffix their
-# own files from state.LANE_SUFFIX rather than re-reading the environment, for
-# the same reason advance.py reads the workflow mode through a single accessor:
-# three copies of one lookup are three chances to disagree about which lane the
-# session is in.
+# This is the ONE place the lane is read. mode.py, approvals.py and swarm.py
+# suffix their own files from state.LANE_SUFFIX rather than re-reading the
+# environment, for the same reason advance.py reads the workflow mode through a
+# single accessor: four copies of one lookup are four chances to disagree about
+# which lane the session is in.
 # The lane name becomes part of a FILENAME, so it is validated rather than
 # trusted. An unvalidated value was worse than sloppy: `a/b` raised a sqlite
 # error that the hooks' top-level fail-open swallowed into exit 0, and
@@ -155,9 +155,10 @@ def load_pipeline() -> dict:
     """Load the declarative pipeline config. Returns {} if missing/unparseable
     so callers can fail open (a broken config must never brick the agent)."""
     try:
-        return json.loads(PIPELINE_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        data = json.loads(PIPELINE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def stages(pipeline: dict, which: str = BUILD) -> list[dict]:

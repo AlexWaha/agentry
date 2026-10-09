@@ -68,7 +68,7 @@ CODEGRAPH_AGENTS = {"architect", "senior-backend-dev", "senior-frontend-dev",
                     "qa-engineer", "reviewer", "security-engineer",
                     "devops-engineer", "data-engineer", "rapid-prototyper",
                     "incident-response-commander"}
-MAX_TURNS = {"dev": 60, "readonly": 40, "docs": 30}
+MAX_TURNS = {"dev": 150, "readonly": 100, "docs": 30}
 
 COPY_SKILLS = ["self-learning", "new-task", "new-epic"]
 COPY_RULES = ["code-retrieval.md"]

@@ -8,6 +8,10 @@
   "main_branch": "main",
   "protected_branches": ["staging", "production"],
   "branch_pattern": "{type}/{task}",
+  "_approvals_never_granted_comment": "Read by tools/pipeline/approvals.py never_granted(): checkpoints withheld from EVERY approvals level and from any stage auto_approve list. The level table grants `push` (work branch only) at `auto`; listing it here is what keeps the CEO's standing rule (the push is never automatic) true. `trunk_push` and `plan` are withheld in code whatever this says. A missing key, a non-list value or an unreadable file withholds `push` and `trunk_push` too (fail-safe), so only an explicit list can loosen anything, and an explicit [] is the one way to let `auto` push the work branch. Editing this is a CEO decision.",
+  "approvals_never_granted": ["push", "trunk_push"],
+  "_allow_push_to_main_comment": "Read by tools/pipeline/pretool_gate.py allow_push_to_main(). Default false: a push to the trunk is refused unless the CEO recorded the one-shot approve.py --trunk-push marker (solo mode). Only a literal true waives the trunk push approval, so a plain push reaches the trunk without the marker; it never covers a force, delete or prune push, nor protected_branches other than the trunk. Editing this is a CEO decision.",
+  "allow_push_to_main": false,
   "workflow": {
     "_comment": "What kind of project this is, read by tools/pipeline/pretool_gate.py. mode 'pr' (DEFAULT when absent) is the collaborative shape: nothing commits on the trunk, the branch is pushed and a human opens the pull request. mode 'solo' is the single-author shape: there is no second party to review or merge, so a LOCAL `git merge` of an approved task branch into the trunk is allowed - the task must still match <type>/task-NNNN, have a row in run.db, and carry an approved commit checkpoint, because those guard against merging unreviewed work rather than against working alone. Pushing to a protected branch is refused in BOTH modes, with one exception: in 'solo' mode the trunk itself may be published by a push the CEO approved in chat and the orchestrator recorded with approve.py --trunk-push, and that approval covers exactly ONE push (the push consumes the marker). No approvals level ever grants it, and an unattended session is refused it regardless. push_needs_approval is independent of the mode (default true): working alone says nothing about whether an unattended run may write to the remote. See .claude/rules/git-workflow.md.",
     "mode": "solo",
@@ -33,7 +37,7 @@
     "destructive_allow_if": [],
     "repl_write_keyword": "",
     "repl_write_patterns": [],
-    "dev_forbidden_commands": [],
+    "dev_forbidden_commands": ["python -m unittest discover"],
     "forbid_piped_test_suite": true
   },
   "handoff": {
@@ -107,7 +111,7 @@
     },
     "plan": {
       "_comment": "Design. Turns a request into an approved plan, a spec and task files sitting in tasks/backlog/. Writes documents, never product code.",
-      "_editing_stages_comment": "Every stage an AGENT owns and the conveyor must drive to an exit gate. This key was [] until task-0020, on the reading that a planning stage writes documents rather than code and so serializes against nothing - which is false twice over: those documents are files in this repository's working tree, and stop_gate.decide() uses the set to decide what is IN FLIGHT, not what is compiled. Empty meant a plan run mid-flight matched no branch of the run loop, so nothing drove it and the next backlog task was started on top of it. `approval` is excluded because the CEO owns it, not an agent; `done` is excluded as terminal. `plan-review` IS included for the same reason build's `review` is: read-only for the reviewer does not mean the run has let go of its branch. `approval` is protected by being a checkpoint stage rather than by being absent from this list: state.checkpoint_stages() reads the `checkpoints` key, so the Stop hook neither drives it nor treats its tree as free. The `plan` checkpoint is real (task-0089): advance.py parks on it, records nothing itself, and leaves `approval` only after approve.py --gate plan sets run.db plan_approved. No approvals level and no auto_approve list grants it (approvals.NEVER_GRANTED).",
+      "_editing_stages_comment": "Every stage an AGENT owns and the conveyor must drive to an exit gate. This key was [] until task-0020, on the reading that a planning stage writes documents rather than code and so serializes against nothing - which is false twice over: those documents are files in this repository's working tree, and stop_gate.decide() uses the set to decide what is IN FLIGHT, not what is compiled. Empty meant a plan run mid-flight matched no branch of the run loop, so nothing drove it and the next backlog task was started on top of it. `approval` is excluded because the CEO owns it, not an agent; `done` is excluded as terminal. `plan-review` IS included for the same reason build's `review` is: read-only for the reviewer does not mean the run has let go of its branch. `approval` is protected by being a checkpoint stage rather than by being absent from this list: state.checkpoint_stages() reads the `checkpoints` key, so the Stop hook neither drives it nor treats its tree as free. The `plan` checkpoint is real (task-0089): advance.py parks on it, records nothing itself, and leaves `approval` only after approve.py --gate plan sets run.db plan_approved. No approvals level and no auto_approve list grants it (approvals.never_granted()).",
       "editing_stages": [
         "formalize",
         "draft",

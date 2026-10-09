@@ -5,7 +5,7 @@ model: opus
 color: blue
 permissionMode: bypassPermissions
 effort: max
-maxTurns: 40
+maxTurns: 100
 tools: Read, Grep, Glob, Bash
 mcpServers:
   - codegraph

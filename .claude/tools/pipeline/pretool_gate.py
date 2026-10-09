@@ -9,7 +9,10 @@ Wired to Claude Code's `PreToolUse` event (matchers: Bash, Edit|Write). It denie
     verified, so these two checks fail CLOSED (see handle_bash);
   - `git push` runs while push is not approved, or targets ANY protected branch
     (main and master always, plus the configured trunk and pipeline.json
-    "protected_branches" - default staging / production);
+    "protected_branches" - default staging / production). Two things lift that
+    for the trunk alone, never for an extra protected branch and never for a
+    force or delete push: the one-shot `approve.py --trunk-push` marker (solo
+    mode) and pipeline.json `allow_push_to_main` = true (default false);
   - `git merge` or `git pull` runs while HEAD sits on a protected branch, unless
     the project is in `solo` workflow mode AND the source is an approved task
     branch - see check_trunk_merge();
@@ -92,7 +95,7 @@ PUSH_OPTS_WITH_ARG = frozenset({"--repo", "-o", "--push-option",
 # trunk-push approval publishes the trunk; it never authorizes overwriting or
 # deleting it, so these gate even when the marker is present.
 PUSH_DESTRUCTIVE_LONG = frozenset({"--force", "--force-with-lease", "--mirror",
-                                   "--delete"})
+                                   "--delete", "--prune"})
 PUSH_DESTRUCTIVE_SHORT = frozenset("fd")  # -f, -d, and bundles like -fu
 
 # `git push` options that push every local branch, trunk and task branches alike.
@@ -1719,9 +1722,9 @@ def check_trunk_merge(command: str, trunk: str) -> int:
 # automatic - the spawned session drives the task, advance.py clears the commit
 # checkpoint itself, and check_trunk_merge() below asks only for a task-shaped
 # branch, a run row and that flag - so the trunk gets written by a process
-# nobody is watching. The push stays held by approvals.NEVER_GRANTED, so nothing
-# leaves the machine, but the CEO reads the trunk before it moves and that is
-# the point.
+# nobody is watching. The push stays held by approvals.never_granted() (this
+# project lists it in approvals_never_granted), so nothing leaves the machine,
+# but the CEO reads the trunk before it moves and that is the point.
 #
 # The spawn therefore marks itself, and these steps are refused for as
 # long as the mark is set, at every approvals level and in every workflow mode.
@@ -2008,6 +2011,15 @@ def trunk_push_approved(target: str) -> bool:
     return isinstance(data, dict) and str(data.get("trunk") or "") == target
 
 
+def allow_push_to_main() -> bool:
+    """pipeline.json `allow_push_to_main`: a project-level decision to let a plain
+    push reach the trunk without the one-shot marker. Default false, and only a
+    literal `true` turns it on - a typo, a string or an unreadable config must
+    not open the remote, the same reading push_needs_approval() gives its key.
+    It never covers force or delete pushes, and never an extra protected branch."""
+    return state.load_pipeline().get("allow_push_to_main", False) is True
+
+
 def consume_trunk_push_marker() -> None:
     """Spend the approval on the push it allowed: one push per approval."""
     try:
@@ -2046,6 +2058,8 @@ def check_push_target(command: str, branch: str, local: list | None = None) -> t
             continue
         if not destructive and trunk_push_approved(name):
             approved = True
+            continue
+        if not destructive and name in push_trunk_names() and allow_push_to_main():
             continue
         return deny(
             f"Push to protected branch '{name}' is forbidden (protected: "

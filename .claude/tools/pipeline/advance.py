@@ -479,11 +479,12 @@ def main() -> int:
             fresh_park = run.get("awaiting_human") != pending
             fields = {"awaiting_human": pending}
             # approvals.granted() answers the whole question: the level's GRANTS
-            # set OR the stage list approves, and NEVER_GRANTED refuses the push
-            # and the plan ahead of both. Do NOT re-test `pending in auto` in
-            # front of it - that made the stage list mandatory, so the level dial
-            # could never approve anything on its own and manual/assisted/auto
-            # behaved identically at `ready` with the shipped (empty) config.
+            # set OR the stage list approves, and never_granted() refuses the
+            # plan, the trunk push and (here) the push ahead of both. Do NOT
+            # re-test `pending in auto` in front of it - that made the stage
+            # list mandatory, so the level dial could never approve anything on
+            # its own and manual/assisted/auto behaved identically at `ready`
+            # with the shipped (empty) config.
             if pending in APPROVAL_FIELD and approvals.granted(pending, sorted(auto)):
                 fields[APPROVAL_FIELD[pending]] = 1
             state.set_fields(conn, args.task, **fields)

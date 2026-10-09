@@ -3097,11 +3097,13 @@ class FailSafeInjectionTest(Sandbox):
         self.assertEqual([], reg["actions"])
 
     def test_the_push_checkpoint_refusal_is_specific_and_not_a_blanket_false(self):
-        # Control for the NEVER_GRANTED test above: granted() does answer True
-        # for something, at the very level that grants the most, so PUSH coming
-        # back False is a refusal of the push rather than a broken helper.
-        self.assertIn(approvals.PUSH, approvals.NEVER_GRANTED)
-        self.assertNotIn(approvals.PUSH, approvals.GRANTS[approvals.AUTO])
+        # Control for the withheld-checkpoint test above: granted() does answer
+        # True for something, at the very level that grants the most, so PUSH
+        # coming back False is a refusal of the push rather than a broken helper.
+        # The level table does grant the push at `auto` (the canonical default);
+        # it is the shipped approvals_never_granted that withholds it.
+        self.assertIn(approvals.PUSH, approvals.never_granted())
+        self.assertIn(approvals.PUSH, approvals.GRANTS[approvals.AUTO])
         original = approvals.read
         self.addCleanup(setattr, approvals, "read", original)
         approvals.read = lambda: approvals.AUTO

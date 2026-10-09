@@ -6,6 +6,9 @@ one - two tests shipped red under the strict split.
 
 from __future__ import annotations
 
+import contextlib
+import io
+import json
 import sys
 import unittest
 import unittest.mock
@@ -17,6 +20,8 @@ sys.path.insert(0, str(PIPELINE_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
 import agent_gate
+import state
+import tmproot
 
 
 class NarrowedTestRunTest(unittest.TestCase):
@@ -88,6 +93,63 @@ class NarrowedTestRunTest(unittest.TestCase):
             self.assertEqual(0, agent_gate.handle_dev(
                 "Bash", {"command": "npm run test -- -k cart"}))
             passthru.assert_called_once()
+
+
+class ShippedSuiteCommandIsDevForbiddenTest(unittest.TestCase):
+    """task-0115: pipeline.json names `python -m unittest discover` in
+    gates.dev_forbidden_commands, so a dev-profile agent (qa-engineer included,
+    there is no qa profile) cannot run the unfiltered suite. The config is read
+    from a real pipeline.json on disk through state.load_pipeline, not a patched
+    gates_cfg."""
+
+    SUITE = "python -m unittest discover"
+
+    def setUp(self):
+        config = Path(tmproot.sandbox(self, "suite-deny-")) / "pipeline.json"
+        config.write_text(json.dumps({"gates": {"dev_forbidden_commands": [self.SUITE]}}),
+                          encoding="utf-8")
+        patcher = unittest.mock.patch.object(state, "PIPELINE_PATH", config)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _dev_bash(self, command):
+        """handle_dev's exit code, with the downstream Bash gate stubbed out so
+        0 means 'the suite check let it through'."""
+        with unittest.mock.patch.object(agent_gate.pretool_gate, "handle_bash",
+                                        return_value=0), \
+                contextlib.redirect_stderr(io.StringIO()):
+            return agent_gate.handle_dev("Bash", {"command": command})
+
+    def test_the_unfiltered_suite_is_forbidden(self):
+        self.assertEqual(self.SUITE, agent_gate.forbidden_test_cmd(
+            "python -m unittest discover -s .claude/tools"))
+
+    def test_a_dev_agent_is_denied_the_unfiltered_suite(self):
+        self.assertEqual(2, self._dev_bash("python -m unittest discover -s .claude/tools"))
+
+    def test_a_dev_agent_may_run_a_narrowed_discover(self):
+        self.assertEqual(0, self._dev_bash(
+            "python -m unittest discover -s .claude/tools -k foo"))
+
+    def test_a_dev_agent_may_run_a_single_module(self):
+        self.assertEqual(0, self._dev_bash("python -m unittest tests.test_x"))
+
+    def test_the_shipped_pipeline_json_forbids_the_suite_command(self):
+        # The class fixture writes its own config; this reads the real file, so
+        # deleting the entry from src/.agentry/pipeline.json turns it red.
+        shipped = Path(__file__).resolve().parents[3] / ".agentry" / "pipeline.json"
+        forbidden = json.loads(shipped.read_text(encoding="utf-8"))["gates"][
+            "dev_forbidden_commands"]
+        self.assertIn(self.SUITE, forbidden)
+
+    def test_a_dev_agent_may_write_the_swarm_board(self):
+        with unittest.mock.patch.object(agent_gate.pretool_gate, "handle_edit",
+                                        return_value=0), \
+                contextlib.redirect_stderr(io.StringIO()):
+            code = agent_gate.handle_dev(
+                "Write", {"file_path": ".agentry/tasks/swarm/epic-0001/board.md",
+                          "content": "x"})
+        self.assertEqual(0, code)
 
 
 if __name__ == "__main__":

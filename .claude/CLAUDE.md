@@ -30,6 +30,8 @@ Every task follows this pipeline. No shortcuts.
 4. **Delegate to Reviewer** for code/architecture review
 5. **Delegate to QA Engineer** for tests + quality gates
 6. **Issues found** → back to agent → re-review → re-QA
+   (steps 2-6 are the per-task flow; in swarm mode QA runs once after ALL
+   implementation agents report done - see "Swarm mode" in `rules/orchestration.md`)
 7. **All passes** → Orchestrator presents summary to CEO
 8. **At every checkpoint or dispute** → present situation + 2-3 options with
    trade-offs + ONE recommendation (rules/orchestration.md, Checkpoint advice);
@@ -63,7 +65,8 @@ state and gate checks live in deterministic hooks (`.claude/tools/pipeline/` +
   `stage_checkpoints()` drops the push checkpoint there); the full split is in
   `rules/git-workflow.md`. Solo mode does not weaken push approval:
   `workflow.push_needs_approval` is independent of the mode, and
-  `approvals.NEVER_GRANTED` refuses both `PUSH` and `TRUNK_PUSH` at every level,
+  `approvals.never_granted()` (`approvals_never_granted` in `pipeline.json`)
+  refuses both `PUSH` and `TRUNK_PUSH` at every level,
   so a push that does happen in solo mode, including the one-shot trunk push,
   still needs its recorded approval. The commit checkpoint is where the CEO
   reads the diff (Claude Code's built-in `/diff`); rejecting there sends the task
@@ -80,8 +83,10 @@ state and gate checks live in deterministic hooks (`.claude/tools/pipeline/` +
   level only, pulling the next ready task, until everything is parked at a
   checkpoint, blocked, or done. Below `auto`, which task to start is the CEO's
   call, raised once as a card.
-- **Pipelined but edit-serialized:** one task in an editing stage at a time;
-  parked tasks wait for the CEO while the next ready task runs.
+- **Pipelined but edit-serialized (per-task flow):** one task in an editing
+  stage at a time; parked tasks wait for the CEO while the next ready task runs.
+  A multi-subtask epic registered as one umbrella task runs in parallel inside
+  its `implement` stage instead - see "Swarm mode" in `rules/orchestration.md`.
 - **Handoff chain:** before a new task registers, the previous completed task's
   handoff doc must exist and validate in `.agentry/tasks/handoffs/`. The NEXT
   task's assignee is to write it in its own words; that is an instruction, and

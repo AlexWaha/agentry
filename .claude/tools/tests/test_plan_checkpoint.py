@@ -219,7 +219,7 @@ class PlanCheckpointTest(unittest.TestCase):
     # --- the trust boundary --------------------------------------------------
 
     def test_no_approvals_level_can_ever_grant_it(self):
-        self.assertIn(approvals.PLAN, approvals.NEVER_GRANTED)
+        self.assertIn(approvals.PLAN, approvals.never_granted())
         for level in approvals.LEVELS:
             with self.subTest(level=level):
                 self.assertNotIn(approvals.PLAN, approvals.GRANTS[level])

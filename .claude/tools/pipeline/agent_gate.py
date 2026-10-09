@@ -23,8 +23,9 @@ profiles:
                       README files, or the root CLAUDE.md;
                       mutating Bash and approve.py denied.
 
-Every profile also denies SETTING the approvals level or workflow mode
-(approvals.py / mode.py with an argument other than --show); reading is allowed.
+Every profile also denies SETTING the approvals level, workflow mode or swarm flag
+(approvals.py / mode.py / swarm.py with an argument other than --show); reading is
+allowed.
 The dev profile is also denied Write/Edit on anything under .agentry/state/, and
 Bash that writes there (a redirect target, or an operand of tee, sed -i, cp, mv,
 rm, truncate).
@@ -139,10 +140,11 @@ runs_approve_script = pretool_gate.runs_approve_script
 #
 # Matching is by FILE NAME only, as it is for approve.py: an unrelated
 # `app/mode.py` invoked with an argument is denied the same way.
-STATE_SETTER_RE = re.compile(r"(?:^|[\\/])(?:approvals|mode)\.py[. )]*$", re.IGNORECASE)
-STATE_SETTER_MSG = ("{script} is orchestrator-only when it SETS the approvals level or the "
-                    "workflow mode - that decides what clears without the CEO. Ask the "
-                    "orchestrator to change it; --show (or no argument) still reads it.")
+STATE_SETTER_RE = re.compile(r"(?:^|[\\/])(?:approvals|mode|swarm)\.py[. )]*$", re.IGNORECASE)
+STATE_SETTER_MSG = ("{script} is orchestrator-only when it SETS the approvals level, the "
+                    "workflow mode or the swarm flag - that decides what clears without "
+                    "the CEO and which procedure is in force. Ask the orchestrator to "
+                    "change it; --show (or no argument) still reads it.")
 
 # A redirect operator opens with an optional descriptor: `>`, `>>`, `2>`, `<`, and
 # the `&` forms `&>`, `>&`, `2>&1`. Alone (`>`, `2>>`, `>&`) its target is the NEXT
@@ -294,13 +296,16 @@ README_RE = re.compile(r"(^|[\\/])readme[^\\/]*\.(md|rst)$", re.IGNORECASE)
 
 # The whole .agentry/state/ tree is the orchestrator's: the approvals level and mode,
 # the run.db commit/push/plan approval flags, the solo trunk_push approval and the
-# memory stamps all decide what clears without the CEO. Nothing a docs agent writes
-# lives there. Windows resolves `state.` and `state ` (and `state./x`) to the same
-# directory (measured), so the segment tolerates trailing dots and spaces.
-PROTECTED_STATE_RE = re.compile(r"(^|/)\.agentry/state[. ]*(/|$)")
-PROTECTED_STATE_MSG = ("{who}: '{path}' is under .agentry/state/, which holds the approvals, "
-                       "workflow mode and run flags that decide what clears without the CEO. "
-                       "Report the level or mode change you need to the orchestrator.")
+# memory stamps all decide what clears without the CEO. Nothing a subagent writes
+# lives there. .agentry/pipeline.json is protected for the same reason: it holds the
+# gate configuration, so a subagent that could edit it could switch the gates off.
+# Windows resolves `state.` and `state ` (and `state./x`, `pipeline.json.`) to the
+# same entry (measured), so the segment tolerates trailing dots and spaces.
+PROTECTED_STATE_RE = re.compile(r"(^|/)\.agentry/(state[. ]*(/|$)|pipeline\.json[. ]*$)")
+PROTECTED_STATE_MSG = ("{who}: '{path}' is under .agentry/state/ or is .agentry/pipeline.json, "
+                       "which hold the approvals level, workflow mode, run flags and gate "
+                       "settings that decide what clears without the CEO. "
+                       "Report the change you need to the orchestrator.")
 
 
 def deny(reason: str) -> int:
@@ -715,6 +720,9 @@ def handle_readonly(tool: str, ti: dict, cwd: str = "") -> int:
         piped = pretool_gate.check_piped_test_suite(command)
         if piped != allow():
             return piped
+        written = writes_protected_state(command)
+        if written:
+            return deny(PROTECTED_STATE_MSG.format(who="Read-only agent", path=written))
         frag = bash_mutates(command)
         if frag:
             return deny(f"Read-only agent: mutating Bash denied (matched: '{frag}'). "
@@ -747,6 +755,9 @@ def handle_docs(tool: str, ti: dict, cwd: str = "") -> int:
         piped = pretool_gate.check_piped_test_suite(command)
         if piped != allow():
             return piped
+        written = writes_protected_state(command)
+        if written:
+            return deny(PROTECTED_STATE_MSG.format(who="Docs agent", path=written))
         frag = bash_mutates(command)
         if frag:
             return deny(f"Docs agent: mutating Bash denied (matched: '{frag}'). "

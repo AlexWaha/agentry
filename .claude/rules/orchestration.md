@@ -52,16 +52,19 @@ to the context-absorption chain from `pipeline.md`.
    `stage_checkpoints()` drops the push checkpoint there); the full split is in
    `git-workflow.md`. Solo mode does not weaken push approval:
    `workflow.push_needs_approval` is independent of the mode, and
-   `approvals.NEVER_GRANTED` refuses both `PUSH` and `TRUNK_PUSH` at every level,
-   so a push that does happen in solo mode, including the one-shot trunk push,
+   `approvals.never_granted()` refuses both `PUSH` and `TRUNK_PUSH` at every level
+   (`approvals_never_granted` in `pipeline.json`, with `TRUNK_PUSH` and `PLAN`
+   also withheld in code), so a push that does happen in solo mode, including the
+   one-shot trunk push,
    still needs its recorded approval. Each checkpoint that exists is enforced
    deterministically (see Hooks). The CEO may also reject at a checkpoint, which
    sends the task back to `implement`. The commit checkpoint can be made optional
    per project: list it in the `ready` stage's `auto_approve` array in
    `pipeline.json` and `advance.py` approves it itself (no parking) - the
    approval flag is still set, so every downstream hook works unchanged. The push
-   cannot: `approvals.granted()` refuses it ahead of `auto_approve`. Editing
-   `auto_approve` is itself a CEO decision.
+   cannot: `approvals.granted()` refuses it ahead of `auto_approve` for as long as
+   `approvals_never_granted` lists it, which it does here. Editing `auto_approve`
+   or `approvals_never_granted` is itself a CEO decision.
 3. **Between start and the checkpoints, the orchestrator runs autonomously.**
    Gate failures, lint errors, and review findings are fixed and re-run by the
    delegated agents - never bounced to the CEO - until the retry budget is hit,
@@ -84,9 +87,15 @@ to the context-absorption chain from `pipeline.md`.
 - `.agentry/state/mode` - one word (`build`/`plan`/`talk`) picking WHICH flow a
   newly registered task follows. `advance.py` reads it via `mode.py` unless
   `--pipeline` is passed explicitly. See `skills/pipeline/SKILL.md`.
+- `.agentry/state/swarm` - one word (`on`/`off`, default `off`), the third dial:
+  whether an epic runs as a parallel agent swarm (see "Swarm mode" below). Read
+  via `swarm.py`; `mode.py --show` prints all three dials.
 - `.agentry/state/approvals` - one word (`manual`/`assisted`/`auto`) picking how
-  many checkpoints pass without the CEO. Read via `approvals.py`. Never grants
-  the push, and grants nothing about merging into `main`: in `pr` mode the CEO
+  many checkpoints pass without the CEO. Read via `approvals.py`. `manual`
+  grants nothing; `assisted` grants the commit only and does not take the next
+  task; `auto` grants take and commit, and the push of the work branch unless
+  `approvals_never_granted` lists it (the shipped config lists `push` and
+  `trunk_push`, so no level grants them). It grants nothing about merging into `main`: in `pr` mode the CEO
   merges in the web UI, and in `solo` mode the merge follows the commit approval
   and is gated by `pretool_gate.py`'s three conditions (branch name, run row,
   commit approved), so the approved commit authorizes it, not the level. At
@@ -219,6 +228,9 @@ from the approved plan silently - if reality contradicts the plan, park and
 present options; the plan changes only by CEO decision.
 
 ## Pipelined but edit-serialized
+
+This section is the per-task flow. A multi-subtask epic registered as one
+umbrella task runs under [Swarm mode](#swarm-mode) instead.
 
 Autonomy is pipelined: while one task waits at a checkpoint, the orchestrator
 starts the next ready task instead of idling. But **at most one task occupies an
@@ -451,6 +463,50 @@ under it, and an explicit statement of which earlier instruction it replaces. An
 agent given a contradiction without being told which side wins will pick one,
 and it may not be yours.
 
+## Swarm mode
+
+For an epic with two or more subtasks. The protocol is the skill
+`.claude/skills/swarm/SKILL.md`, owned by this project and edited here. Everything project-specific (commands, paths, roles) is the
+key table in `.claude/pipeline-adapter.md`, and the prompt and board templates
+are `.claude/skills/swarm/references/templates.md`. Fill them from the adapter:
+where a template hard-codes another project's path or command, the adapter's
+value wins.
+
+The dial is `python .claude/tools/pipeline/swarm.py on|off` (default `off`,
+persisted per lane next to the mode and the approvals level, shown by
+`mode.py --show`, printed by SessionStart whenever it is on). Swarm applies in
+`build` mode with the dial on and an approved epic. With it off, and for any
+single task, the per-task flow above applies.
+
+This project's specifics:
+
+- **One umbrella task.** The scripts do not change. The epic registers as ONE
+  umbrella task `task-<epic>` on ONE branch
+  (`advance.py --task task-<epic> --type feature`), and the parallelism lives
+  inside that task's `implement` stage. "Edit-serialized" holds between tasks,
+  not between the agents inside the umbrella task; the supervisor is the main
+  session. The subtask files stay in `.agentry/tasks/backlog/` as the work list
+  and move to `done/` with the umbrella task after the merge.
+- **State folder.** `.agentry/tasks/swarm/task-<epic>/` holds the board, the
+  agent id map, `resume.md`, the QA notes and reports. It is not
+  `.agentry/state/`, because the dev profile is denied every write there.
+  SessionStart prints the path of `resume.md` for each in-flight umbrella task
+  while the dial is on.
+- **One suite run, in the exit gate.** The full suite runs once, in the
+  test-stage exit gate that the orchestrator drives through `advance.py`.
+  `gates.dev_forbidden_commands` denies it to every dev-profile agent, the QA
+  agents included, so wherever the skill text has a QA agent run the suite,
+  here that agent runs narrowed runs only (single modules or `-k`) and the gate
+  runs the suite. The implement-stage build gate is
+  `python -m compileall -q .claude/tools`; there is no other build.
+- **Roles and turns.** Dev, QA and fixer agents carry `SendMessage` and run at
+  `maxTurns: 150`; read-only agents, the reviewer included, at 100 (set per gate
+  profile in `.claude/tools/setup/apply_optimization.py`). Both load only after a
+  session restart.
+- **Checkpoints are unchanged.** The commit checkpoint is the CEO's, the shipped
+  `approvals_never_granted` withholds the push at every approvals level, and in `solo` mode the local merge
+  follows the commit approval (`pipeline-adapter.md`, `approvals_grants`).
+
 ## Subagent enforcement
 
 Obedience is enforced by the harness, not by prompt text. Every dispatched agent
@@ -460,7 +516,7 @@ rules that govern the orchestrator's own tool calls also govern the agents:
 
 | Profile | Agents | Enforced |
 |---------|--------|----------|
-| `dev` | senior-backend-dev, senior-frontend-dev, qa-engineer, devops-engineer, data-engineer, rapid-prototyper | commit/push approval flags, protected-branch push deny, review-stage edit freeze, no force push, no `approve.py`, no test-suite runs (`gates.dev_forbidden_commands` - the orchestrator/QA runs the suite once) |
+| `dev` | senior-backend-dev, senior-frontend-dev, qa-engineer, devops-engineer, data-engineer, rapid-prototyper | commit/push approval flags, protected-branch push deny, review-stage edit freeze, no force push, no `approve.py`, no test-suite runs (`gates.dev_forbidden_commands` - the full suite runs once, in the test-stage exit gate the orchestrator drives through `advance.py`; agents run narrowed runs only) |
 | `readonly` | architect, reviewer, security-engineer, evidence-collector, performance-benchmarker, ai-detector, accessibility-auditor, incident-response-commander | Edit/Write denied; mutating Bash (git writes, rm/mv/cp, redirects, sed -i, installers) denied |
 | `docs` | technical-writer, product-manager, spec-developer, sprint-prioritizer, content-manager, content-writer, editor, humanizer, seo-specialist, geo-specialist, business-analyst, financial-analyst, marketing-strategist, brand-guardian, ux-researcher, ux-ui-designer, feedback-synthesizer | Edit/Write only under `.claude/`, `.agentry/`, `docs/`, README; mutating Bash denied |
 
