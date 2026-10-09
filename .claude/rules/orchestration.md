@@ -487,6 +487,18 @@ This project's specifics:
   not between the agents inside the umbrella task; the supervisor is the main
   session. The subtask files stay in `.agentry/tasks/backlog/` as the work list
   and move to `done/` with the umbrella task after the merge.
+- **How the scripts recognise an umbrella.** Its task file carries frontmatter
+  `umbrella: true`, `epic: epic-XXXX` and `subtasks: [task-A, task-B]`. With the
+  dial on, the Stop hook never offers a backlog task whose `epic:` matches a
+  registered umbrella. When the next ready task belongs to an epic with two or
+  more non-umbrella backlog subtasks and no umbrella, it demands the swarm start
+  (create the umbrella file if missing) instead of a single-task start, at the
+  `auto` level only; a lone subtask is started as an ordinary task. A queued
+  umbrella is started in its subtasks' place, or waited for while its own deps
+  are open. When the umbrella reaches `done`, `state.move_swarm_subtasks()`
+  moves every listed subtask still in `backlog/` or `active/` whose `epic:`
+  matches, from `advance.py` and from the Stop hook's drift reconciler alike;
+  an unlisted subtask stays.
 - **State folder.** `.agentry/tasks/swarm/task-<epic>/` holds the board, the
   agent id map, `resume.md`, the QA notes and reports. It is not
   `.agentry/state/`, because the dev profile is denied every write there.

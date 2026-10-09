@@ -384,6 +384,39 @@ def move_task_to_done(task: str) -> bool:
     return move_task(task, "done")
 
 
+def _head_field(task: str, key: str) -> str:
+    """One top-level frontmatter value of a task file, '' when absent."""
+    folder = task_dir(task)
+    if folder is None:
+        return ""
+    text = (TASK_DIRS[folder] / f"{task}.md").read_text(encoding="utf-8", errors="replace")
+    head = text.split("\n---", 1)[0] if text.startswith("---") else text
+    m = re.search(rf"(?m)^{key}:[ \t]*(.*)$", head)
+    return m.group(1).strip() if m else ""
+
+
+def move_swarm_subtasks(task: str) -> list[str]:
+    """When an umbrella task (`umbrella: true`) has reached done/, move the
+    subtask files it lists in `subtasks: [...]` there too - only those still in
+    backlog/ or active/ whose `epic:` equals the umbrella's. An unlisted subtask,
+    or one from another epic, stays. The single sweep behind both merge paths:
+    advance.py's merge confirmation and stop_gate's drift reconciler.
+
+    Fail-open: any error returns what moved so far (or []), never raises."""
+    moved: list[str] = []
+    try:
+        epic = _head_field(task, "epic")
+        if _head_field(task, "umbrella").lower() != "true" or not epic:
+            return moved
+        for sub in re.findall(r"task-\d+", _head_field(task, "subtasks")):
+            if (sub != task and task_dir(sub) in ("backlog", "active")
+                    and _head_field(sub, "epic") == epic and move_task(sub, "done")):
+                moved.append(sub)
+    except Exception:
+        pass
+    return moved
+
+
 def log_gate(conn: sqlite3.Connection, task: str, stage: str, cmd: str, exit_code: int) -> None:
     conn.execute(
         "INSERT INTO gate_log (task, stage, cmd, exit, at) VALUES (?, ?, ?, ?, ?)",
