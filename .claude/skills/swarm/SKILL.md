@@ -45,7 +45,7 @@ A table with these keys, each a concrete command or path in this project:
 ## Steps
 
 1. **Pre-flight.** Plan, spec (explicit API contracts: endpoints, payloads, class and route names) and subtask files approved; backend and frontend never share a subtask. Main-branch log and `done_dir` show nothing already shipped.
-2. **Branch + umbrella task.** One branch per epic from fresh main, `start_epic` once. Subtask files stay in `backlog_dir` as the work list.
+2. **Branch + umbrella task.** One branch per epic from fresh main, `start_epic` once. Subtask files stay in `backlog_dir` as the work list. The umbrella task file carries frontmatter `umbrella: true`, `epic: epic-XXXX` and `subtasks: [task-A, task-B]`; the Stop hook and `advance.py` recognise the umbrella by those keys.
 3. **Board before launch.** `<state_dir>/board.md` from `references/templates.md`. Ownership table: every shared file (route files, observers, config, translations, env example, shared UI components, build and typecheck configs) has exactly one owner subtask. Then one append-only `## <subtask>` section per agent. Fill the dev template into `<state_dir>/dev-prompt.txt`.
 4. **Waves.** Wave 1: hard prerequisites (schema, models) plus everything independent (frontend codes against the spec contract). Wave 2: the rest, as soon as the prerequisites report. A whole wave goes out in ONE message, every agent in the background. Append `<subtask> <agent-id>` to `<state_dir>/agents.txt`.
 5. **Supervise.** Agents `SendMessage` to `main` with contract changes, blockers and spec gaps. Decide, write the decision on the board, relay by agent id to every affected agent; never agent to agent. Accepted deviations, items for QA, deploy actions and cleanup: one line each in `<state_dir>/qa-notes.md`.
@@ -54,7 +54,7 @@ A table with these keys, each a concrete command or path in this project:
 8. **Test stage** only after EVERY agent reported done: `advance`, then the QA swarm in one message - backend QA, static frontend QA, and build and browser QA only when the adapter's `build` is a real build. QA agents run narrowed test runs only (`-k` or a single module); the full suite runs once, in the test-stage exit gate the orchestrator drives through `advance`. Each writes `qa-<area>.md`; consolidate into `qa-report.md`: fix groups `FX-n` on disjoint file sets, an "accepted / not fixed" list for the CEO, "not yet checked".
 9. **Fixes** in parallel, one fixer per FX group. Fixers run narrowed runs of their own tests only; the full suite is the exit gate. Re-QA only the touched areas. Repeat until no Critical/High and suite and build are green; `advance`.
 10. **Review.** Reviewer + security in parallel, read-only, report in the reply; the supervisor saves it. Critical/High: `reject`, fixers, re-QA, back to review. Medium: to the CEO.
-11. **Commit and push.** Format + lint, one commit on the epic branch, push per the approval level and the adapter's `approvals_grants`, PR text with deploy actions from `qa-notes.md`. After merge move the umbrella task and all subtask files to `done_dir`.
+11. **Commit and push.** Format + lint, one commit on the epic branch, push per the approval level and the adapter's `approvals_grants`, PR text with deploy actions from `qa-notes.md`. After merge the umbrella task moves to `done_dir` and `advance.py` (or the Stop hook's drift reconciler) moves every subtask listed in its `subtasks: [...]` there too. No hand moves.
 
 ## Rules every agent prompt repeats
 

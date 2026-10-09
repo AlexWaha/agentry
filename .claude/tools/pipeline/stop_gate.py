@@ -72,6 +72,7 @@ import busy
 import mode
 import pretool_gate
 import state
+import swarm
 
 _SKIP_DIRS = {".git", "node_modules", "vendor", ".claude", "storage",
               "dist", "build", "data", "logs"}
@@ -88,6 +89,10 @@ SUPERSEDED_RE = re.compile(r"^superseded_by:[ \t]*(task-\d+)", re.MULTILINE)
 # unattended run never settles. The negative lookahead is what keeps the blank
 # `blocked_on:` the template ships on every task from meaning "blocked".
 BLOCKED_RE = re.compile(r"^blocked_on:[ \t]*(?!\s*$)\S", re.MULTILINE)
+# An umbrella task (skills/swarm/SKILL.md) is one task file carrying
+# `umbrella: true` and the `epic:` whose subtasks the swarm runs together.
+EPIC_RE = re.compile(r"^epic:[ \t]*(epic-[\w-]+)", re.MULTILINE)
+UMBRELLA_RE = re.compile(r"^umbrella:[ \t]*true\b", re.MULTILINE | re.IGNORECASE)
 
 # What `awaiting_human` is set to when a blocked run is surfaced to the CEO. It
 # doubles as the surfaced-once marker, so a blocked run is raised on one stop
@@ -480,8 +485,60 @@ def read_backlog() -> list[dict]:
             continue
         deps_raw = DEPENDS_RE.search(text)
         deps = [d.strip() for d in (deps_raw.group(1).split(",") if deps_raw else []) if d.strip()]
-        out.append({"id": m.group(1), "deps": deps})
+        epic = EPIC_RE.search(text)
+        out.append({"id": m.group(1), "deps": deps,
+                    "epic": epic.group(1) if epic else "",
+                    "umbrella": bool(UMBRELLA_RE.search(text))})
     return out
+
+
+def swarm_on() -> bool:
+    """The swarm dial. Fail-open: anything unreadable means off."""
+    try:
+        return swarm.read() == swarm.ON
+    except Exception:
+        return False
+
+
+def swarm_tail(epic: str) -> str:
+    """What replaces `run: advance.py --task <subtask>` when the next ready task
+    is a subtask of a swarm epic: start the epic's umbrella task instead."""
+    return (
+        f"start {epic} as a swarm per .claude/skills/swarm/SKILL.md. An umbrella "
+        f"task file with `umbrella: true` and `epic: {epic}` must exist in "
+        f".agentry/tasks/backlog/ (create it if it is missing, listing the "
+        f"subtasks in `subtasks: [...]`); then run: python "
+        f".claude/tools/pipeline/advance.py --task <umbrella task id>.")
+
+
+def swarm_demand(task_id: str, epic: str) -> tuple[str, str]:
+    """(model reason, human systemMessage) telling the orchestrator to start an
+    epic as a swarm instead of its subtask `task_id` as a single task."""
+    reason = (
+        f"Swarm mode is on and {task_id} belongs to {epic}: do not start it "
+        f"as a single task. Swarm it: {swarm_tail(epic)} "
+        f"Drive it through the pipeline without asking the user.")
+    human = (
+        f"Nothing is parked on you, so the agent is starting {epic} as a "
+        f"swarm under one umbrella task. Nothing is owed by you.")
+    return reason, human
+
+
+def umbrella_epics(runs: list[dict]) -> set[str]:
+    """Epics owned by an umbrella run registered and not yet in done/."""
+    epics: set[str] = set()
+    for r in runs:
+        p = task_file(r["task"])
+        if p is None or p.parent == DONE_DIR:
+            continue
+        try:
+            text = frontmatter(p.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        epic = EPIC_RE.search(text)
+        if epic and UMBRELLA_RE.search(text):
+            epics.add(epic.group(1))
+    return epics
 
 
 def busy_marker_fresh(task: str) -> bool:
@@ -838,6 +895,7 @@ def reconcile_status_drift(conn) -> tuple[list, list]:
             merged = f"[{task}]" in subjects
             if merged and state.move_task_to_done(task):
                 moved.append(task)
+                moved.extend(state.move_swarm_subtasks(task))
                 # Unconditionally, including a run already at 'done': the merge
                 # is what it was waiting for, and leaving awaiting_human set
                 # would freeze the queue on a task that is finished.
@@ -1184,11 +1242,37 @@ def decide() -> int:
             # Taking work on is itself a checkpoint. Below `auto` the CEO says
             # which task to start, so an empty in-flight set means "stop and
             # ask", not "help yourself to the queue".
-            ready = ([t for t in read_backlog()
+            queue = read_backlog()
+            ready = ([t for t in queue
                       if t["id"] not in runs_by_task
                       and all(dep_satisfied(d, runs_by_task) for d in t["deps"])]
                      if approvals.granted(approvals.TAKE) else [])
+            # Swarm ON: an epic's subtasks are the umbrella's work list, not
+            # queue entries. Hide those of an epic whose umbrella is registered.
+            swarm_ready = any(t.get("epic") for t in ready) and swarm_on()
+            if swarm_ready:
+                held = umbrella_epics(runs)
+                ready = [t for t in ready if t.get("umbrella") or t.get("epic") not in held]
             for t in ready:
+                swarm_epic = ""
+                if swarm_ready and t.get("epic") and not t.get("umbrella"):
+                    # A queued umbrella for this epic is started in its subtask's
+                    # place (or waited for, when its own dependencies are open).
+                    # Without one, an epic with two or more subtasks is demanded
+                    # as a swarm; a lone subtask stays an ordinary task.
+                    umbrella = next((u for u in queue
+                                     if u.get("umbrella") and u.get("epic") == t["epic"]), None)
+                    if umbrella:
+                        if umbrella not in ready:
+                            continue
+                        t = umbrella
+                    elif sum(1 for u in queue
+                             if u.get("epic") == t["epic"] and not u.get("umbrella")) >= 2:
+                        swarm_epic = t["epic"]
+                # What the demands below end in: the advance.py command for this
+                # task, or the swarm start when t is a subtask of a swarm epic.
+                tail = (swarm_tail(swarm_epic) if swarm_epic else
+                        f"run: python .claude/tools/pipeline/advance.py --task {t['id']}.")
                 # Handoff chain: the next task's assignee documents the previous
                 # completed task BEFORE registering new work (forced context
                 # absorption - see tools/pipeline/handoff.py).
@@ -1203,8 +1287,7 @@ def decide() -> int:
                         f"--for {d['task']}, then fill every section of "
                         f".agentry/tasks/handoffs/{d['task']}.md in its own words, reading "
                         f".agentry/project/project-context.md and {t['id']}'s spec first. Then "
-                        f"run: python .claude/tools/pipeline/advance.py --task {t['id']}. "
-                        f"Do not ask the user.")
+                        f"{tail} Do not ask the user.")
                 # Memory chain: after the handoff doc exists, distill it into the
                 # memory store BEFORE new work (tools/memory/update.py).
                 if mem_debt:
@@ -1221,9 +1304,8 @@ def decide() -> int:
                         f"stamp: python .claude/tools/memory/update.py --stamp --task "
                         f"{d['task']} (refused unless the store gained a row, so pass --none if "
                         f"the review found nothing worth recording), and refresh the module-map "
-                        f"heads: python .claude/tools/memory/codebase_sync.py --stamp. Then run: "
-                        f"python .claude/tools/pipeline/advance.py --task {t['id']}. "
-                        f"Do not ask the user.")
+                        f"heads: python .claude/tools/memory/codebase_sync.py --stamp. Then "
+                        f"{tail} Do not ask the user.")
                 # Single-task backlog: the previous work's documentation is the
                 # ONLY context source - the latest task-tagged commit on main
                 # must be documented (read it, or generate it) before implementing.
@@ -1245,15 +1327,19 @@ def decide() -> int:
                             f".claude/tools/pipeline/handoff.py --for {latest['task']}, fill "
                             f"every section of .agentry/tasks/handoffs/{latest['task']}.md in "
                             f"its own words from the commit diff (git show "
-                            f"{latest['sha'][:12]}), then run: python "
-                            f".claude/tools/pipeline/advance.py --task {t['id']}. "
-                            f"Do not ask the user.")
-                return block(
-                    f"Start the next ready task {t['id']}: create its branch per git-workflow.md, "
-                    f"then run: python .claude/tools/pipeline/advance.py --task {t['id']}. "
-                    f"Drive it through the pipeline without asking the user.",
-                    f"Nothing is parked on you, so the agent is starting the next ready task, "
-                    f"{t['id']}. Nothing is owed by you.")
+                            f"{latest['sha'][:12]}), then {tail} Do not ask the user.")
+                if swarm_epic:
+                    reason, human = swarm_demand(t["id"], swarm_epic)
+                else:
+                    reason = (
+                        f"Start the next ready task {t['id']}: create its branch per "
+                        f"git-workflow.md, then run: python "
+                        f".claude/tools/pipeline/advance.py --task {t['id']}. "
+                        f"Drive it through the pipeline without asking the user.")
+                    human = (
+                        f"Nothing is parked on you, so the agent is starting the next ready "
+                        f"task, {t['id']}. Nothing is owed by you.")
+                return block(reason, human)
 
         # 4. Nothing to drive -> enforce status-management drift before idling:
         #    move merged-but-active task files to done/, close stale runs.

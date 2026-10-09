@@ -257,6 +257,12 @@ def finish_or_wait_for_merge(task: str, run: dict) -> int:
 
     moved = state.move_task(task, "done")
     note = "moved to tasks/done/" if moved else "already in tasks/done/"
+    try:
+        swept = state.move_swarm_subtasks(task)
+    except Exception:
+        swept = []
+    if swept:
+        note += f"; swarm subtasks moved too: {', '.join(swept)}"
     repos = ", ".join(r["repo"] for r in report)
     run = _merge_wait(task, run, "")
     return result("done", task, run,

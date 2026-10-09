@@ -93,7 +93,7 @@ class _FakeConn:
 def decide_output_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
                        set_fields=None, debt=(), mem_debt=(), count_nags=False,
                        busy=False, any_busy=False, latest=None, level=None,
-                       marker_note="", drift=([], [])) -> dict | None:
+                       marker_note="", drift=([], []), queue=None) -> dict | None:
     """stop_gate.decide() over a synthetic run set. Returns the hook's whole JSON
     output, or None when it printed nothing. No DB, no git, no task files.
 
@@ -125,7 +125,8 @@ def decide_output_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
     approvals.granted is mocked True by default, so every checkpoint reads as
     granted and the level is not under test. Pass `level` to run the REAL
     approvals.granted against that level instead (task-0050)."""
-    queue = [{"id": t, "deps": []} for t in backlog]
+    if queue is None:
+        queue = [{"id": t, "deps": []} for t in backlog]
     buf = io.StringIO()
     approval_patch = (
         unittest.mock.patch.object(stop_gate.approvals, "granted", return_value=True)

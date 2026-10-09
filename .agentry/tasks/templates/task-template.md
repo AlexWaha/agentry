@@ -20,6 +20,13 @@ blocked_on:
 # so the queue would keep offering a task that really was superseded.
 superseded_by:
 epic:
+# umbrella / subtasks: swarm mode only (rules/orchestration.md "Swarm mode"). An
+# umbrella task sets `umbrella: true`, the `epic:` above, and lists the epic's
+# subtask files as `subtasks: [task-0001, task-0002]` (bracketed). When it is
+# merged, advance.py moves the listed subtasks to done/ too. Leave both off on
+# an ordinary task.
+# umbrella: true
+# subtasks: []
 spec:
 created: YYYY-MM-DD
 completed:
