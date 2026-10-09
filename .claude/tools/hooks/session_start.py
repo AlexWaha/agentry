@@ -23,10 +23,22 @@ an injection window and needs no curation nudge.
 Anything printed to stdout is injected into the session context, so every
 branch stays quiet unless it has something actionable to say (token economy).
 A bug here must never brick the session: every step swallows its own errors.
+
+Output channel (measured in the 2.1.295 binary): stdout that does not start with
+`{` is plain text and becomes context; stdout that does is parsed as ONE JSON
+document, so plain lines and JSON cannot share it. Every step prints as before,
+into a buffer. Normally the buffer is printed unchanged. When a run is parked
+BLOCKED the person starting the session has to be told, and `systemMessage` is
+the field for him, so then the buffer goes out as the `additionalContext` of one
+JSON envelope with the `systemMessage` beside it. Nothing the steps print is lost
+in either shape.
 """
 
 from __future__ import annotations
 
+import contextlib
+import io
+import json
 import os
 import shutil
 import subprocess
@@ -84,17 +96,28 @@ def cleanup_nul() -> None:
         print(f"nul cleanup: could not remove {listed}: {exc}")
 
 
-def pipeline_resume() -> None:
+def pipeline_resume() -> str:
+    """Prints the resume summary for the model and returns the sentence for the
+    human about a blocked run ("" when there is none)."""
     try:
         sys.path.insert(0, str(CLAUDE_DIR / "tools" / "pipeline"))
         import state
         conn = state.connect()
-        text = state._resume_text(conn)
-        conn.close()
+        try:
+            text = state._resume_text(conn)
+            # Its own try: a failure computing the human sentence must not
+            # swallow the resume text the model needs.
+            try:
+                notice = state.blocked_notice(conn)
+            except Exception:
+                notice = ""
+        finally:
+            conn.close()
         if text:
             print(text)
+        return notice
     except Exception:
-        pass
+        return ""
 
 
 def codegraph_sync() -> None:
@@ -151,11 +174,27 @@ def pipeline_mode() -> None:
 
 
 def main() -> int:
-    cleanup_nul()
-    pipeline_mode()
-    pipeline_resume()
-    codegraph_sync()
-    codebase_memory_check()
+    buf = io.StringIO()
+    notice = ""
+    try:
+        with contextlib.redirect_stdout(buf):
+            cleanup_nul()
+            pipeline_mode()
+            notice = pipeline_resume()
+            codegraph_sync()
+            codebase_memory_check()
+    finally:
+        # In a finally so a step that escapes its own handler still lets the
+        # lines printed before it reach the session, as they did unbuffered.
+        text = buf.getvalue()
+        if notice:
+            print(json.dumps({
+                "hookSpecificOutput": {"hookEventName": "SessionStart",
+                                       "additionalContext": text.rstrip("\n")},
+                "systemMessage": notice,
+            }))
+        elif text:
+            print(text, end="")
     return 0
 
 

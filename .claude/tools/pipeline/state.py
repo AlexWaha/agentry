@@ -391,6 +391,22 @@ def log_gate(conn: sqlite3.Connection, task: str, stage: str, cmd: str, exit_cod
     conn.commit()
 
 
+def _blocked_tasks(live: list[dict]) -> list[str]:
+    return [r["task"] for r in live if r["stage_status"] == ST_BLOCKED]
+
+
+def blocked_notice(conn: sqlite3.Connection) -> str:
+    """The sentence for the HUMAN when a session starts with a blocked run (the
+    `systemMessage` counterpart of the model-facing line in _resume_text). Empty
+    when nothing is blocked."""
+    stuck = _blocked_tasks([r for r in all_runs(conn) if r["stage"] != "done"])
+    if not stuck:
+        return ""
+    return (f"{', '.join(stuck)} parked BLOCKED and nothing is driving it. Decision owed by "
+            f"you: fix the blocker so the agent can re-run it, or send the task back to "
+            f"its first stage.")
+
+
 def _resume_text(conn: sqlite3.Connection) -> str:
     """One-line-per-run summary for SessionStart context injection."""
     live = [r for r in all_runs(conn) if r["stage"] != "done"]
@@ -406,7 +422,7 @@ def _resume_text(conn: sqlite3.Connection) -> str:
     # wrong advice for exactly the run that most needs attention. The Stop hook
     # owns surfacing a blocked run mid-session (see stop_gate.decide); this is
     # the same fact reaching a session that STARTS with one already parked.
-    stuck = [r["task"] for r in live if r["stage_status"] == ST_BLOCKED]
+    stuck = _blocked_tasks(live)
     if stuck:
         lines.append(f"BLOCKED, needs the CEO before anything else: {', '.join(stuck)}. "
                      f"advance.py will not move a blocked run - raise it with the CEO "

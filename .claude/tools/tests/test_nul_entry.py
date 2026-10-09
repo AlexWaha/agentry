@@ -342,6 +342,8 @@ class CleanupNulNeverBlocksTheRestOfTheHookTest(unittest.TestCase):
         run = unittest.mock.Mock(side_effect=run_side_effect,
                                  return_value=subprocess.CompletedProcess([], 0, "", ""))
         steps = {name: unittest.mock.Mock() for name in self.STEPS}
+        # pipeline_resume returns the human blocked-run sentence ("" when none).
+        steps["pipeline_resume"] = unittest.mock.Mock(return_value="")
         out = io.StringIO()
         with unittest.mock.patch.object(session_start, "stray_nul_entries", return_value=["NUL"]), \
                 unittest.mock.patch.object(session_start, "find_bash", return_value="bash",
