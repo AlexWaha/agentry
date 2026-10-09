@@ -90,12 +90,12 @@ class _FakeConn:
         pass
 
 
-def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
-                set_fields=None, debt=(), mem_debt=(), count_nags=False,
-                busy=False, any_busy=False, latest=None, level=None,
-                marker_note="") -> str | None:
-    """stop_gate.decide() over a synthetic run set. Returns the block reason, or
-    None when the hook allowed the stop. No DB, no git, no task files.
+def decide_output_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
+                       set_fields=None, debt=(), mem_debt=(), count_nags=False,
+                       busy=False, any_busy=False, latest=None, level=None,
+                       marker_note="", drift=([], [])) -> dict | None:
+    """stop_gate.decide() over a synthetic run set. Returns the hook's whole JSON
+    output, or None when it printed nothing. No DB, no git, no task files.
 
     busy_marker_fresh is mocked too: it reads the real .agentry/state/, so a live
     gate marker for the task id used here (written whenever the orchestrator
@@ -147,7 +147,7 @@ def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
             unittest.mock.patch.object(stop_gate, "handoff_debt", return_value=list(debt)), \
             unittest.mock.patch.object(stop_gate, "memory_debt", return_value=list(mem_debt)), \
             unittest.mock.patch.object(stop_gate, "latest_undocumented", return_value=latest), \
-            unittest.mock.patch.object(stop_gate, "reconcile_status_drift", return_value=([], [])), \
+            unittest.mock.patch.object(stop_gate, "reconcile_status_drift", return_value=drift), \
             approval_patch, \
             unittest.mock.patch.object(stop_gate, "busy_marker_fresh", return_value=busy), \
             unittest.mock.patch.object(stop_gate, "any_busy_marker_fresh",
@@ -159,7 +159,15 @@ def decide_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
     for p in nag_patches:
         p.stop()
     out = buf.getvalue().strip()
-    return json.loads(out)["reason"] if out else None
+    return json.loads(out) if out else None
+
+
+def decide_with(*args, **kw) -> str | None:
+    """The block reason decide_output_with() produced, or None when the hook did
+    not block. A stop released with only a `systemMessage` (a run parked on the
+    CEO) is not a block, so it is None here exactly as silence is."""
+    output = decide_output_with(*args, **kw)
+    return output["reason"] if output and output.get("decision") == "block" else None
 
 
 class FreeSlotTest(unittest.TestCase):

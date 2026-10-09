@@ -49,8 +49,14 @@ branch nobody classified. It is armed only while the harness's own
 
 Fail-open: any error allows the stop (never trap the user in a loop).
 
-Hook output: print {"decision":"block","reason":...} to block; print nothing to
-allow.
+Hook output (contract C-8, one field per audience): print
+{"decision":"block","reason":...} to block - `reason` is for the model - and ALWAYS
+alongside it a `systemMessage` for the human saying what the CEO owes the run
+(nothing, a decision, an approval). A block may add a `terminalSequence`, the
+terminal's own channel. A stop that is allowed but has something to tell the
+human - a run parked on the CEO, a run just parked BLOCKED, the repeat backstop
+tripping - prints {"systemMessage":...} with no decision, which still allows the
+stop; every other release prints nothing.
 """
 
 from __future__ import annotations
@@ -64,6 +70,7 @@ import traceback
 import approvals
 import busy
 import mode
+import pretool_gate
 import state
 
 _SKIP_DIRS = {".git", "node_modules", "vendor", ".claude", "storage",
@@ -161,10 +168,95 @@ ACTIVE_DIR = state.ACTIVE_DIR
 DONE_DIR = state.DONE_DIR
 
 
-def emit(reason: str) -> int:
-    """Actually block the stop. The only writer of the hook's one channel."""
-    print(json.dumps({"decision": "block", "reason": reason}))
+# FR-51, the four terminal treatments. The terminal is the channel for a CEO who
+# is not looking at the session, so each event is told apart by what it does to a
+# window that is out of sight: a distinct bell count and a distinct title, plus a
+# desktop notification carrying the same label. Zero bells for a gate failure on
+# purpose - the agent is already retrying, so it is the one event that must not
+# ring.
+#
+# What Claude Code accepts, measured in the 2.1.295 binary (the hook schema
+# describes the field and the allowlist lives in the function that validates it):
+# a string of at most 4096 bytes made only of BEL and OSC sequences, OSC numbers
+# 0, 1, 2, 9, 99 and 777, each ended by BEL or ESC \, and an OSC 9 body that does
+# not start with a digit. Anything else is DROPPED WHOLE and logged at debug
+# level - never an error, never a failed hook. Colour is not in the list, so the
+# plan's "colour" is not available through this field.
+TERMINAL_EVENTS = {
+    "commit": (1, "commit approval needed"),
+    "push": (2, "push approval needed"),
+    "blocked": (3, "task blocked, your decision needed"),
+    "gate-failure": (0, "gate failed, the agent is retrying"),
+}
+
+# What the human is told when a caller gave no sentence of its own. Only emit()
+# can reach it (block() requires one), so every block says SOMETHING to the human.
+NOTHING_OWED = "The Stop hook is keeping the agent working. Nothing is owed by you."
+
+
+BEL = "\x07"
+
+
+def terminal_sequence(event: str | None) -> str | None:
+    """The terminalSequence for one of the four events, or None for any other
+    name. None is the NFR-4 half: an event nobody defined costs the human the
+    bell, not the block."""
+    treatment = TERMINAL_EVENTS.get(event)
+    if treatment is None:
+        return None
+    bells, label = treatment
+    return f"{BEL * bells}\x1b]2;Agentry: {label}{BEL}\x1b]9;Agentry: {label}\x1b\\"
+
+
+def parked_now(runs: list[dict]) -> list[dict]:
+    """Runs charge() parked BLOCKED during THIS stop: it marks the row in the
+    stop's own snapshot, which is the only thing that tells them from a run
+    parked earlier (that one is surfaced by decide() step 2 instead)."""
+    return [r for r in runs if r.get("parked_now")]
+
+
+def human_fields(human: str | None, event: str | None = None) -> dict:
+    """The human-audience half of the hook's JSON: always a non-empty
+    systemMessage, plus a terminalSequence when the event has one.
+
+    A run that charge() parked on this very stop is announced here, whichever
+    branch ends the stop, because the park is silent otherwise: it falls through
+    to other work and the next stop is the first that could speak of it."""
+    parked = parked_now(_CTX["runs"])
+    if parked:
+        tasks = ", ".join(r["task"] for r in parked)
+        sentence = (f"{tasks} parked BLOCKED: the agent ran out of continuations and "
+                    f"nothing is driving it. Decision owed by you: fix the blocker so it "
+                    f"can re-run, or send the task back to its first stage.")
+        human = f"{sentence} Separately: {human}" if human else sentence
+        event = "blocked"
+    fields = {"systemMessage": human or NOTHING_OWED}
+    sequence = terminal_sequence(event)
+    if sequence:
+        fields["terminalSequence"] = sequence
+    return fields
+
+
+def emit(reason: str, human: str | None = None, event: str | None = None) -> int:
+    """Actually block the stop. The only writer of the hook's one model-facing
+    channel.
+
+    `reason` is for the model. `human` is for the person reading the terminal and
+    says what they owe the run; it is never the same sentence, because the model's
+    instruction ("run advance.py") is noise to a CEO and the CEO's ask is noise to
+    the model."""
+    print(json.dumps({"decision": "block", "reason": reason,
+                      **human_fields(human, event)}))
     return 0
+
+
+def release(human: str, event: str | None = None) -> int:
+    """Allow the stop, but say to the human why the run is not moving. No
+    `decision`, so Claude Code lets the turn end exactly as it does for silence
+    (a Stop hook's {"systemMessage": ...} alone is the documented way to show a
+    message without blocking)."""
+    print(json.dumps(human_fields(human, event)))
+    return allow()
 
 
 def allow() -> int:
@@ -286,7 +378,7 @@ def park_looping_run(reason: str) -> str | None:
         return None
 
 
-def block(reason: str) -> int:
+def block(reason: str, human: str, event: str | None = None) -> int:
     """Block the stop unless this exact reason has already been repeated to no
     effect, in which case park the loop and let the session end.
 
@@ -315,27 +407,40 @@ def block(reason: str) -> int:
     If it names no run - both documentation demands, and the start-the-next-task
     branch task-0018 left unbounded on purpose - there is nothing to park, so it
     escalates in the same breath, once, naming the card. Only after that does it
-    go quiet, and only about that exact sentence."""
+    go quiet, and only about that exact sentence.
+
+    `human` is the sentence for the person at the terminal (see emit()), and every
+    caller must supply one: that is how the "every block says what the CEO owes"
+    rule is structural too. The two outcomes of the trip speak to the human as
+    well, because they are the moments a run is handed to him."""
     if not STOP_HOOK_ACTIVE:
-        return emit(reason)
+        return emit(reason, human, event)
     try:
         n = stop_repeats(reason)
         ceiling = int(state.load_pipeline().get(
             "stop_hook_repeat_ceiling", STOP_REPEAT_CEILING_DEFAULT))
     except Exception:
-        return emit(reason)
+        return emit(reason, human, event)
     if ceiling < 1 or n < ceiling:
-        return emit(reason)
+        return emit(reason, human, event)
     if n > ceiling:
         return allow()  # parked or escalated on the trip stop; the CEO owns it
     task = park_looping_run(reason)
     if task:
-        return allow()  # step 2 surfaces it on the next stop, by name
+        # Step 2 surfaces it to the model on the next stop, but the next stop may
+        # never come, so the human hears it now.
+        return release(
+            f"{task} was parked BLOCKED: the same instruction was repeated {n} times "
+            f"and nothing changed. Decision owed by you: fix the blocker and let the "
+            f"agent re-run it, or send the task back to its first stage.", "blocked")
     return emit(
         f"The same instruction has now been repeated {n} times with nothing changing, and "
         f"there is no run to park. Stop re-attempting it and raise it with the CEO now "
         f"(AskUserQuestion): the situation, the options, and your recommendation. This hook "
-        f"will not raise it again. The instruction that is not working: {reason}")
+        f"will not raise it again. The instruction that is not working: {reason}",
+        f"The agent has been told the same thing {n} times with nothing changing and "
+        f"there is no run to park. Decision owed by you: the agent is about to ask you "
+        f"how to proceed.", "blocked")
 
 
 def frontmatter(text: str) -> str:
@@ -591,6 +696,7 @@ def charge(conn, r: dict, ceiling: int) -> bool:
     if cont > ceiling:
         state.set_fields(conn, r["task"], stage_status=state.ST_BLOCKED)
         r["stage_status"] = state.ST_BLOCKED
+        r["parked_now"] = True
         return False
     state.set_fields(conn, r["task"], continuations=cont)
     return True
@@ -617,8 +723,12 @@ def bounded_block(key: str, subject: str, reason: str) -> int:
             f"situation, the options - pay it, waive it (handoff.py --waive / update.py "
             f"--stamp --none), or change the baseline in pipeline.json - and your "
             f"recommendation. This hook will not raise it again, so if you drop it now "
-            f"nothing else will catch it. The instruction that is not working: {reason}")
-    return block(reason)
+            f"nothing else will catch it. The instruction that is not working: {reason}",
+            f"{subject} has survived {n - 1} stops and is not being cleared. Decision "
+            f"owed by you: pay it, waive it, or change the baseline in pipeline.json.",
+            "blocked")
+    return block(reason, f"{subject}. The agent has been told to clear it; nothing is "
+                         f"owed by you unless it keeps failing.")
 
 
 def clear_debt_nags(live_keys=()) -> None:
@@ -747,6 +857,46 @@ def reconcile_status_drift(conn) -> tuple[list, list]:
     return moved, closed
 
 
+# What each `awaiting_human` value advance.py writes means to the person the run
+# is parked on, and which of the four terminal events it is. "blocked" is absent
+# on purpose: decide() step 2 surfaces a blocked run once and then leaves it alone.
+OWED_TEXT = {
+    "commit": "read the diff (/diff) and approve or reject the commit",
+    "push": "approve or reject the push",
+    "plan": "approve or reject the plan",
+    "merge": "merge the pull request into main",
+}
+OWED_EVENT = {"commit": "commit", "push": "push"}
+# Once the approval is recorded nothing is owed; the git action is the agent's.
+APPROVED_FLAG = {"commit": "commit_approved", "push": "push_approved",
+                 "plan": "plan_approved"}
+
+
+def owed_to_ceo(runs: list[dict]) -> list[tuple[str, str | None]]:
+    """[(sentence for the human, terminal event or None)] for every run parked on
+    him. Any value of `awaiting_human` not named above still produces a sentence,
+    so a new park reason is announced rather than silently dropped.
+
+    Two exceptions to "a done run is finished". The merge wait is written ONLY at
+    stage `done` (advance.py _merge_wait: the checkpoints passed and the main
+    branch does not carry the task yet), so skipping done would skip the only
+    place it exists. And it is the human's only in `pr` mode, where he merges the
+    pull request; in `solo` the pipeline merges locally and he owes nothing."""
+    owed = []
+    for r in runs:
+        aw = r["awaiting_human"]
+        if not aw or aw == AWAITING_BLOCKED or r.get(APPROVED_FLAG.get(aw, "")):
+            continue
+        if r["stage"] == "done" and aw != "merge":
+            continue
+        if aw == "merge" and pretool_gate.workflow_mode() == pretool_gate.WORKFLOW_SOLO:
+            continue
+        what = OWED_TEXT.get(aw, f"resolve '{aw}'")
+        sentence = f"{r['task']} is parked at stage '{r['stage']}'. Owed by you: {what}."
+        owed.append((sentence, OWED_EVENT.get(aw)))
+    return owed
+
+
 def decide() -> int:
     if not mode.conveyor_runs():
         return allow()
@@ -838,7 +988,10 @@ def decide() -> int:
                         f"what the blocker is, and the options - fix it and re-run "
                         f"advance.py, or send the task back with python "
                         f".claude/tools/pipeline/approve.py --task {r['task']} --reject. "
-                        f"Do not silently move on to other work.")
+                        f"Do not silently move on to other work.",
+                        f"{r['task']} is parked BLOCKED at stage '{stage}' and nothing is "
+                        f"driving it. Decision owed by you: fix the blocker so the agent can "
+                        f"re-run it, or send the task back to its first stage.", "blocked")
                 continue
             # Approved checkpoint action still pending (commit/push the agent must do).
             # Charged like the editing branch and for the same reason: it repeats
@@ -853,7 +1006,9 @@ def decide() -> int:
                 return block(
                     f"{r['task']} checkpoint approved (awaiting_human={aw}). Perform the "
                     f"git {aw} now, then run: python .claude/tools/pipeline/advance.py --task {r['task']}. "
-                    f"Do not ask the user.{busy_marker_note(r['task'])}")
+                    f"Do not ask the user.{busy_marker_note(r['task'])}",
+                    f"{r['task']}: the {aw} approval is recorded and the agent is doing the "
+                    f"git {aw} now. Nothing is owed by you.")
             # Parked, unapproved checkpoint -> not autonomously advanceable.
             if stage == "ready" and aw in ("commit", "push"):
                 continue
@@ -891,12 +1046,17 @@ def decide() -> int:
                     return block(
                         f"{r['task']} stage '{stage}' gate FAILED. Fix the cause, then re-run: "
                         f"python .claude/tools/pipeline/advance.py --task {r['task']}. Do not ask the user."
-                        f"{busy_marker_note(r['task'])}")
+                        f"{busy_marker_note(r['task'])}",
+                        f"{r['task']} failed the exit gate of stage '{stage}'. The agent is "
+                        f"fixing it and re-running; nothing is owed by you unless the retries "
+                        f"run out.", "gate-failure")
                 return block(
                     f"{r['task']} is at stage '{stage}'. Finish the stage work (dispatch the owning "
                     f"subagent if needed), then run: python .claude/tools/pipeline/advance.py "
                     f"--task {r['task']}. Do not ask the user whether to continue."
-                    f"{busy_marker_note(r['task'])}")
+                    f"{busy_marker_note(r['task'])}",
+                    f"{r['task']} is at stage '{stage}' and the agent is still working on it. "
+                    f"Nothing is owed by you.")
             # A LIVE RUN ON A STAGE ITS OWN FLOW DEFINES AND editing_stages DOES
             # NOT NAME (FR-39). Before this branch such a run matched nothing in
             # the loop and the hook said not one word about it. That was
@@ -935,7 +1095,10 @@ def decide() -> int:
                 f"hook drives it. Run: python .claude/tools/pipeline/advance.py "
                 f"--task {r['task']} - it advances the stage or names the recovery. If the "
                 f"stage is real work, add it to editing_stages. Do not ask the user."
-                f"{busy_marker_note(r['task'])}")
+                f"{busy_marker_note(r['task'])}",
+                f"{r['task']} is at stage '{stage}', which the '{which}' flow does not list as "
+                f"work for the agent. The agent is being told to advance it; nothing is owed "
+                f"by you.")
 
         # Nothing above was driveable. If ANY task has a fresh busy marker, a
         # dispatched agent is working right now and every branch below would be
@@ -1088,7 +1251,9 @@ def decide() -> int:
                 return block(
                     f"Start the next ready task {t['id']}: create its branch per git-workflow.md, "
                     f"then run: python .claude/tools/pipeline/advance.py --task {t['id']}. "
-                    f"Drive it through the pipeline without asking the user.")
+                    f"Drive it through the pipeline without asking the user.",
+                    f"Nothing is parked on you, so the agent is starting the next ready task, "
+                    f"{t['id']}. Nothing is owed by you.")
 
         # 4. Nothing to drive -> enforce status-management drift before idling:
         #    move merged-but-active task files to done/, close stale runs.
@@ -1102,16 +1267,19 @@ def decide() -> int:
             return block(
                 "Reconciled task-status drift (" + "; ".join(bits) + "). These were "
                 "already merged but left in tasks/active/ or run.db. This is bookkeeping "
-                "only - do not re-open them; confirm and stop.")
+                "only - do not re-open them; confirm and stop.",
+                "Bookkeeping: " + "; ".join(bits) + ". These tasks were already merged. "
+                "Nothing is owed by you.")
 
         # 5. Documentation debt that step 3 had no ready task to gate - the last
         # thing before the session is allowed to end. It BLOCKS rather than
         # merely mentioning, for three reasons worth keeping in the code:
         #
-        #   - A Stop hook has exactly one channel, the block reason. An allowed
-        #     stop prints nothing at all, so "report without blocking" is not a
-        #     softer block, it is silence - which is the failure this branch
-        #     exists to end.
+        #   - A Stop hook has exactly one channel to the MODEL, the block reason.
+        #     An allowed stop reaches the model with nothing (release() speaks
+        #     only to the human), so "report without blocking" is not a softer
+        #     block, it is silence toward the model - which is the failure this
+        #     branch exists to end.
         #   - It cannot fight edit-serialization. Step 2 returns first for every
         #     run that is actually being driven, so nothing reaching here is
         #     mid-advance, and paying the debt writes to
@@ -1169,8 +1337,19 @@ def decide() -> int:
                 f"recording). Do not ask the user whether to do it.")
 
         # 6. Everything is parked / blocked / done and nothing ready -> release.
+        # A run parked on the CEO is the one release that has something to say to
+        # him: this is where the commit and push checkpoints, the plan approval
+        # and the merge wait reach a person, since the advance.py output that
+        # parked them only goes to the model.
+        owed = owed_to_ceo(runs)
+        if owed or parked_now(runs):
+            return release(" ".join(text for text, _ in owed),
+                           next((ev for _, ev in owed if ev), None))
         return allow()
     finally:
+        # The snapshot is this stop's alone: left behind, a later call outside
+        # decide() would announce parks that were already announced.
+        _CTX.update(conn=None, runs=())
         conn.close()
 
 
