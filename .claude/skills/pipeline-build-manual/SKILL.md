@@ -1,16 +1,17 @@
 ---
 name: pipeline-build-manual
-description: Switch to build mode with manual approvals - the conveyor stops at every checkpoint `workflow.mode` leaves in place: which task to take, the commit, and - in `pr` mode only - the push. `solo` mode has no push checkpoint; the local merge follows the commit. Use when the CEO wants to watch each step.
+description: Switch the pipeline to build mode, approval level manual, swarm OFF, in one command. Part of the /pipeline-* command family; semantics in the pipeline skill.
 ---
 
-# Build, manual approvals
+# /pipeline-build-manual
 
-```bash
-python .claude/tools/pipeline/mode.py build
-python .claude/tools/pipeline/approvals.py manual
-```
+Switch the pipeline to build mode, approval level manual, swarm OFF, in one command.
 
-Then say in one line that build/manual is active: every checkpoint comes back to
-the CEO. Do not restate the mode tables.
+Run, using the commands in the project adapter `.claude/pipeline-adapter.md`:
 
-Full contract: `.claude/skills/pipeline/SKILL.md`.
+1. `set_mode` with `build`.
+2. `set_approvals` with `manual`.
+3. `set_swarm` with `off`.
+4. `show`, then tell the CEO the resulting state in one line.
+
+Rules: `.claude/skills/pipeline/SKILL.md`. No adapter in this project: stop and say so.

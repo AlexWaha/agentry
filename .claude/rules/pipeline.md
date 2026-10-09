@@ -35,7 +35,13 @@ refused until that spec is approved.
 - **Plan pipeline** (per epic / milestone): see above. Owner: `architect`
   (spec: `spec-developer`; breakdown: `product-manager`).
 - **Build pipeline** (per task, autonomous): `implement -> test -> review ->
-  ready -> done`. Driven by `advance.py`; see `orchestration.md`.
+  ready -> done`. Driven by `advance.py`; see `orchestration.md`. The stage
+  table below is the per-task flow: one task in an editing stage at a time, QA
+  at its own `test` stage. With the swarm dial on (`swarm.py on`), an epic with
+  two or more subtasks registers as ONE umbrella task and runs in swarm mode
+  instead (the protocol is `skills/swarm/SKILL.md`; parallel agents inside
+  `implement`, QA once after all of them report done); see "Swarm mode" in
+  `orchestration.md`.
 
 ## Execution stages
 

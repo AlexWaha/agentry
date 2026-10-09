@@ -1361,7 +1361,7 @@ class ApproveTrunkPushTest(unittest.TestCase):
         self.assertIn("the configured trunk is 'trunk'", payload["error"])
 
     def test_no_approvals_level_can_ever_grant_it(self):
-        self.assertIn(approvals.TRUNK_PUSH, approvals.NEVER_GRANTED)
+        self.assertIn(approvals.TRUNK_PUSH, approvals.never_granted())
         for level in approvals.LEVELS:
             with self.subTest(level=level):
                 self.assertNotIn(approvals.TRUNK_PUSH, approvals.GRANTS[level])

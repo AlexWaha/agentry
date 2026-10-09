@@ -148,7 +148,7 @@ class LevelDrivesTheCheckpointTest(unittest.TestCase):
 
         self.assertEqual(1, self._row("task-0702")["commit_approved"])
 
-    # --- NEVER_GRANTED still wins over both inputs -------------------------
+    # --- never_granted() (pipeline.json approvals_never_granted) still wins over both inputs ---
 
     def test_push_is_refused_at_auto_with_push_in_auto_approve(self):
         self._level(approvals.AUTO)
@@ -162,6 +162,26 @@ class LevelDrivesTheCheckpointTest(unittest.TestCase):
         self.assertEqual("push", out["awaiting_human"])
         self.assertEqual(0, self._row("task-0703")["push_approved"])
         self.assertIn("CEO push approval", out["message"])
+
+    def _push_approved_after_two_advances(self, task):
+        self._seed(task)
+        with unittest.mock.patch.object(advance, "finish_or_wait_for_merge", return_value=0), \
+                redirect_stdout(io.StringIO()):
+            for _ in range(2):
+                with unittest.mock.patch.object(sys, "argv", ["advance.py", "--task", task]):
+                    advance.main()
+        return self._row(task)["push_approved"]
+
+    def test_an_explicit_empty_never_granted_list_lets_auto_approve_the_push(self):
+        """The config really drives it: only an explicit [] opens the push."""
+        self._level(approvals.AUTO)
+        self.pipeline = {**BUILD_PIPELINE, "approvals_never_granted": []}
+        self.assertEqual(1, self._push_approved_after_two_advances("task-0704"))
+
+    def test_the_shipped_never_granted_list_keeps_the_push_parked_at_auto(self):
+        self._level(approvals.AUTO)
+        self.pipeline = {**BUILD_PIPELINE, "approvals_never_granted": ["push", "trunk_push"]}
+        self.assertEqual(0, self._push_approved_after_two_advances("task-0705"))
 
     def test_push_is_refused_at_every_level(self):
         for i, level in enumerate(approvals.LEVELS):

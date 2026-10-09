@@ -18,7 +18,10 @@ only the hook scripts record one.
 - Two workflow modes: `pr` for a project with a second party to review and
   merge, `solo` for a single author with nobody to hand a pull request to.
   Pushing to the remote needs the human's explicit approval in chat in both
-  modes, at every approval level - no level ever grants it.
+  modes. The shipped `pipeline.json` lists push and trunk_push in
+  `approvals_never_granted`, so no level grants them. Subagent Write/Edit
+  and explicit-path shell writes to that file are denied; cd-relative and
+  interpreter writes are not yet covered (task-0116).
 - A task's state is the folder it sits in - `backlog/`, `active/`, or
   `done/` - not a `status:` field, so the file's location and the pipeline's
   record of it cannot drift apart.
@@ -99,8 +102,12 @@ out of scope for this task (FR-12 names only this file).
   sections, no scaffold marker, minimum length), not whether the content is
   genuinely the writer's own.
 - `approvals level` - one of `manual`, `assisted`, `auto`: how many
-  checkpoints clear without asking the CEO. No level grants the push
-  checkpoint.
+  checkpoints clear without asking the CEO. `manual` grants nothing,
+  `assisted` the commit only, `auto` take and commit. The shipped
+  `pipeline.json` lists push and trunk_push in `approvals_never_granted`, so no
+  level grants the push. Subagent Write/Edit and explicit-path shell writes to
+  that file are denied; cd-relative and interpreter writes are not yet covered
+  (task-0116).
 - `workflow mode` - `pr` or `solo`: whether the trunk is reached through a
   human-created pull request or a locally gated merge.
 

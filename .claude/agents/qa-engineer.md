@@ -7,8 +7,8 @@ permissionMode: bypassPermissions
 experimental:
   cacheTtl: 1h
 effort: high
-maxTurns: 60
-tools: Read, Write, Edit, Bash, Glob, Grep
+maxTurns: 150
+tools: Read, Write, Edit, Bash, Glob, Grep, SendMessage
 mcpServers:
   - codegraph
 skills:
@@ -48,7 +48,7 @@ commands are defined in `.agentry/project/stack.md`.
   (401), authorization (403), validation (422), happy path (200/201), not
   found (404), plus edge cases (procedure: preloaded `write-tests` skill)
 - Write frontend component and integration tests
-- Run quality gates: formatter, test suite, forbidden pattern scanning
+- Run quality gates: formatter, forbidden pattern scanning, and narrowed test runs only (`-k` or a single module); the full suite runs once, in the test-stage exit gate
 - Fix failing tests RED-GREEN: failing test first, minimal fix, regression
   check (procedure: preloaded `bug-fix` skill)
 - Run the on-demand `health-check` skill to verify service/endpoint health when relevant

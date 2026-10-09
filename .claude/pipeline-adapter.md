@@ -1,0 +1,31 @@
+# Pipeline adapter - Agentry
+
+Project values for the keys in `.claude/skills/swarm/SKILL.md` (adapter contract). Every command runs from the repository root (`src/` in the workspace, the repo root in a clone). `<epic>` is the number of the umbrella task, so `task-<epic>` is the umbrella task id (for example `task-0150`) and the same string names its branch suffix, its run row and its state folder. The epic file and spec stay as they are; the umbrella task file in `backlog/` lists them in its frontmatter (`epic:`, `spec:`).
+
+| Key | Value |
+|---|---|
+| `show` | `python .claude/tools/pipeline/mode.py --show` (prints mode, approvals and swarm) |
+| `set_mode` | `python .claude/tools/pipeline/mode.py build\|plan\|talk` |
+| `set_approvals` | `python .claude/tools/pipeline/approvals.py manual\|assisted\|auto` |
+| `set_swarm` | `python .claude/tools/pipeline/swarm.py on\|off` |
+| `start_epic` | `python .claude/tools/pipeline/advance.py --task task-<epic> --type feature` (the umbrella task file must already sit in `backlog/` with non-empty acceptance criteria, and its spec must be `approved`) |
+| `advance` | `python .claude/tools/pipeline/advance.py --task task-<epic>` |
+| `approve_push` | `python .claude/tools/pipeline/approve.py --task task-<epic> --gate push` (only after the CEO approves in chat). In `solo` mode there is no push checkpoint: the CEO approves the commit with `--gate commit`, and publishing the trunk is the separate one-shot `approve.py --task task-<epic> --trunk-push` |
+| `reject` | `python .claude/tools/pipeline/approve.py --task task-<epic> --reject` |
+| `backlog_dir` | `.agentry/tasks/backlog/` |
+| `done_dir` | `.agentry/tasks/done/` |
+| `state_dir` | `.agentry/tasks/swarm/task-<epic>/` (NOT `.agentry/state/`: the dev profile is denied every write there, so board posts and QA reports would fail silently. `agent_gate.py` allows `.agentry/tasks/`; `test_a_dev_agent_may_write_the_swarm_board` pins it) |
+| `branch` | `<type>/task-<epic>` from fresh `main` (`branch_pattern` `{type}/{task}` in `pipeline.json`, for example `feature/task-0150`; `pretool_gate.py` rejects other shapes and an off-`main` base) |
+| `suite` | The test-stage exit gate, run ONCE by the orchestrator through `advance.py` at the `test` stage, cwd the repository root: `python -m unittest discover -s .claude/tools && python .claude/tools/pipeline/ui_evidence.py --task {task}` (the `pipelines.build` `test` stage in `.agentry/pipeline.json`). Green: exit 0 and `OK`; the reference is the `Ran N tests` line of the last green run on `main`, and a lower N means a module failed to import. Dev-profile agents, `qa-engineer` included, are denied the unfiltered command by `gates.dev_forbidden_commands`; they run narrowed: `python -m unittest <module>` or `python -m unittest discover -s .claude/tools -k <name>` |
+| `build` | The implement-stage exit gate: `python -m compileall -q .claude/tools`. Green: exit 0 and no output. There is no packaging or bundling build in this project, so no agent owns "the only build runner" and the build/browser QA agent of the swarm templates is not dispatched |
+| `self_check` | `ruff check <own files>` and `python -m py_compile <own files>` (Python files only). Markdown and JSON files have no checker: re-read the file and confirm no em dash or en dash. Never `ruff check .claude/tools` as a whole, never a formatter with `--write` on a directory |
+| `roles` | backend dev `senior-backend-dev`, frontend dev `senior-frontend-dev` (the harness has no frontend, so a swarm here uses only the backend dev role for code), QA `qa-engineer`, reviewer `reviewer`, security `security-engineer` |
+| `approvals_grants` | `pipeline.json` `approvals_never_granted` = `["push", "trunk_push"]`, in both the repository and the workspace root copies, read by `approvals.py` `never_granted()`. So, with the shipped config, no level grants the push and `auto` stops at the push; subagent Write/Edit and explicit-path shell writes to that file are denied, while cd-relative and interpreter writes are not yet covered (task-0116). `trunk_push` and `plan` are also withheld in code whatever the config says, and a missing or unreadable list withholds `push` and `trunk_push` too. `manual` grants nothing, `assisted` grants the commit only and does not grant `take` (task-0050), and `auto` grants take and commit (the push of the work branch too, unless the list names it). Local merge mode: `workflow.mode` = `solo`. After the CEO approves the commit (`approve.py --gate commit`, or the level at `assisted` and `auto`), the pipeline merges `<type>/task-<epic>` into `main` locally, gated by three conditions in `pretool_gate.py`: the branch name is `<type>/task-NNNN`, the run row exists, and `commit_approved` is set. A supervisor-spawned unattended session is refused the merge |
+| `push_to_main` | `pipeline.json` `allow_push_to_main` = `false` (enforced in `pretool_gate.py` `allow_push_to_main()`). The only push to the trunk that works is the CEO-approved, one-shot `approve.py --trunk-push` in `solo` mode; force and delete pushes are refused either way |
+| `trunk_based` | `false`. Work happens on `<type>/task-<epic>` branches and the gates resolve the task from the branch name; this harness has no `trunk_based` config key and does not resolve a task from the single active run |
+
+## Notes
+
+- Dev, QA and fixer agents cannot set the dials: `agent_gate.py` denies `mode.py`, `approvals.py` and `swarm.py` with an argument other than `--show` for every profile.
+- Agent definition changes (`SendMessage` in `tools:`, `maxTurns`) load only after a session restart; set per gate profile in `.claude/tools/setup/apply_optimization.py` (`MAX_TURNS`: dev 150, readonly 100, docs 30).
+- `workflow.mode` `solo` means a swarm ends at the commit checkpoint: the CEO reads the diff (`/diff`), approves, and the local merge follows. There is no pull request and no push step to wait for.

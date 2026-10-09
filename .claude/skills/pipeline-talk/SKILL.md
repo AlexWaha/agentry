@@ -1,16 +1,15 @@
 ---
 name: pipeline-talk
-description: Switch to talk mode - the conveyor is off entirely. Discussion, hypotheses, measurement and exploration, with nothing tracked and no task files, branches or product code written. Use when the CEO wants to think out loud.
+description: Switch the pipeline to talk mode. Approval level and swarm flag stay as they are. Part of the /pipeline-* command family; semantics in the pipeline skill.
 ---
 
-# Talk mode
+# /pipeline-talk
 
-```bash
-python .claude/tools/pipeline/mode.py talk
-```
+Switch the pipeline to talk mode. Approval level and swarm flag stay as they are.
 
-Then say in one line that the conveyor is off: reading code and running read-only
-checks stay available, task files, branches and product edits do not happen. The
-approval level is irrelevant here - there is no conveyor to approve anything on.
+Run, using the commands in the project adapter `.claude/pipeline-adapter.md`:
 
-Full contract: `.claude/skills/pipeline/SKILL.md`.
+1. `set_mode` with `talk`.
+2. `show`, then tell the CEO the resulting state in one line.
+
+Rules: `.claude/skills/pipeline/SKILL.md`. No adapter in this project: stop and say so.

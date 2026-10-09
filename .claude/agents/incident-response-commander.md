@@ -5,7 +5,7 @@ model: sonnet
 color: green
 permissionMode: bypassPermissions
 effort: high
-maxTurns: 40
+maxTurns: 100
 tools: Read, Grep, Glob, Bash
 mcpServers:
   - codegraph

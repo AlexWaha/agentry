@@ -5,7 +5,7 @@ model: sonnet
 color: green
 permissionMode: bypassPermissions
 effort: low
-maxTurns: 40
+maxTurns: 100
 tools: Read, Bash, Glob, Grep
 skills:
   - health-check

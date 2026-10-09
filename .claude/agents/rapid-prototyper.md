@@ -7,8 +7,8 @@ permissionMode: bypassPermissions
 experimental:
   cacheTtl: 1h
 effort: medium
-maxTurns: 60
-tools: Read, Write, Edit, Bash, Glob, Grep
+maxTurns: 150
+tools: Read, Write, Edit, Bash, Glob, Grep, SendMessage
 mcpServers:
   - codegraph
 skills:

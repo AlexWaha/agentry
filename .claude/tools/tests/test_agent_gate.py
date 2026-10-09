@@ -323,6 +323,75 @@ def run_agent_gate(profile: str, tool: str, path: str) -> subprocess.CompletedPr
         input=json.dumps(payload).encode("utf-8"), capture_output=True, timeout=30)
 
 
+class PipelineJsonIsOrchestratorOnlyTest(unittest.TestCase):
+    """.agentry/pipeline.json holds the gate settings (allow_push_to_main,
+    approvals_never_granted, the forbidden command lists). A subagent that could
+    write it could switch the gates off, so no profile may, by Write, Edit or Bash."""
+
+    PATHS = (".agentry/pipeline.json", "src/.agentry/pipeline.json",
+             r"src\.agentry\pipeline.json", ".AGENTRY/Pipeline.JSON",
+             ".agentry/pipeline.json.", str(state.ROOT / ".agentry" / "pipeline.json"))
+
+    @staticmethod
+    def _call(handler, tool: str, path: str) -> tuple[int, str]:
+        field = "content" if tool == "Write" else "new_string"
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = handler(tool, {"file_path": path, field: "{}"}, cwd=".")
+        return code, err.getvalue()
+
+    def test_every_profile_is_denied_write_and_edit_on_it(self):
+        for handler in (agent_gate.handle_dev, agent_gate.handle_docs,
+                        agent_gate.handle_readonly):
+            for tool in ("Write", "Edit"):
+                for path in self.PATHS:
+                    with self.subTest(handler=handler.__name__, tool=tool, path=path):
+                        code, _ = self._call(handler, tool, path)
+                        self.assertEqual(2, code)
+
+    def test_the_dev_and_docs_denies_name_the_protected_file(self):
+        for handler in (agent_gate.handle_dev, agent_gate.handle_docs):
+            with self.subTest(handler=handler.__name__):
+                _, err = self._call(handler, "Write", "src/.agentry/pipeline.json")
+                self.assertIn(".agentry/pipeline.json", err)
+                self.assertIn("orchestrator", err)
+
+    def test_a_dev_bash_sed_in_place_on_it_is_denied(self):
+        for command in ("sed -i 's/false/true/' .agentry/pipeline.json",
+                        "sed -i 's/false/true/' src/.agentry/pipeline.json",
+                        "echo '{}' > .agentry/pipeline.json",
+                        "tee .agentry/pipeline.json",
+                        "cp /tmp/x.json src/.agentry/pipeline.json",
+                        "bash -c \"sed -i s/a/b/ .agentry/pipeline.json\""):
+            with self.subTest(command=command):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    code = agent_gate.handle_dev("Bash", {"command": command}, cwd=".")
+                self.assertEqual(2, code, command)
+                self.assertIn(".agentry/pipeline.json", err.getvalue())
+
+    def test_docs_and_readonly_bash_writes_are_denied_with_the_protected_file_reason(self):
+        for handler in (agent_gate.handle_docs, agent_gate.handle_readonly):
+            with self.subTest(handler=handler.__name__):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    code = handler(
+                        "Bash", {"command": "sed -i 's/a/b/' .agentry/pipeline.json"}, cwd=".")
+                self.assertEqual(2, code)
+                self.assertIn(".agentry/pipeline.json", err.getvalue())
+
+    def test_reading_it_and_writing_its_siblings_stay_open(self):
+        self.assertEqual("", agent_gate.writes_protected_state("cat .agentry/pipeline.json"))
+        for path in (".agentry/pipeline.json.bak", ".agentry/pipeline.jsonl",
+                     ".agentry/plans/pipeline.json", ".agentry/specs/spec-0001.md"):
+            with self.subTest(path=path):
+                self.assertFalse(agent_gate.is_protected_state(path), path)
+
+    def test_the_main_thread_gate_does_not_use_this_predicate(self):
+        # The orchestrator runs pretool_gate, never agent_gate, and keeps write access.
+        self.assertEqual(0, pretool_gate.handle_edit(".agentry/pipeline.json", "{}"))
+
+
 class DocsProfileRootClaudeMdTest(unittest.TestCase):
     """task-0075: the technical-writer owns the root CLAUDE.md and was denied it,
     while the orchestrator gate allowed it. The fix must ADD that one file, not
@@ -414,7 +483,7 @@ class DocsProfileProtectedStateTest(unittest.TestCase):
         proc = run_agent_gate("docs", "Write", ".agentry/state/trunk_push")
         stderr = proc.stderr.decode("utf-8", "replace")
         self.assertIn("is under .agentry/state/", stderr)
-        self.assertIn("Report the level or mode change you need to the orchestrator", stderr)
+        self.assertIn("Report the change you need to the orchestrator", stderr)
         self.assertNotIn("outside that scope", stderr)
         self.assertNotIn("approvals.py", stderr)
 

@@ -11,6 +11,9 @@ Does, in order, all fail-open:
      directory (os.scandir) and removed by bash (`rm -f`), the same tool
      hooks/cleanup-nul.sh uses. An exists()-based guard would fire at the
      reserved device every session. Failures are printed, not swallowed.
+  1.5 Print every pipeline dial that is not at its default (mode, approvals,
+     swarm) and, with the swarm on, the resume note of each in-flight umbrella
+     task (.agentry/tasks/swarm/<task>/resume.md).
   2. Print the pipeline resume summary (in-flight runs from state.py).
   3. Sync the codegraph index (one status line; silent skip if CLI absent).
   3.5 Module-map drift check (tools/memory/codebase_sync.py --check): silent
@@ -157,9 +160,12 @@ def codebase_memory_check() -> None:
 
 
 def pipeline_mode() -> None:
-    """Announce a non-default mode so a forgotten switch never stays silent."""
+    """Announce every dial that is not at its default (mode, approvals, swarm) so
+    a forgotten switch never stays silent, and, with the swarm on, point at the
+    resume note of each in-flight umbrella task."""
+    sys.path.insert(0, str(CLAUDE_DIR / "tools" / "pipeline"))
+    # One try per dial: an ImportError in one module must not silence the others.
     try:
-        sys.path.insert(0, str(CLAUDE_DIR / "tools" / "pipeline"))
         import mode
 
         current = mode.read()
@@ -168,9 +174,46 @@ def pipeline_mode() -> None:
         # would otherwise be told it is in a non-default mode on every start.
         if current != mode.default():
             print(f"pipeline mode: {current} - {mode.describe(current)}. "
-                  f"Switch back with: /pipeline {mode.default()}")
+                  f"Switch back with: /pipeline-{mode.default()}")
     except Exception:
         pass
+    try:
+        import approvals
+
+        level = approvals.read()
+        if level != approvals.MANUAL:
+            print(f"pipeline approvals: {level} - {approvals.DESCRIPTIONS[level]}. "
+                  f"Switch back with: /pipeline-approvals-{approvals.MANUAL}")
+    except Exception:
+        pass
+    try:
+        import swarm
+
+        flag = swarm.read()
+        if flag != swarm.OFF:
+            print(f"pipeline swarm: {flag} - {swarm.DESCRIPTIONS[flag]}. "
+                  f"Switch back with: /pipeline-swarm-{swarm.OFF}")
+            swarm_resume_notes()
+    except Exception:
+        pass
+
+
+def swarm_resume_notes() -> None:
+    """With the swarm on, the path of `.agentry/tasks/swarm/<task>/resume.md` for
+    every run still in flight whose note exists: that note is how a swarm
+    survives a restart, and the session must be told it is there."""
+    import state
+
+    conn = state.connect()
+    try:
+        live = [r["task"] for r in state.all_runs(conn) if r["stage"] != "done"]
+    finally:
+        conn.close()
+    for task in live:
+        note = ROOT / ".agentry" / "tasks" / "swarm" / task / "resume.md"
+        if note.is_file():
+            print(f"swarm resume note for {task}: .agentry/tasks/swarm/{task}/resume.md "
+                  f"- read it before relaunching or briefing any agent")
 
 
 def main() -> int:
