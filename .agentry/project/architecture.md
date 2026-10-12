@@ -178,7 +178,8 @@ folder under `.claude/tools/` without CEO approval.
 
 | Path | Contents | Committed |
 |---|---|---|
-| `.agentry/state/run.db` (`run.<lane>.db` per lane) | One row per run, plus the append-only gate log | No |
+| `.agentry/state/run.db` (`run.<lane>.db` per lane) | One row per run (current state only) | No |
+| `.agentry/state/events.db` (one per workspace) | The append-only event journal: transitions, gate runs, approvals, rejections, merges (history; only `supervisor.progress_at` reads it, and only to veto a relaunch; no gate reads it) | No |
 | `.agentry/memory/memory.db` | `lesson`, `pattern` and `module` rows with an FTS5 index | No |
 | `.agentry/tasks/` | Task files; the folder is the state | Yes |
 | `.agentry/pipeline.json` | Stage machine, gates, repos, lanes, supervisor limits | Yes |

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import re
+import shlex
 import unittest
 from pathlib import Path
 
@@ -39,6 +40,13 @@ PERMISSION_MODE = "bypassPermissions"
 # NFR-5 forbids em dash and en dash everywhere. Built from codepoints, never
 # written literally, so this file passes the same gate it pins.
 FORBIDDEN_DASHES = (chr(0x2014), chr(0x2013))
+
+# task-0116 D3: agent -> (gate profile, the tools its hook line names with --allow-script).
+ALLOW_SCRIPT_AGENTS = {
+    "performance-benchmarker": ("readonly", ("k6", "lighthouse", "npx")),
+    "evidence-collector": ("readonly", ("playwright", "npx")),
+    "accessibility-auditor": ("readonly", ("axe", "lighthouse", "pa11y", "npx")),
+}
 
 # FR-57: cacheTtl on exactly these eight and no others.
 CACHE_TTL_AGENTS = {
@@ -199,6 +207,24 @@ class AgentFrontmatterTest(unittest.TestCase):
                 self.assertEqual(
                     _scalar(text, "maxTurns"), str(MAX_TURNS[profile.group(1)]),
                 )
+
+    def test_allow_script_flags_are_on_exactly_the_three_named_readonly_agents(self):
+        # task-0116 D3: the readonly and docs profiles are default-deny on Bash, and
+        # the measuring agents get their tools by name on the hook line. A fourth
+        # agent growing a flag, or one of these losing it, is a change the CEO decides.
+        found = {}
+        for name, text in self.agents.items():
+            command = re.search(r"command: '(.*agent_gate\.py.*)'", text)
+            self.assertIsNotNone(command, name)
+            tokens = shlex.split(command.group(1))
+            flags = [tokens[i + 1] for i, tok in enumerate(tokens) if tok == "--allow-script"]
+            if flags:
+                found[name] = (tokens[tokens.index("--profile") + 1], tuple(flags))
+        self.assertEqual(ALLOW_SCRIPT_AGENTS, found)
+        for name, (_, flags) in found.items():
+            for flag in flags:
+                with self.subTest(agent=name, flag=flag):
+                    self.assertRegex(flag, r"^[a-z0-9][a-z0-9._-]*$")
 
     def test_cache_ttl_is_on_exactly_the_eight_named_agents(self):
         present = {n for n, t in self.agents.items() if "cacheTtl" in t}

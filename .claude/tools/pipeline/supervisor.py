@@ -45,6 +45,9 @@ LOOPING  two readings, both of `continuations` growing while `stage` does not:
 DEAD     a session THIS supervisor spawned has exited while its run still sits
          in the stage it was spawned for, or the session that recorded the
          dispatch for this stage has exited. Process liveness, not a clock.
+         Exception (task-0101): an exited spawn whose busy marker is still owned
+         by a live session (an engaged dispatch) is not DEAD; it goes to the
+         HUNG check and answers HEALTHY or HUNG, so nothing is relaunched.
          The second half is the one the registry alone could never see: a
          session the supervisor did not spawn has no pid in it. The busy marker
          WAS no help here - `advance.py --busy` recorded the pid of the
@@ -78,8 +81,9 @@ STALLED  in flight, nothing above applies, the STAGE has not changed for
          `stall_seconds`, and nothing has written `continuations` for that long
          either - a stage frozen with a RECENT nag behind it is a live session,
          answered HEALTHY with no action.
-         This is the one label with a clock in it, which is
-         why it is one of four rather than the whole detector. The clock reads
+         This is the one label whose clock decides it outright (HUNG has a clock
+         too, hung_seconds, but only reports), which is
+         why it is one of five rather than the whole detector. The clock reads
          the supervisor's own record of when the stage changed, NOT the run
          row's `updated` column - see stage_age() for the defect that
          distinction fixes.
@@ -1025,7 +1029,8 @@ def progress_at(task: str) -> tuple[float | None, str]:
     the Stop hook writes to count its own nags and so cannot tell a worker from
     an idle session being nagged (see FREQUENCY WAS RETIRED):
 
-    1. the gate log - a row means a stage gate really ran;
+    1. the gate log (the `gate` rows of the event journal) - a row means a stage
+       gate really ran;
     2. the task file's mtime - the task was edited (criteria ticked, sections
        filled);
     3. the working tree - the newest mtime among the files the task's repo(s)
@@ -1048,12 +1053,11 @@ def progress_at(task: str) -> tuple[float | None, str]:
             best = (at, source)
 
     try:
-        conn = state.connect()
-        try:
-            found = conn.execute("SELECT max(at) FROM gate_log WHERE task = ?", (task,)).fetchone()
-        finally:
-            conn.close()
-        newer(parse_updated(found[0]) if found else None, "the gate log")
+        # The event journal (events.py) holds the gate runs now. Evidence only: a
+        # forged row can make a run look alive (HEALTHY instead of STALLED, which
+        # vetoes a relaunch) or HUNG-silent (a report), and a missing row changes
+        # nothing. It can never trigger an action.
+        newer(parse_updated(state.last_event_at(task, "gate")), "the gate log")
     except Exception:
         pass
     try:
@@ -1208,9 +1212,20 @@ def classify(run: dict, entry: dict, cfg: dict, now_ts: float) -> tuple[str, str
                          f"was written {int(climb_age)}s ago and now stands at {cont}: "
                          f"something is still turning over after the session we spawned "
                          f"ended, so it is parked rather than relaunched")
-    if alive:
+    # A busy marker for THIS stage outranks the spawn registry when it speaks
+    # for a live dispatch (task-0101, M-B). `dead` and `alive` are read from the
+    # pid this process spawned, before the marker was consulted, so an exited
+    # spawn with a live owned marker and recent progress read DEAD (a second
+    # writer on a live tree), and a live spawn that had made no progress could
+    # never read HUNG. Such a run is handed to the HUNG check below, which
+    # answers HEALTHY with the progress source or HUNG, and relaunches nothing.
+    # An abandoned record (expired, no owner, not driven) speaks for nobody, and
+    # a FRESH or EXPIRED record that names no owner cannot overrule an exited
+    # spawn, so neither changes the answer here.
+    engaged = dispatched and not abandoned
+    if alive and not engaged:
         return HEALTHY, f"supervisor-spawned session pid {pid} is alive"
-    if dead:
+    if dead and not (dispatched and marker.owner_pid):
         return DEAD, (f"supervisor-spawned session pid {pid} exited with the run still at "
                       f"stage '{stage}' (spawned for that stage)")
     if owner_gone:
@@ -1240,9 +1255,9 @@ def classify(run: dict, entry: dict, cfg: dict, now_ts: float) -> tuple[str, str
         started = marker.started if dispatched and 0 < marker.started <= now_ts else None
         since = started if started is not None else (now_ts - age if stalled else now_ts)
         quiet = now_ts - since
-        seen, source = (None, "")
+        seen, seen_source = (None, "")
         if quiet >= hung:
-            seen, source = progress_at(run.get("task") or "")
+            seen, seen_source = progress_at(run.get("task") or "")
             if seen is not None:
                 quiet = min(quiet, max(0.0, now_ts - seen))
         what = (f"a dispatch recorded {int(now_ts - started)}s ago for stage '{stage}' (busy "
@@ -1258,7 +1273,7 @@ def classify(run: dict, entry: dict, cfg: dict, now_ts: float) -> tuple[str, str
                           f"on it, so it is never relaunched, parked or interrupted")
         if dispatched and quiet < hung:
             return HEALTHY, (f"{what}; " + (
-                f"progress seen {int(now_ts - seen)}s ago in {source}" if seen is not None
+                f"progress seen {int(now_ts - seen)}s ago in {seen_source}" if seen is not None
                 else f"it is reported HUNG only after {int(hung)}s without progress"))
     if stalled and driven:
         # A FROZEN STAGE WITH A RECENT NAG IS NEITHER RELAUNCHED NOR PARKED, and
@@ -1388,7 +1403,8 @@ def park_blocked(task: str, reason: str) -> bool:
         try:
             if state.get_run(conn, task) is None:
                 return False
-            state.set_fields(conn, task, stage_status=state.ST_BLOCKED)
+            state.set_fields(conn, task, stage_status=state.ST_BLOCKED,
+                             reason=f"supervisor: {reason}")
         finally:
             conn.close()
     except Exception:

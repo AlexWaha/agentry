@@ -101,7 +101,7 @@ class TrunkPushMarkerStillWorksTest(unittest.TestCase):
     def test_the_marker_allows_one_trunk_push_and_is_spent(self):
         with task_branch_checked_out({"task-9111": {}}) as repo, flag(False):
             marker = approve_trunk()
-            self.assertEqual(0, pretool_gate.handle_bash("git push origin main", cwd=repo.path))
+            self.assertEqual(0, pretool_gate.handle_bash("git push origin main", cwd=repo.path, orch=True))
             self.assertFalse(marker.exists())
             code, err = denial_reason("git push origin main", repo.path)
         self.assertEqual(2, code)
@@ -110,7 +110,7 @@ class TrunkPushMarkerStillWorksTest(unittest.TestCase):
     def test_with_the_flag_on_the_marker_is_still_spent_by_its_own_push(self):
         with task_branch_checked_out({}) as repo, flag(True):
             marker = approve_trunk()
-            self.assertEqual(0, pretool_gate.handle_bash("git push origin main", cwd=repo.path))
+            self.assertEqual(0, pretool_gate.handle_bash("git push origin main", cwd=repo.path, orch=True))
             self.assertFalse(marker.exists())
 
     def test_the_marker_is_ignored_in_pr_mode_with_the_flag_off(self):

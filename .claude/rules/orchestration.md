@@ -355,7 +355,7 @@ narrowed them - see below:
 each side costs is not.
 
 **The second bullet's park is per STAGE.** `continuations` is zeroed on every
-stage transition by `advance.py` and by `approve.py --reject`, so the hour is an
+stage transition by `advance.py` and by `approve.py --reject --reason "<why>"`, so the hour is an
 hour per stage, and a task that keeps advancing never accumulates towards the
 park at all.
 
@@ -374,7 +374,7 @@ bite:
   cannot see: a reason that CHANGES between stops, where the repeat count resets
   and only the per-stage budget accumulates.
 - **Recovery got more expensive, so the park is not free noise.** The only exit
-  from `blocked` is `approve.py --reject`, which returns the task to `implement`
+  from `blocked` is `approve.py --reject --reason "<why>"`, which returns the task to `implement`
   (to `plan` when the block happened before the plan approval) and clears
   `commit_approved`. A park at `review` therefore costs two stages of
   rework; a park at `ready` costs an approval the CEO had already given. That
@@ -458,7 +458,7 @@ task that fixes it.
 
 **Known gap, do not paper over it:** `run.db` has no paused state. `blocked` is
 reachable only by exhausting the retry budget, editing `run.db` by hand is
-forbidden, `approve.py --reject` moves a task the wrong way (to `implement`), and
+forbidden, `approve.py --reject --reason "<why>"` moves a task the wrong way (to `implement`), and
 `stop_gate.decide()`'s in-flight branch outranks its drift reconciler, so moving
 the file back to `backlog/` does not quiet the hook either. task-0059 closed
 this gap: pause a preempted run with `approve.py --task task-XXXX --pause
@@ -542,12 +542,76 @@ This project's specifics:
   are open. When the umbrella reaches `done`, `state.move_swarm_subtasks()`
   moves every listed subtask still in `backlog/` or `active/` whose `epic:`
   matches, from `advance.py` and from the Stop hook's drift reconciler alike;
-  an unlisted subtask stays.
+  an unlisted subtask stays. The sweep happens only when the umbrella's run row
+  has `commit_approved` set, and a move never overwrites an existing
+  destination file (task-0121).
+- **Umbrella debt.** Handoff and memory-stamp debt is owed by the umbrella task
+  alone. A done subtask whose covering umbrella (same non-empty `epic:`, listed in
+  its `subtasks:`) is itself debt-checked is skipped by `handoff.py` and
+  `memory/update.py`, so one handoff doc and one stamp for the umbrella cover all
+  of its subtasks and no per-subtask waiver is needed. The umbrella's own debt is
+  still reported. `git_state.task_in_main` now matches the `[task-N]` tag only at
+  the start of a commit message line: write `[task-N] feat: work`, not
+  `feat: work [task-N]`.
 - **State folder.** `.agentry/tasks/swarm/task-<epic>/` holds the board, the
   agent id map, `resume.md`, the QA notes and reports. It is not
   `.agentry/state/`, because the dev profile is denied every write there.
   SessionStart prints the path of `resume.md` for each in-flight umbrella task
   while the dial is on.
+- **Zones (task-0060).** The board carries a `## Zones` table (`| zone | paths |`;
+  a zone id like `0060-S2`, paths comma-separated, each an exact repo-relative
+  path or a trailing `dir/**`; a mid-path glob, `*.md`, trailing `/`, `..`, an
+  absolute path or a bare `**` is rejected). Before the first wave the
+  orchestrator freezes it with `python .claude/tools/pipeline/zones.py --prove
+  --task task-<epic>`: exit 0 frozen, 1 refused with the overlaps named, 2
+  usage; it also refuses when the task is not at `implement` or `test`. Shared
+  files (`swarm.shared_paths` in `pipeline.json`, else the in-code default) must
+  be named exactly in one zone or in none; a zone glob that covers one without
+  naming it is refused. Every dispatch prompt then carries a `Swarm zone: <id>`
+  line, and `agent_gate.py` reads it from the agent's own transcript file
+  (`<session>/subagents/agent-<agent_id>.jsonl`, line 1; measured on Claude Code
+  2.1.295 in `docs/technical/agent-identity-2.1.295.md`). While a frozen map is in
+  force at `implement` or `test`, a dev-profile agent writes only inside its own
+  zone, a zone's own directory (`chmod -R app/a`), `<root>/tmp/**` and the swarm
+  state folder `.agentry/tasks/swarm/<map's task>/**`; no zone
+  line means no write at all, and an unreadable or malformed map denies. Zoned
+  and unzoned agents alike are denied the git rewrites `checkout`, `switch`,
+  `stash`, `reset`, `restore`, `clean`, `apply`, `am`, `merge`, `rebase`,
+  `cherry-pick`, `revert`, `pull`, `rm` and `mv` (`git stash list|show` stays
+  allowed). `qa-engineer` at the `test` stage needs its own `Swarm zone:` line
+  to write at all. Every zoned agent can append to the board and write QA reports
+  in the swarm state folder of the map's task, resolved under the workspace root
+  like `.agentry`; task files, `done/`, handoffs and the swarm folder of any other
+  task stay denied. The readonly and docs profiles are not
+  zone-gated. Not covered: an
+  interpreter one-liner, a script the agent wrote and `npm install` writes, and
+  these writers, which QA verified are allowed across zones: `touch`, `dd of=`,
+  `install`, `rsync`, `curl -o`, `wget -O`, `patch`, `perl -pi`, `awk -i inplace`,
+  `ed`, `sed` with a `w` file, `sort -o`, `tar -x`, `unzip -d`, `find -delete` and
+  `find -exec`, `git clone`, `git read-tree -u`, `git checkout-index -f -a`,
+  `git sparse-checkout`, `git worktree add` and `git diff --output`. Zones are a
+  tripwire against mistakes, not a boundary against a hostile dev agent.
+  Agent identity (the `Swarm zone:` line read from the agent's own transcript)
+  was measured only for a headless foreground dispatch. Before wave 1, dispatch
+  ONE zoned agent in the background and confirm its zone write succeeds; only
+  then launch the wave. To unfreeze a frozen map (a finished or abandoned
+  wave, a corrected board), run `python .claude/tools/pipeline/zones.py
+  --release --task T`. It is orchestrator-only: a dispatched agent cannot
+  release the map that binds it.
+- **One agent per zone, one writer for the shared set (task-0060).** The
+  serialization rule above ("one task in an editing stage") exists because one
+  working tree gives no way to know two agents will not collide. A proven
+  disjoint zone map replaces that guess with a check, so the rule relaxes
+  exactly as far as the proof reaches: one agent per zone, and exactly one writer
+  for each shared-set file (the zone that names it exactly, or none). Two agents
+  given the same `Swarm zone:` line are not detected; the proof covers the map,
+  not the assignment, so the orchestrator gives each id to one agent.
+- **A failed zone leaves the others alone (task-0060).** When one zone's agent
+  fails or stops mid-wave, the other zones are untouched: the tree is shared,
+  there is no rollback, and sibling work stays. The orchestrator reports which
+  zone failed (the deny text and the board name it) and relaunches that agent
+  with the continue-from-partial template. A zoned agent cannot revert other
+  zones' files, because git rewrites are denied.
 - **One suite run, in the exit gate.** The full suite runs once, in the
   test-stage exit gate that the orchestrator drives through `advance.py`.
   `gates.dev_forbidden_commands` denies it to every dev-profile agent, the QA
@@ -573,8 +637,11 @@ rules that govern the orchestrator's own tool calls also govern the agents:
 | Profile | Agents | Enforced |
 |---------|--------|----------|
 | `dev` | senior-backend-dev, senior-frontend-dev, qa-engineer, devops-engineer, data-engineer, rapid-prototyper | commit/push approval flags, protected-branch push deny, review-stage edit freeze, no force push, no `approve.py`, no test-suite runs (`gates.dev_forbidden_commands` - the full suite runs once, in the test-stage exit gate the orchestrator drives through `advance.py`; agents run narrowed runs only) |
-| `readonly` | architect, reviewer, security-engineer, evidence-collector, performance-benchmarker, ai-detector, accessibility-auditor, incident-response-commander | Edit/Write denied; mutating Bash (git writes, rm/mv/cp, redirects, sed -i, installers) denied |
-| `docs` | technical-writer, product-manager, spec-developer, sprint-prioritizer, content-manager, content-writer, editor, humanizer, seo-specialist, geo-specialist, business-analyst, financial-analyst, marketing-strategist, brand-guardian, ux-researcher, ux-ui-designer, feedback-synthesizer | Edit/Write only under `.claude/`, `.agentry/`, `docs/`, README; mutating Bash denied |
+| `readonly` | architect, reviewer, security-engineer, evidence-collector, performance-benchmarker, ai-detector, accessibility-auditor, incident-response-commander | Edit/Write denied; Bash default-deny on the program name plus a per-program flag allowlist (below); any gate crash denies |
+| `docs` | technical-writer, product-manager, spec-developer, sprint-prioritizer, content-manager, content-writer, editor, humanizer, seo-specialist, geo-specialist, business-analyst, financial-analyst, marketing-strategist, brand-guardian, ux-researcher, ux-ui-designer, feedback-synthesizer | Edit/Write only under `.claude/`, `.agentry/`, `docs/`, README, never the live `.claude/rules\|skills\|commands` or a `.git` path; Bash default-deny as `readonly`; any gate crash denies |
+
+Every profile: no write to any `.git` path; a crash in the `dev` gate allows the
+call (see "Gate crash" below).
 
 The MAIN THREAD carries its own profile: `orchestrator_gate` in `pipeline.json`
 (enforced by `pretool_gate.py`) denies orchestrator Edit/Write and shell
@@ -585,6 +652,162 @@ orchestrator itself - is now deterministically scoped.
 gate. Recording a CEO approval is the one action that must never be delegated.
 Dev agents additionally get a PostToolUse `dangerous_patterns.py` warning pass
 on every Edit/Write (debug/dangerous calls surface immediately, review decides).
+
+These hooks read the command text. They are tripwires with one real boundary
+(default-deny on the readonly and docs profiles) and one explicit hole (the dev
+profile). What each layer does and does not cover (task-0116):
+
+- **File tools (Write, Edit, MultiEdit, NotebookEdit), every profile.**
+  `.agentry/state/**`, `.agentry/pipeline.json` and the live harness are refused
+  by where the path RESOLVES: realpath, NTFS stream suffix removed, 8.3 names,
+  junctions, case, the payload cwd, and a hard link to `pipeline.json` (by
+  `samefile`). Spelling does not matter.
+- **Live harness, every non-orchestrator writer.** `<project root>/.claude/tools/**`,
+  `.claude/rules/**`, `.claude/skills/**`, `.claude/commands/**`,
+  `.claude/settings*.json`, `.claude/agents/*.md` and `.mcp.json` cannot be
+  written by a file tool or by an explicit-path Bash command (redirect, `tee`,
+  `sed -i`, `cp`, `mv`, `rm`, a glob, an earlier `cd` in the same command).
+  Harness edits are made in the `src/` checkout (`src/.claude/...` stays
+  writable, CEO decision D4) and deployed by the orchestrator.
+- **Any `.git` path, every profile.** A path with a `.git` component (any repo,
+  the gitfile, `.git.` and `.GIT` spellings) is refused to file tools and to
+  explicit-path Bash writes (including `cd .git && ...`). `.gitignore` and
+  `.github/` stay writable. `rm .git/index.lock` goes to the orchestrator.
+- **readonly and docs profiles, Bash: default-deny.** `program_hit` runs FIRST
+  (`check_program`); the lexical checks run afterwards only to name the boundary
+  also crossed. A simple command runs only if its argv0 is on
+  `agent_gate.ALLOWED_PROGRAMS` (read-only utilities, `git`, `codegraph`) or it
+  is `python` running one of `ALLOWED_SCRIPTS` from `<root>/.claude/tools/`.
+  Each listed program also has a flag allowlist (`FLAG_SPECS`; `find` predicates,
+  `codegraph` read commands); a flag not named is refused, long options match by
+  whole name, and a listed program with no spec fails closed. Further rules:
+  no `NAME=value` prefix in front of any program (a standalone assignment is
+  allowed only to a new lower-case name); no shell expansion (`$x`, `${x}`,
+  `$(..)`, backtick, leading `{`) in the arguments of find, sort, uniq, rg, git,
+  codegraph, date, file, hostname and diff (after a bare `--` it is allowed for
+  sort, rg, git, codegraph, file and diff); git runs only the read-only subcommand
+  set. `python -c`, `python -`, `python -m` of a non-harness module, a script the
+  agent wrote, `node`, `awk`, `perl`, `dd`, `curl`, `sed`, `tar`, `tee`, `xargs`
+  as a wrapper for an unlisted command, and `bash -c` are refused in any spelling.
+  An agent that needs a tool gets it by name on its own hook line,
+  `--allow-script NAME` (today: performance-benchmarker `k6,lighthouse,npx`;
+  evidence-collector `playwright,npx`; accessibility-auditor
+  `axe,lighthouse,pa11y,npx`). A name grants the whole program, so `npx` can
+  install and run any package. An unparseable command is denied with its own text.
+- **Gate crash.** For readonly and docs, an exception while checking a call denies
+  Bash and the four file tools (`FAIL_CLOSED_MSG`); reads and web tools stay
+  allowed. The `dev` profile stays fail-open on a crash, on purpose: its job is
+  running code, a gate bug must not brick the agent that builds the harness, and
+  its commit and push are behind the approval gates. A crash in the main-thread
+  gate also stays open for the orchestrator, but denies a subagent call.
+- **Trunk push marker.** Only the orchestrator may use the `trunk_push` marker.
+  A subagent push that names a trunk branch is denied before the marker, the
+  remote or `allow_push_to_main` is read. The orchestrator spends the marker
+  atomically (`os.replace` to a `.spent-<uuid>` file) before the push is allowed;
+  if it cannot be spent, the push is denied.
+- **A command over the scan budget** (`pretool_gate.too_complex`) is refused in
+  every profile, never allowed; the deny says it is too complex to check.
+- **Orchestrator gate.** Heredoc bodies and quoted arguments are data; a body is
+  read as code only when a shell consumes it.
+
+**NOT COVERED - do not rely on it:**
+
+- **Dev `git config` and dev crashes.** A dev agent may still run
+  `git config <key> <value>`, so `.git/config` (`core.hooksPath`,
+  `core.fsmonitor`, `alias.*`) stays writable through git itself, despite the
+  `.git/**` path rule. The dev profile also stays fail-open when its gate
+  crashes. Both belong to the accepted dev residual (CEO D1(a)).
+
+- **The dev profile.** A dev agent runs code, so `python -c`, `python - <<EOF`, a
+  script it wrote, `python -m`, `node -e`, `awk`, `perl` and `dd` can write
+  `.agentry/pipeline.json` and `.agentry/state/*` (approvals level, `trunk_push`,
+  run flags) and pass the gate with exit 0. `tests/test_subagent_enforcement.py`
+  pins those spellings at exit 0. The `test` exit gate also runs agent-written
+  test code as the orchestrator, outside every hook. Dev interpreters are
+  therefore an open hole, not a gap awaiting a fix.
+- **No off-box bound.** The CEO declined GitHub branch protection (D2) and the
+  project stays in `solo` mode. A forged `trunk_push` followed by a push to
+  `main` is stopped only by the commit and push approval gates and the
+  never-granted list, and detected by the CEO reading the diff at the commit
+  checkpoint.
+- **`npx` and any named program.** `--allow-script npx` lets that agent install
+  and run any package from the registry.
+- **readonly and docs git** is default-deny and read-only (FX-3, SEC-A,
+  task-0120). Only the subcommands in `agent_gate.GIT_READ_SUBS` run (`branch`
+  and `stash` in listing form only), and only with allowlisted options; global
+  `-c`, `--config-env`, `-p`, `--paginate` and any `NAME=value` prefix
+  (`GIT_*`, `PAGER`, `EDITOR`, `VISUAL` included) are refused. `config`, `tag`,
+  `checkout`, `archive`, `bundle`, `apply`, `update-ref` and the rest are
+  refused as subcommands.
+- **dev git** stays open, but its file-naming options are checked against
+  protected paths (FX-3b, task-0120). `--output`, `--output-directory`,
+  `--export-marks`, `config --file`, `-o` of `archive`, `format-patch` and
+  `index-pack`, and the file of `bundle create` are resolved like a redirect
+  target (`-C` and an earlier `cd` included) and the command is refused when the
+  target is `.agentry/state/**`, `.agentry/pipeline.json` or the live harness,
+  or cannot be resolved (`$VAR`, a substitution, `~`, no value), or when a
+  `-c`, `--config-env`, `--work-tree`, `--git-dir` option or a `GIT_*`
+  assignment may have moved the working tree. A working file such as
+  `git format-patch -o tmp/p` is allowed. Not covered: a git command that writes
+  paths named inside its input (`apply`, `am` or `checkout-index` of a patch the
+  agent wrote, `checkout`, `restore`, `reset --hard`; the `.git` rule is
+  path-based and does not see them), and `core.worktree`, an alias or an include
+  set earlier with `git config`.
+- **Directory-level operations** (`rm -r .agentry`, `.claude`), and a glob that
+  expands to a file NAMED like an option (`sort *` beside a file called
+  `--output=x`, which a docs agent can create). In readonly and docs every
+  allowlisted program's flags are read (`FLAG_SPECS`); in the other profiles only
+  `memory.py --out`/`--db` and the git file-naming options above are.
+- **Built-in agents without the frontmatter hook** get only the settings-level
+  gate: its Write/Edit deny on the live harness, no Bash allowlist.
+- **Windows 8.3 short names** are not measured on this volume (E: has none); the
+  mechanism was checked on C:, and its test skips here.
+- **Capability cost.** A docs agent can no longer run a generator script it
+  wrote (the pitch-deck skill's `docs/presentations/scripts/generate_pitch.py`);
+  the orchestrator or a dev agent runs it until the CEO decides on a vetted
+  generator under `.claude/tools`. Also lost to readonly and docs agents:
+  - Flags: sort `-o --output --compress-program -T --parallel --files0-from`;
+    rg `--pre --pre-glob -z --search-zip --hostname-bin --generate`; find
+    `-exec -execdir -ok -okdir -delete -fprint* -fls -files0-from`; file `-C -z
+    -Z --compile --uncompress`; date `-s --set` and any operand not starting with
+    `+`; diff `-l --paginate`; tail `-f -F --follow --pid --retry`; a second
+    uniq operand; wc and du `--files0-from`; hostname with an operand; `printf
+    -v`; `ls --hyperlink`; and any GNU option not on a list until someone adds it.
+  - Prefixes: every `NAME=value` prefix, so `PIPELINE_LANE=x python state.py
+    --show` and `env X=y cmd` are refused.
+  - Expansions: `git diff $(git merge-base HEAD main)`, `sort "$f"`, `find $dir`,
+    `rg "$term" docs` are refused; run the inner command first and paste its
+    output, or use `rg -- "$term" docs`.
+  - Also refused: codegraph `init`, `index`, `sync`, `serve` and the other
+    writing commands; `zones.py --prove` and `--release` for every subagent.
+- **Swarm zones** (see "Swarm mode") bind the dev profile only, and inherit the
+  interpreter and `npm install` holes above.
+
+### Deploying a harness change from `src` to the live workspace
+
+The scripts import each other at module top: `agent_gate.py` imports `zones`,
+`approve.py` reads `pretool_gate.TRUNK_PUSH_DEFAULT_REMOTE` at import, `gate.py`
+needs `state.emit_gate`, and `pretool_gate` denies every push without
+`leak_guard.py`. A hook that fails to import exits 1, which is non-blocking, so
+a wrong copy order silently switches the subagent gates off. Copy in this order:
+
+1. New modules first: `events.py`, `zones.py`, `leak_guard.py`.
+2. Then `state.py`.
+3. Then the other pipeline and memory scripts, except `approve.py`.
+4. Then `pretool_gate.py`, then `agent_gate.py`, then `agents/*.md`.
+5. Then `approve.py` (it reads `pretool_gate` at import), together with the
+   adapter's `--reason` change.
+6. Rules go together with `settings.json` (the chunk wiring must match the rule
+   sizes).
+7. Run `git config core.hooksPath .githooks` in `src`.
+8. Run any live-store memory reconciliation the task names (for example
+   `memory.py --refine ... --why ... --trigger ...` and `--retire ...`),
+   confirm with `memory.py --query`, and record the result in the task Notes.
+
+General rule: copy every script before any `settings.json` edit, because hook
+wiring reloads live. Before editing settings, verify with `python -m
+compileall` over `.claude/tools` and an import smoke test of every hook script
+(import each one and confirm exit 0).
 
 ## Deferred: Agent Teams
 
@@ -597,9 +820,29 @@ the pipeline above does not depend on it.
 
 A `blocked` task (gate failed past budget, unconfigured gate, or stuck past the
 continuation ceiling) is surfaced to the CEO and never auto-retried. The CEO
-fixes the blocker or rejects; then `approve.py --reject` sends it back to
-`implement` to retry cleanly (to `plan` if it was blocked before the plan
-approval).
+fixes the blocker or rejects; then `approve.py --reject --reason "<why>"` sends
+it back to `implement` to retry cleanly (to `plan` if it was blocked before the
+plan approval). The reason is required (a bare `--reject` exits 2 and writes
+nothing) and is journaled with the rejection.
+
+## Event journal
+
+History lives in `.agentry/state/events.db` (SQLite, WAL), written by
+`tools/pipeline/events.py` through `state.py`, `gate.py`, `advance.py`,
+`approve.py`, `stop_gate.py` and `supervisor.py`. One row per registration,
+stage transition, gate result (command, exit status, duration; never the gate
+output), park, block, approval, rejection (with its reason), continuation,
+pause, resume, merge and close. Read it with
+`python .claude/tools/pipeline/events.py --task T` (one task) or `--summary
+[--since DATE]` (all tasks); both print JSON. Handoff authors run the `--task`
+form instead of reconstructing a task's history by hand.
+
+`gate_log` in `run.db` is retired: nothing writes it, and an old store keeps its
+table and rows untouched (the journal copies them on its first creation). The
+journal is a report. Only `supervisor.progress_at` reads it, and only to veto a
+relaunch (recent gate evidence keeps a run HEALTHY); no gate reads it. A failed
+write prints
+`[event-skipped]` to stderr instead of failing the command that caused it.
 
 ## What the model must never do
 

@@ -193,6 +193,42 @@ class PathQualifiedNulStaysDeniedTest(unittest.TestCase):
         self.assertEqual("", pretool_gate.redirect_write_target(f"make 2>{unix_null}"))
 
 
+class NulColonIsOnlyCaughtByTheTextNetTest(unittest.TestCase):
+    """task-0108 (task-0102 review L2). NUL_REDIR_RE is a second net behind the
+    fragment loop of check_bare_nul(), and `ls>NUL:` is the one spelling ONLY it
+    catches: the loop reports the target `NUL:`, whose last path component is
+    not `nul`. Delete the net and this is the test that goes red."""
+
+    COLON = ("ls>NUL:", "ls >NUL:", "ls 2>nul:", "ls ->NUL:", "ls>>Nul:")
+
+    def test_the_fragment_loop_alone_does_not_see_it(self):
+        for command in self.COLON:
+            with self.subTest(command=command):
+                targets = [pretool_gate.redirect_target(f).strip("'\"`)")
+                           for f in pretool_gate.redirect_write_fragments(command)]
+                self.assertEqual(1, len(targets))
+                self.assertNotEqual("nul", targets[0].rsplit("/", 1)[-1].lower())
+
+    def test_the_text_net_reads_it_as_a_redirect_to_nul(self):
+        for command in self.COLON:
+            with self.subTest(command=command):
+                self.assertTrue(pretool_gate.redirects_to_bare_nul(command))
+
+    def test_check_bare_nul_and_a_dev_agent_deny_it(self):
+        for command in self.COLON:
+            with self.subTest(command=command):
+                code, msg = stderr_of(pretool_gate.check_bare_nul, command)
+                self.assertEqual(2, code)
+                self.assertIn("real file", msg)
+                code, _ = stderr_of(agent_gate.handle_dev, "Bash", {"command": command})
+                self.assertEqual(2, code)
+
+    def test_a_longer_name_with_a_colon_is_not_nul(self):
+        for command in ("ls>NULL:", "ls>nul.txt:", "ls>annul:"):
+            with self.subTest(command=command):
+                self.assertFalse(pretool_gate.redirects_to_bare_nul(command))
+
+
 class NamesContainingNulAreNotMatchedTest(unittest.TestCase):
     """No substring matching: a legitimate write to `nullable.py` or `annul.txt`
     is judged exactly as before."""

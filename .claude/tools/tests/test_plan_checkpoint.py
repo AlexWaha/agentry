@@ -196,7 +196,7 @@ class PlanCheckpointTest(unittest.TestCase):
 
     def test_reject_clears_the_plan_approval(self):
         self._approve("--gate", "plan")
-        self._approve("--reject")
+        self._approve("--reject", "--reason", "needs rework")
         row = self._row()
         self.assertEqual(0, row["plan_approved"])
         self.assertEqual("formalize", row["stage"])

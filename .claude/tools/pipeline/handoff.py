@@ -272,6 +272,8 @@ def uncovered_done_tasks() -> list[dict]:
     """[{'task','reason'}] for every done task above baseline lacking a valid
     handoff doc, ordered by task id. Scans tasks/done/ only (folder state is the
     single source of truth; runs closed by reconcile cannot create orphan debt).
+    A swarm subtask is covered by its umbrella's doc (state.covering_umbrella);
+    the umbrella itself is still checked like any other done task.
     Fail-open: [] on any internal error."""
     try:
         if not enabled():
@@ -286,11 +288,18 @@ def uncovered_done_tasks() -> list[dict]:
                 continue
             path = handoff_path(task)
             if not path.is_file():
-                out.append({"task": task, "reason": f"no handoff doc at {rel(path)}"})
+                reason = f"no handoff doc at {rel(path)}"
+            else:
+                problems = validate_handoff(path, task)
+                if not problems:
+                    continue
+                reason = "; ".join(problems)
+            # A swarm subtask is documented by its umbrella's doc. Looked up only
+            # once a debt is found, so the common clean scan stays one read per task.
+            umbrella = state.covering_umbrella(task)
+            if umbrella and covered_required(umbrella):
                 continue
-            problems = validate_handoff(path, task)
-            if problems:
-                out.append({"task": task, "reason": "; ".join(problems)})
+            out.append({"task": task, "reason": reason})
         drop_scaffold_markers({d["task"] for d in out})
         return out
     except Exception:

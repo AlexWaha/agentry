@@ -16,6 +16,7 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 
 import state
 
@@ -43,6 +44,7 @@ def run_gate(pipeline: dict, stage_name: str, task: str | None = None,
     # repos): an exit_gate may set "cwd" to run inside its sub-repo.
     cwd = gate.get("cwd") or pipeline.get("cwd") or "."
     expect = gate.get("expect_exit", 0)
+    started = time.monotonic()
     try:
         # Force UTF-8 decoding with replacement: on Windows the default text mode
         # decodes with the locale codepage (cp1252), which crashes on the UTF-8
@@ -62,9 +64,10 @@ def run_gate(pipeline: dict, stage_name: str, task: str | None = None,
 
     passed = exit_code == expect
     if task:
-        conn = state.connect()
-        state.log_gate(conn, task, stage_name, cmd, exit_code)
-        conn.close()
+        # Journal row, not run-store state: nothing reads it back to decide, and a
+        # failed append never changes the result returned below.
+        state.emit_gate(task, stage_name, which, cmd, exit_code, passed,
+                        int((time.monotonic() - started) * 1000))
     return {"stage": stage_name, "has_gate": True, "configured": True,
             "cmd": cmd, "exit": exit_code, "passed": passed, "output": output}
 

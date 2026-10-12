@@ -1,0 +1,7 @@
+#!/bin/sh
+# Leak guard (task-0041). Enable once per clone: git config core.hooksPath .githooks
+root=$(git rev-parse --show-toplevel) || exit 2
+while read -r _ sha _ _; do
+  case "$sha" in 0000000000000000000000000000000000000000) continue ;; esac
+  python "$root/.claude/tools/pipeline/leak_guard.py" --ref="$sha" || exit $?
+done

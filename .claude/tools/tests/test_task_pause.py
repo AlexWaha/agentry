@@ -227,7 +227,7 @@ class PauseAndResumeTest(PauseHarness):
     def test_reject_clears_the_pause_record(self):
         self.register()
         self.cli("--task", TASK, "--pause", "preempted")
-        self.cli("--task", TASK, "--reject")
+        self.cli("--task", TASK, "--reject", "--reason", "needs rework")
         row = self.row()
         self.assertEqual(row["stage_status"], state.ST_IN_PROGRESS)
         self.assertEqual((row["paused_status"], row["pause_reason"], row["pause_kind"]),

@@ -12,7 +12,7 @@ hooks:
     - matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit"
       hooks:
         - type: command
-          command: 'python "$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/agent_gate.py" --profile readonly'
+          command: 'python "$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/agent_gate.py" --profile readonly --allow-script axe --allow-script lighthouse --allow-script pa11y --allow-script npx'
           timeout: 20
 ---
 

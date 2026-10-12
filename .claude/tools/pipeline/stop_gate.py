@@ -367,7 +367,8 @@ def park_looping_run(reason: str) -> str | None:
         r = next((x for x in _CTX["runs"] if x["task"] == task), None)
         if r is None or r["stage"] == "done" or state.is_paused(r):
             return None
-        state.set_fields(_CTX["conn"], task, stage_status=state.ST_BLOCKED)
+        state.set_fields(_CTX["conn"], task, stage_status=state.ST_BLOCKED,
+                         reason="the stop hook repeated one demand to no effect")
         # Forget the count now the park has replaced the loop. Without this, a
         # CEO who spots the park in `state.py --show` and runs approve.py
         # --reject WITHOUT waiting for the surfacing stop leaves the key at its
@@ -787,7 +788,8 @@ def charge(conn, r: dict, ceiling: int) -> bool:
     name, which this does not touch."""
     cont = r["continuations"] + 1
     if cont > ceiling:
-        state.set_fields(conn, r["task"], stage_status=state.ST_BLOCKED)
+        state.set_fields(conn, r["task"], stage_status=state.ST_BLOCKED,
+                         reason=f"continuation ceiling of {ceiling} spent at '{r['stage']}'")
         r["stage_status"] = state.ST_BLOCKED
         r["parked_now"] = True
         return False
@@ -853,6 +855,23 @@ def unknown_repo_block(t: dict) -> int:
         (fix, fix))
 
 
+def done_conflict_block(task: str) -> int:
+    """Name a task whose file is in done/ and still in backlog/ or active/ with
+    different text. state.move_task() refuses that for good, so loops A and B of
+    reconcile_status_drift() skip it without a word; this is the word. Bounded
+    like every run-less demand, so it is said, escalated once, then left to the
+    CEO. In a helper for the same reason as unknown_repo_block()."""
+    fix = (f"compare tasks/done/{task}.md with its twin in backlog/ or active/ and "
+           f"delete the one that is wrong")
+    return bounded_block(
+        f"conflict:{task}",
+        f"{task} exists in tasks/done/ and in backlog/ or active/ with different text",
+        f"{task} is in tasks/done/ and also in backlog/ or active/, and the two files "
+        f"differ, so the status move refuses it and reconciliation skips it. A person "
+        f"must {fix}. Do not ask the user.",
+        (fix, fix))
+
+
 def clear_debt_nags(live_keys=()) -> None:
     """Forget the count unless it belongs to a demand still outstanding, so the
     next demand gets its full budget rather than inheriting a spent one.
@@ -909,7 +928,10 @@ def reconcile_status_drift(conn) -> tuple[list, list]:
          over the task's OWN repo(s) only. A run at any other stage is never
          touched here, whatever git says.
       B. A run still marked in-flight whose file already sits in tasks/done/ (or
-         vanished) is closed to 'done' - but only on the same evidence.
+         vanished) is closed to 'done' - but only on the same evidence AND only
+         when its commit checkpoint was approved: a run that never passed the
+         commit approval cannot have been merged by the pipeline, so a trunk
+         commit naming it is somebody else's text.
 
     Never decided from `branch:` in the task file or from a branch whose name
     holds the id: the agent being judged can write both, and `merged_into_main`
@@ -932,21 +954,23 @@ def reconcile_status_drift(conn) -> tuple[list, list]:
                 continue
             if state.move_task_to_done(task):
                 moved.append(task)
-                moved.extend(state.move_swarm_subtasks(task))
+                moved.extend(state.move_swarm_subtasks(task, conn))
                 if run is not None:
                     # The merge is what a run at 'done' was waiting for; leaving
                     # awaiting_human set would freeze the queue on a finished task.
                     state.set_fields(conn, task, stage="done", awaiting_human="",
-                                     stage_status=state.ST_GATE_PASSED)
+                                     stage_status=state.ST_GATE_PASSED, event="merged")
         for task, r in runs.items():
             # A run whose file left active/ for done/ - or vanished - is stale;
             # close it. A file put BACK into backlog/ is a deliberate unqueue,
             # so leave that run alone rather than silently marking it finished.
             if (r["stage"] != "done"
+                    and r.get("commit_approved")
                     and state.task_dir(task) in (None, "done")
                     and git_state.task_tagged_in_main(task)):
                 state.set_fields(conn, task, stage="done", awaiting_human="",
-                                 stage_status=state.ST_GATE_PASSED)
+                                 stage_status=state.ST_GATE_PASSED, event="closed",
+                                 reason="its task file left active/ and main carries its tag")
                 closed.append(task)
     except Exception:
         pass
@@ -1106,7 +1130,8 @@ def decide() -> int:
                         f"will not touch it. Raise it with the CEO now (AskUserQuestion): "
                         f"what the blocker is, and the options - fix it and re-run "
                         f"advance.py, or send the task back with python "
-                        f".claude/tools/pipeline/approve.py --task {r['task']} --reject. "
+                        f".claude/tools/pipeline/approve.py --task {r['task']} --reject --reason "
+                        f"\"<why>\". "
                         f"Do not silently move on to other work.",
                         f"{r['task']} is parked BLOCKED at stage '{stage}' and nothing is "
                         f"driving it. Decision owed by you: fix the blocker so the agent can "
@@ -1436,6 +1461,9 @@ def decide() -> int:
                 "only - do not re-open them; confirm and stop.",
                 "Bookkeeping: " + "; ".join(bits) + ". These tasks were already merged. "
                 "Nothing is owed by you.")
+        conflicts = state.move_conflicts()
+        if conflicts:
+            return done_conflict_block(conflicts[0])
 
         # 5. Documentation debt that step 3 had no ready task to gate - the last
         # thing before the session is allowed to end. It BLOCKS rather than

@@ -10,11 +10,13 @@ suite runs once, in the test-stage exit gate the orchestrator drives.
 ## Dev agent (senior-backend-dev / senior-frontend-dev)
 
 ```
+Swarm zone: <zone-id>
+
 You are one agent in a swarm implementing epic `task-<epic>` on branch `<branch>`. Your subtask: `<backlog_dir>/task-<epic>-<SUBTASK>.md`. Read it first, then the relevant parts of the spec `<spec>`, the plan `<plan>`, and the contract board `<state_dir>/board.md` (use what earlier subtasks already posted there, do not recreate it).
 
 Swarm rules (`.claude/rules/orchestration.md`, Swarm):
 - Many agents edit the same working tree right now. Touch only the files your subtask owns per the board's ownership table. If you need a change in a file someone else owns, post a request on the board under your heading with the exact code you need, and code against it.
-- NEVER run `git checkout`, `switch`, `stash`, `reset`, `restore`, `commit`, `push`; never reformat or revert files you do not own.
+- NEVER run `git checkout`, `switch`, `stash`, `reset`, `restore`, `commit`, `push` (with a frozen zone map the gate also denies `clean`, `apply`, `am`, `merge`, `rebase`, `cherry-pick`, `revert`, `pull`, `rm`, `mv`); never reformat or revert files you do not own.
 - Do NOT run the full test suite or the build. Check your own files with the adapter's `self_check` commands. Write the tests your subtask requires; you may run only your own tests narrowed (`-k` or a single module). The full suite runs once, in the exit gate.
 - Post everything others use (class names, method signatures, endpoint shapes, props, config keys, lang keys) on the board under `## <SUBTASK>` EARLY, and re-read the board before you finish to pick up requests addressed to you; fulfil the ones in files you own.
 - Messaging: SendMessage (to: "main") reaches the supervisor, who relays to other agents. Use it for contract changes, blockers and spec ambiguities; also write them on the board. If the spec is ambiguous, ask, then continue with the option closest to the spec.
@@ -107,6 +109,15 @@ supervisor with `SendMessage` (to: "main").
 | <shared helpers and hooks> | <subtask> | |
 | <shared UI components, if any> | <subtask> | |
 | build, lint and pipeline configs | <subtask> | |
+
+## Zones
+
+Frozen by `zones.py --prove` before the first wave. One row per agent, `qa-engineer`
+included. Paths: exact repo-relative file or `dir/**`, comma-separated.
+
+| zone | paths |
+|---|---|
+| <zone-id> | <path>, <dir>/** |
 
 ---
 

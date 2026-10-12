@@ -24,11 +24,20 @@ CLI:
               [--area a] [--task task-0044] [--agent name]
     memory.py --record --kind pattern --name n --use-when u [--body b] [--task t]
     memory.py --record --kind module --path p --responsibility r [--symbols s] [--notes n]
+    memory.py --refine --signature s [--agent a] [--trigger t] [--what w] [--why y]
+              [--fix f] [--area a] [--task task-0044]       correct a lesson in place
+    memory.py --retire --signature s [--agent a] --reason r  withdraw a lesson from retrieval
     memory.py --query "free text" [--limit 8] [--kinds lesson,pattern]
     memory.py --export [--out .agentry/memory/export.md]
     memory.py --stats
     memory.py --migrate [--dry-run]      one-off markdown -> store migration
     memory.py --db PATH                  override the store location (tests)
+
+A wrong lesson is corrected with --refine (only the fields given change, the
+row keeps its id and signature) and withdrawn with --retire. Retire sets a flag
+and drops the row from the FTS index instead of deleting it: retrieval reads
+only the index, so a retired row is never injected again, and the table still
+says it was once believed and why it was withdrawn. A delete would erase that.
 
 Record rejects free-form prose: every field is single-line, bounded, and the
 five lesson fields are all mandatory. Reads fail open (a missing or corrupt
@@ -40,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sqlite3
 from datetime import datetime, timezone
@@ -69,7 +79,9 @@ CREATE TABLE IF NOT EXISTS lessons (
     area      TEXT NOT NULL DEFAULT '',
     task      TEXT NOT NULL DEFAULT '',
     agent     TEXT NOT NULL DEFAULT '',
-    created   TEXT NOT NULL
+    created   TEXT NOT NULL,
+    retired        TEXT NOT NULL DEFAULT '',
+    retired_reason TEXT NOT NULL DEFAULT ''
 );
 CREATE UNIQUE INDEX IF NOT EXISTS lessons_sig ON lessons(signature, agent);
 CREATE TABLE IF NOT EXISTS patterns (
@@ -116,7 +128,19 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(p, timeout=5)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _add_retired_columns(conn)
     return conn
+
+
+def _add_retired_columns(conn: sqlite3.Connection) -> None:
+    """A store created before --retire has no retired columns, and CREATE TABLE
+    IF NOT EXISTS leaves an existing table alone. Write path only: the readonly
+    retrieval path never touches them (a retired row is simply not in the index)."""
+    have = {r[1] for r in conn.execute("PRAGMA table_info(lessons)")}
+    for col in ("retired", "retired_reason"):
+        if col not in have:
+            conn.execute(f"ALTER TABLE lessons ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+    conn.commit()
 
 
 def connect_readonly(path: Path | str | None = None) -> sqlite3.Connection | None:
@@ -204,12 +228,69 @@ def record_lesson(conn: sqlite3.Connection, *, signature: str, trigger: str, wha
     if not cur.rowcount:
         return 0
     rowid = int(cur.lastrowid)
-    title = row["signature"]
-    text = (f"WHEN {row['trigger']} | WHAT {row['what']} | WHY {row['why']} | FIX {row['fix']} "
-            f"| {row['area']} {row['task']} {row['agent']}")
-    _index(conn, "lesson", rowid, title, text)
+    _index(conn, "lesson", rowid, row["signature"], _lesson_text(row))
     conn.commit()
     return rowid
+
+
+def _lesson_text(row) -> str:
+    return (f"WHEN {row['trigger']} | WHAT {row['what']} | WHY {row['why']} | FIX {row['fix']} "
+            f"| {row['area']} {row['task']} {row['agent']}")
+
+
+REFINABLE = ("trigger", "what", "why", "fix", "area", "task")
+
+
+def _lesson_row(conn: sqlite3.Connection, sig: str, agent: str, verb: str):
+    row = conn.execute("SELECT * FROM lessons WHERE signature = ? AND agent = ?",
+                       (sig, agent)).fetchone()
+    if row is None:
+        raise MemoryError_(f"refused: no lesson {sig!r}"
+                           + (f" for agent {agent!r}" if agent else "")
+                           + f" to {verb}; list rows with --query, or add one with --record")
+    return row
+
+
+def refine_lesson(conn: sqlite3.Connection, *, signature: str, agent: str = "",
+                  **changes: str) -> tuple:
+    """Correct an existing lesson in place. Only the fields passed (and not empty)
+    change; the id and signature stay, so nothing that refers to the row breaks.
+    Returns (rowid, [changed field names]). A retired row is refused: reviving a
+    withdrawn claim by editing it would hide that it was withdrawn."""
+    sig = _sig(signature)
+    who = field("agent", agent, required=False)
+    new = {k: field(k, v) for k, v in changes.items()
+           if k in REFINABLE and (v or "").strip()}
+    if not new:
+        raise MemoryError_("refused: --refine needs at least one of --"
+                           + ", --".join(REFINABLE) + " with the corrected text")
+    row = _lesson_row(conn, sig, who, "refine")
+    if row["retired"]:
+        raise MemoryError_(f"refused: lesson {sig!r} was retired on {row['retired']} "
+                           f"({row['retired_reason']}); record the corrected claim "
+                           f"under a new signature")
+    merged = {**dict(row), **new}
+    sets = ", ".join(f"{k} = :{k}" for k in new)
+    conn.execute(f"UPDATE lessons SET {sets} WHERE id = :id", {**new, "id": row["id"]})
+    _index(conn, "lesson", int(row["id"]), sig, _lesson_text(merged))
+    conn.commit()
+    return int(row["id"]), list(new)
+
+
+def retire_lesson(conn: sqlite3.Connection, *, signature: str, reason: str,
+                  agent: str = "") -> int:
+    """Withdraw a lesson from retrieval without erasing it. Returns its rowid."""
+    sig = _sig(signature)
+    why = field("reason", reason)
+    row = _lesson_row(conn, sig, field("agent", agent, required=False), "retire")
+    if row["retired"]:
+        raise MemoryError_(f"refused: lesson {sig!r} is already retired ({row['retired']}: "
+                           f"{row['retired_reason']})")
+    conn.execute("UPDATE lessons SET retired = ?, retired_reason = ? WHERE id = ?",
+                 (now(), why, row["id"]))
+    conn.execute("DELETE FROM mem_fts WHERE ref = ?", (f"lesson:{row['id']}",))
+    conn.commit()
+    return int(row["id"])
 
 
 def record_pattern(conn: sqlite3.Connection, *, name: str, use_when: str, body: str = "",
@@ -384,7 +465,8 @@ def export_markdown(conn: sqlite3.Connection) -> str:
             "this file is for reading, not for editing."), ""]
     out.append("## Lessons")
     out.append("")
-    for r in rows(conn, "lesson"):
+    lessons = rows(conn, "lesson")
+    for r in (x for x in lessons if not x["retired"]):
         tags = " ".join(t for t in (r["area"], r["task"], r["agent"]) if t)
         out += [f"### {r['signature']}",
                 f"- **Trigger:** {r['trigger']}",
@@ -392,6 +474,12 @@ def export_markdown(conn: sqlite3.Connection) -> str:
                 f"- **Why:** {r['why']}",
                 f"- **Fix:** {r['fix']}",
                 f"- **Recorded:** {r['created']} {tags}".rstrip(), ""]
+    retired = [x for x in lessons if x["retired"]]
+    if retired:
+        out += ["## Retired lessons (no longer injected)", ""]
+        out += [f"- **{r['signature']}** - retired {r['retired']}: {r['retired_reason']}"
+                for r in retired]
+        out.append("")
     out += ["## Patterns", ""]
     for r in rows(conn, "pattern"):
         out.append(f"- **{r['name']}** - use when {r['use_when']}"
@@ -603,6 +691,38 @@ def _rel(path: Path) -> str:
         return str(path)
 
 
+# Where --out and --db may never point: --export --out overwrites the file it names and
+# --db creates one, so a target in the state tree, on pipeline.json or under .claude/
+# replaces an approval record, the gate configuration or gate code (a broken gate script
+# exits non-2, which is an allow). agent_gate.py refuses these for an agent before the
+# call; this is the second layer for a caller the gate does not see.
+PROTECTED_TARGETS = (".agentry/state", ".agentry/pipeline.json", ".claude")
+
+
+def _protected_target(raw: str) -> str:
+    """Why `raw` may not be written, else ''. It resolves into one of PROTECTED_TARGETS
+    (by name, case, `..`, a junction or an NTFS stream suffix, or as a hard link to
+    pipeline.json), or it cannot be resolved at all: nothing legitimate is spelled so."""
+    unresolvable = "not a path that can be resolved"
+    if "\x00" in raw:
+        return unresolvable
+    try:
+        drive, rest = os.path.splitdrive(raw.strip())
+        clean = drive + "/".join(p.split(":", 1)[0] for p in rest.replace("\\", "/").split("/"))
+        real = os.path.realpath(clean)
+        low = real.replace("\\", "/").lower()
+        for rel in PROTECTED_TARGETS:
+            base_path = os.path.realpath(ROOT / rel)
+            base = base_path.replace("\\", "/").lower()
+            if low == base or low.startswith(base + "/"):
+                return f"inside {rel}"
+            if os.path.isfile(real) and os.path.isfile(base_path) and os.path.samefile(real, base_path):
+                return f"inside {rel}"
+    except (OSError, ValueError):
+        return unresolvable
+    return ""
+
+
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -623,9 +743,29 @@ def _record(conn: sqlite3.Connection, args) -> int:
         label = args.path
     if rowid:
         print(f"memory: recorded {args.kind} {label} (id {rowid})")
+    elif args.kind == "lesson":
+        who = f" --agent {args.agent}" if args.agent else ""
+        print(f"memory: lesson {label} already recorded - correct the existing row with: "
+              f"memory.py --refine --signature {label}{who} --what <text> "
+              f"[--trigger|--why|--fix|--area|--task <text>], or withdraw it with: "
+              f"memory.py --retire --signature {label}{who} --reason <text>")
     else:
-        print(f"memory: {args.kind} {label} already recorded - refine the existing row "
-              f"instead of adding a near-duplicate")
+        print(f"memory: {args.kind} {label} already recorded - nothing changed")
+    return 0
+
+
+def _refine(conn: sqlite3.Connection, args) -> int:
+    rowid, changed = refine_lesson(
+        conn, signature=args.signature, agent=args.agent, trigger=args.trigger,
+        what=args.what, why=args.why, fix=args.fix, area=args.area, task=args.task)
+    print(f"memory: REFINED lesson {args.signature} (id {rowid}), changed: {', '.join(changed)}")
+    return 0
+
+
+def _retire(conn: sqlite3.Connection, args) -> int:
+    rowid = retire_lesson(conn, signature=args.signature, reason=args.reason, agent=args.agent)
+    print(f"memory: RETIRED lesson {args.signature} (id {rowid}); no longer injected, "
+          f"row kept in the store")
     return 0
 
 
@@ -633,6 +773,9 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Project memory store (SQLite + FTS5)")
     parser.add_argument("--db", default="", help="store path (default .agentry/memory/memory.db)")
     parser.add_argument("--record", action="store_true")
+    parser.add_argument("--refine", action="store_true", help="correct a lesson in place")
+    parser.add_argument("--retire", action="store_true", help="withdraw a lesson from retrieval")
+    parser.add_argument("--reason", default="", help="--retire: why the lesson is withdrawn")
     parser.add_argument("--kind", choices=KINDS, default="lesson")
     parser.add_argument("--query", default="")
     parser.add_argument("--limit", type=int, default=8)
@@ -662,6 +805,12 @@ def main(argv=None) -> int:
     parser.add_argument("--notes", default="")
     args = parser.parse_args(argv)
 
+    for option, value in (("--out", args.out), ("--db", args.db)):
+        place = _protected_target(value) if value else ""
+        if place:
+            print(f"refused: {option} {value!r} is {place}; memory.py never writes there")
+            return 1
+
     db = args.db or None
     if args.query:
         hits = query(args.query, limit=args.limit,
@@ -687,6 +836,10 @@ def main(argv=None) -> int:
     try:
         if args.record:
             return _record(conn, args)
+        if args.refine:
+            return _refine(conn, args)
+        if args.retire:
+            return _retire(conn, args)
         if args.migrate:
             report = migrate(conn, dry_run=args.dry_run)
             total = 0

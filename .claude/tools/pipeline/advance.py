@@ -220,7 +220,9 @@ def _task_frontmatter(task: str) -> dict:
 
 
 def _merge_wait(task: str, run: dict, waiting: str) -> dict:
-    """Record - or clear - 'this task is still waiting on a merge'.
+    """Record - or clear - 'this task is still waiting on a merge'. The only
+    clearing call (waiting == "") follows a confirmed merge, so it is the one that
+    journals `merged`; the write that sets the wait journals `parked`.
 
     A park nobody writes down is invisible: stop_gate.py sees an idle slot and
     hands the working tree to the next backlog task while the CEO is still
@@ -229,7 +231,8 @@ def _merge_wait(task: str, run: dict, waiting: str) -> dict:
     try:
         conn = state.connect()
         try:
-            state.set_fields(conn, task, awaiting_human=waiting)
+            state.set_fields(conn, task, awaiting_human=waiting,
+                             event="" if waiting else "merged")
         finally:
             conn.close()
     except Exception:
@@ -287,7 +290,18 @@ def finish_or_wait_for_merge(task: str, run: dict) -> int:
                       f"moves to tasks/done/. Do not call this task done meanwhile.")
 
     moved = state.move_task(task, "done")
-    note = "moved to tasks/done/" if moved else "already in tasks/done/"
+    if moved:
+        note = "moved to tasks/done/"
+    else:
+        left = state.task_dir(task)
+        if left in ("backlog", "active"):
+            # move_task refuses an existing destination, so a leftover copy means
+            # BOTH files exist: say so instead of claiming the move happened.
+            note = (f"NOT moved: tasks/{left}/{task}.md and tasks/done/{task}.md both "
+                    f"exist, so the move was refused; compare them and delete the "
+                    f"{left}/ copy by hand")
+        else:
+            note = "already in tasks/done/"
     try:
         swept = state.move_swarm_subtasks(task)
     except Exception:
@@ -503,7 +517,8 @@ def main() -> int:
     # success is not failing open (NFR-4), it is failing silently: refuse to
     # guess, name the unknown stage, and point at the way back.
     if cur not in names:
-        state.set_fields(conn, args.task, stage_status=state.ST_BLOCKED)
+        state.set_fields(conn, args.task, stage_status=state.ST_BLOCKED,
+                         reason=f"stage '{cur}' is not part of the {which} flow")
         run = state.get_run(conn, args.task)
         conn.close()
         return result("blocked", args.task, run,
@@ -511,8 +526,8 @@ def main() -> int:
                       f"Configured stages: {', '.join(names)}. The run is stranded - a "
                       f"pipeline.json stage list that changed under a live run, or an earlier "
                       f"NULL write. Recover with: python .claude/tools/pipeline/approve.py "
-                      f"--task {args.task} --reject (sends it back to '{first}'), or restore "
-                      f"'{cur}' in pipelines.{which}.stages.")
+                      f"--task {args.task} --reject --reason \"<why>\" (sends it back to "
+                      f"'{first}'), or restore '{cur}' in pipelines.{which}.stages.")
 
     if run["stage_status"] == state.ST_BLOCKED:
         conn.close()
@@ -609,7 +624,8 @@ def main() -> int:
         gate = run_gate(pipeline, cur, args.task, which)
 
     if not gate["configured"]:
-        state.set_fields(conn, args.task, stage_status=state.ST_BLOCKED)
+        state.set_fields(conn, args.task, stage_status=state.ST_BLOCKED,
+                         reason=f"stage '{cur}' gate is not configured")
         run = state.get_run(conn, args.task)
         conn.close()
         return result("blocked", args.task, run,
@@ -622,7 +638,8 @@ def main() -> int:
         # end a run (it is handled before the gate). Block instead of writing
         # NULL: same silent-death path as an unknown stage, one step later.
         if nxt is None:
-            state.set_fields(conn, args.task, stage_status=state.ST_BLOCKED)
+            state.set_fields(conn, args.task, stage_status=state.ST_BLOCKED,
+                             reason=f"stage '{cur}' passed its gate but the {which} flow has no next stage")
             run = state.get_run(conn, args.task)
             conn.close()
             return result("blocked", args.task, run,
@@ -645,7 +662,8 @@ def main() -> int:
 
     retries = run["retries"] + 1
     if retries >= budget:
-        state.set_fields(conn, args.task, stage_status=state.ST_BLOCKED, retries=retries)
+        state.set_fields(conn, args.task, stage_status=state.ST_BLOCKED, retries=retries,
+                         reason=f"gate failed {retries}/{budget} times at '{cur}'")
         run = state.get_run(conn, args.task)
         conn.close()
         return result("blocked", args.task, run,

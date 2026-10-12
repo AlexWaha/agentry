@@ -11,7 +11,8 @@ Project values for the keys in `.claude/skills/swarm/SKILL.md` (adapter contract
 | `start_epic` | `python .claude/tools/pipeline/advance.py --task task-<epic> --type feature` (the umbrella task file must already sit in `backlog/` with non-empty acceptance criteria, and its spec must be `approved`). A `feature` run starts at the `plan` stage, not at `implement` (see Notes) |
 | `advance` | `python .claude/tools/pipeline/advance.py --task task-<epic>` |
 | `approve_push` | `python .claude/tools/pipeline/approve.py --task task-<epic> --gate push` (only after the CEO approves in chat). In `solo` mode there is no push checkpoint: the CEO approves the commit with `--gate commit`, and publishing the trunk is the separate one-shot `approve.py --task task-<epic> --trunk-push` |
-| `reject` | `python .claude/tools/pipeline/approve.py --task task-<epic> --reject` (back to `plan` while the plan is unapproved; back to `implement` from the commit checkpoint, plan approval kept) |
+| `reject` | `python .claude/tools/pipeline/approve.py --task task-<epic> --reject --reason "<why>"` (`--reason` is required: a bare `--reject` exits 2 and writes nothing; the reason is journaled in `events.db`. Back to `plan` while the plan is unapproved; back to `implement` from the commit checkpoint, plan approval kept) |
+| `history` | `python .claude/tools/pipeline/events.py --task task-<epic>` (one task's journal: transitions, gate results, approvals, rejections with reasons) and `events.py --summary [--since YYYY-MM-DD]` (all tasks). Both print JSON. The journal is `.agentry/state/events.db`; it is a report: only `supervisor.progress_at` reads it, and only to veto a relaunch; no gate reads it |
 | `backlog_dir` | `.agentry/tasks/backlog/` |
 | `done_dir` | `.agentry/tasks/done/` |
 | `state_dir` | `.agentry/tasks/swarm/task-<epic>/` (NOT `.agentry/state/`: the dev profile is denied every write there, so board posts and QA reports would fail silently. `agent_gate.py` allows `.agentry/tasks/`; `test_a_dev_agent_may_write_the_swarm_board` pins it) |
@@ -26,6 +27,7 @@ Project values for the keys in `.claude/skills/swarm/SKILL.md` (adapter contract
 
 ## Notes
 
+- Swarm zones (task-0060): before the first wave, add a `## Zones` table (`| zone | paths |`) to the board and freeze it with `python .claude/tools/pipeline/zones.py --prove --task task-<epic>`; `zones.py --show` prints the frozen map. Every dispatch prompt carries a `Swarm zone: <id>` line, `qa-engineer` included (it needs its own zone). The optional `swarm.shared_paths` key in `pipeline.json` overrides the in-code default list of shared files. Details: `skills/swarm/SKILL.md` and "Swarm mode" in `rules/orchestration.md`.
 - Dev, QA and fixer agents cannot set the dials: `agent_gate.py` denies `mode.py`, `approvals.py` and `swarm.py` with an argument other than `--show` for every profile.
 - Agent definition changes (`SendMessage` in `tools:`, `maxTurns`) load only after a session restart; set per gate profile in `.claude/tools/setup/apply_optimization.py` (`MAX_TURNS`: dev 150, readonly 100, docs 30).
 - `workflow.mode` `solo` means a swarm ends at the commit checkpoint: the CEO reads the diff (`/diff`), approves, and the local merge follows. There is no pull request and no push step to wait for.

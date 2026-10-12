@@ -250,7 +250,7 @@ class PlanStepFlowTest(Harness):
 
     def test_rejecting_the_plan_stays_at_plan_and_clears_the_approval(self):
         self.seed(stage="plan-approval", awaiting_human="plan")
-        self.approve("--reject")
+        self.approve("--reject", "--reason", "needs rework")
         row = self.row()
         self.assertEqual("plan", row["stage"])
         self.assertEqual(0, row["plan_approved"])
@@ -258,14 +258,14 @@ class PlanStepFlowTest(Harness):
 
     def test_rejecting_at_the_plan_stage_itself_also_stays_there(self):
         self.seed(stage="plan", plan_approved=1)
-        self.approve("--reject")
+        self.approve("--reject", "--reason", "needs rework")
         row = self.row()
         self.assertEqual("plan", row["stage"])
         self.assertEqual(0, row["plan_approved"])
 
     def test_rejecting_the_diff_goes_to_implement_and_keeps_the_plan_approval(self):
         self.seed(stage="ready", plan_approved=1, commit_approved=0, awaiting_human="commit")
-        self.approve("--reject")
+        self.approve("--reject", "--reason", "needs rework")
         row = self.row()
         self.assertEqual("implement", row["stage"])
         self.assertEqual(1, row["plan_approved"])
@@ -273,13 +273,13 @@ class PlanStepFlowTest(Harness):
 
     def test_rejecting_a_run_that_skipped_the_plan_goes_to_implement(self):
         self.seed(stage="review", task_type="bugfix")
-        self.approve("--reject")
+        self.approve("--reject", "--reason", "needs rework")
         self.assertEqual("implement", self.row()["stage"])
 
     def test_a_flow_without_the_step_rejects_to_its_first_stage_as_before(self):
         self.pipeline = OLD_BUILD_PIPELINE
         self.seed(stage="ready")
-        self.approve("--reject")
+        self.approve("--reject", "--reason", "needs rework")
         self.assertEqual("implement", self.row()["stage"])
 
     def test_the_plan_flow_reject_is_untouched(self):
@@ -294,7 +294,7 @@ class PlanStepFlowTest(Harness):
         state.create_run(conn, OTHER, "feature", "breakdown", state.PLAN)
         state.set_fields(conn, OTHER, plan_approved=1)
         conn.close()
-        self.approve("--reject", task=OTHER)
+        self.approve("--reject", "--reason", "needs rework", task=OTHER)
         row = self.row(OTHER)
         self.assertEqual("formalize", row["stage"])
         self.assertEqual(0, row["plan_approved"])

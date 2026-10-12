@@ -42,9 +42,14 @@ supervisor-spawned unattended session is refused the merge regardless
 (`check_unattended`).
 
 Publishing the trunk is the one push `solo` mode allows, since that merge is its
-only writer: `approve.py --trunk-push` records the CEO's chat approval and the
-next push of the trunk consumes it - one push per approval, never granted by an
-approvals level, refused in an unattended session and in `pr` mode.
+only writer: `approve.py --trunk-push [--remote NAME]` records the CEO's chat
+approval and the next push of the trunk consumes it - one push per approval, never
+granted by an approvals level, refused in an unattended session and in `pr` mode.
+The approval names the remote (default `origin`): the trunk sent to another remote
+name or a URL is refused and leaves the approval unspent, and a push that names no
+remote is judged by the remote git would use. The pushed ref must be spelled as a
+branch: `main^0:main` or `HEAD~1:main` from the trunk checkout names no task and is
+refused, fail closed - push `main`.
 
 `workflow.push_needs_approval` (default `true`) is independent of the mode.
 Working alone says nothing about whether an unattended run may write to the
@@ -152,10 +157,12 @@ commit and push approvals are enforced by the `PreToolUse` hook, not by goodwill
   through once; `pipeline.json` `allow_push_to_main` (default `false`, and `false`
   here) would let a plain trunk push through without it, but never a force or
   delete push.
+- Every `git push` is also checked by the leak guard (`tools/pipeline/leak_guard.py`): a pushed ref that adds a path under `.agentry/` that `origin/main` does not have is refused, and a check that cannot run counts as a leak. The same check runs as the `.githooks/pre-push` hook; `git config core.hooksPath .githooks` (once per clone, a CEO deploy action, not set by any script) covers pushes made from a terminal. By hand: `python .claude/tools/pipeline/leak_guard.py --ref HEAD` (exit 0 clean, 1 leaked paths on stderr, 2 error).
 
 Run `approve.py` **only after the CEO explicitly approves in chat**. To send a task
-back for rework instead of approving, use `approve.py --task task-XXXX --reject`
-(returns it to `implement`; before the plan approval it stays at `plan`). The
+back for rework instead of approving, use `approve.py --task task-XXXX --reject
+--reason "<why>"` (the reason is required, a bare `--reject` is refused, and it is
+journaled; returns it to `implement`; before the plan approval it stays at `plan`). The
 plan approval (`--gate plan`) is a third checkpoint, ahead of any code, for
 every task type except those in `skip_for_types` (`bugfix`, `techdebt`). These approvals are the only points where the CEO
 re-engages during execution, and in `solo` mode the push one does not arise

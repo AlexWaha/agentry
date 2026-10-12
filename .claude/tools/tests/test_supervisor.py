@@ -3,9 +3,9 @@
 The supervisor is the one piece of this harness that acts with nobody watching,
 so the tests are weighted towards what it must NOT do:
 
-1. the four classifications, each from the fact it is supposed to be derived
-   from (and the precedence between them, which is what keeps a loop out of the
-   relaunch path);
+1. the five classifications (HUNG also has a clock, but only reports), each
+   from the fact it is supposed to be derived from (and the precedence between
+   them, which is what keeps a loop out of the relaunch path);
 2. DEAD detected by process liveness with no timeout elapsed - the criterion
    from task-0058 verbatim: start a run, kill the owning process, watch the
    classification flip;
@@ -44,6 +44,7 @@ sys.path.insert(0, str(TESTS_DIR))
 
 import approvals
 import busy
+import events
 import git_state
 import pretool_gate
 import state
@@ -187,7 +188,7 @@ class Sandbox(unittest.TestCase):
 
 
 class ClassificationTest(Sandbox):
-    """The four labels, and the order they are checked in."""
+    """The five labels, and the order they are checked in."""
 
     def test_healthy_when_the_row_changed_recently(self):
         label, why = supervisor.classify(row(), {}, cfg(), time.time())
@@ -1137,7 +1138,7 @@ class ConfigAndLaneTest(Sandbox):
 
 
 class CheckOrderTest(Sandbox):
-    """The order of the four checks, which is load-bearing rather than cosmetic.
+    """The order of the checks, which is load-bearing rather than cosmetic.
 
     classify() runs LOOPING, then liveness (DEAD), then the clock (STALLED).
     Swapping any pair is a realistic future edit, so each pair gets a run that
@@ -2493,6 +2494,150 @@ class HungDispatchTest(Sandbox):
         self.assertEqual((0, 0), (after["commit_approved"], after["push_approved"]))
         self.assertEqual("implement", after["stage"])
 
+    # --- reason wording (task-0101, M-A) ---------------------------------------
+
+    def test_the_nag_branch_reason_names_the_stage_age_source_not_the_progress_source(self):
+        # A frozen stage with a recent nag enters the HUNG block, which asks for
+        # progress; when something moved it falls through to the nag branch. That
+        # branch used to print the PROGRESS source in the stage-age slot.
+        entry = self.frozen(age=3600, continuations=8, stage_climbs=4,
+                            last_climb=time.time() - 30)
+        self.seen(60, "the working tree")
+        label, why = supervisor.classify(row(continuations=8), entry, cfg(), time.time())
+        self.assertEqual(supervisor.HEALTHY, label, why)
+        self.assertRegex(why, (
+            r"^stage 'implement' has not changed for \d+s "
+            r"\(since the stage change this supervisor observed\), "
+            r"but continuations was written \d+s ago and now stands at 8: "))
+        self.assertNotIn("(the working tree)", why)
+
+    def test_the_stalled_reason_names_the_stage_age_source_not_an_empty_progress_source(self):
+        self.dispatch(age=3000)  # default 900s timeout: EXPIRED, no owner recorded
+        self.seen(None)
+        label, why = supervisor.classify(row(updated=aged(5000)), self.frozen(age=5000),
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.STALLED, label, why)
+        stall = int(cfg()["stall_seconds"])
+        self.assertRegex(why, (
+            r"^stage 'implement' unchanged for \d+s with no continuations growth within it "
+            r"for at least that long \(since the stage change this supervisor observed; "
+            rf"stall_seconds={stall}\)\. A dispatch record for this stage expired uncleared"))
+
+    def test_the_stalled_reason_does_not_borrow_the_progress_source_when_progress_exists(self):
+        # Progress older than the dispatch does not count, but it is still SEEN:
+        # the progress source must not leak into the stage-age slot.
+        self.dispatch(age=3000)
+        self.seen(5000, "the gate log")
+        label, why = supervisor.classify(row(updated=aged(5000)), self.frozen(age=5000),
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.STALLED, label, why)
+        self.assertIn("(since the stage change this supervisor observed; stall_seconds=", why)
+        self.assertNotIn("the gate log", why)
+
+    # --- the abandoned record needs "not driven" (task-0101, L-2) ----------------
+
+    def test_an_expired_ownerless_record_on_a_nagged_stage_is_hung_not_abandoned(self):
+        # abandoned = expired and not owner_pid and not driven. Without the last
+        # term this run is "abandoned", falls to the nag branch and reads HEALTHY
+        # forever; with it the recent nag keeps it a live session, asked HUNG.
+        self.dispatch(age=3000)
+        self.assertEqual(busy.EXPIRED, busy.read("task-0001").status)
+        entry = self.frozen(age=5000, continuations=1, stage_climbs=1,
+                            last_climb=time.time() - 30)
+        self.seen(None)
+        label, why = supervisor.classify(row(continuations=1, updated=aged(5000)), entry,
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.HUNG, label, why)
+        self.assertNotIn(label, supervisor.RELAUNCHABLE)
+
+    # --- the busy marker outranks the spawn registry (task-0101, M-B) -----------
+
+    SPAWN_PID = 4242
+    OWNER_PID = 5151
+
+    def liveness(self, **alive):
+        """pid_alive answers per pid: `spawn=` for the supervisor-spawned pid and
+        `owner=` for the busy marker's owner."""
+        table = {self.SPAWN_PID: alive.get("spawn", False),
+                 self.OWNER_PID: alive.get("owner", False)}
+        patcher = unittest.mock.patch.object(
+            supervisor, "pid_alive", side_effect=lambda pid, since=None: table.get(pid, False))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def spawned(self, **over) -> dict:
+        return self.frozen(age=5000, pid=self.SPAWN_PID, spawn_stage="implement", **over)
+
+    def test_an_exited_spawn_with_a_live_owned_marker_and_recent_progress_is_healthy(self):
+        self.dispatch(age=3000, owner=self.OWNER_PID, timeout=state.BUSY_TIMEOUT)
+        self.liveness(spawn=False, owner=True)
+        self.assertEqual(busy.EXPIRED, busy.read("task-0001").status)
+        self.seen(60, "the gate log")
+        label, why = supervisor.classify(row(updated=aged(5000)), self.spawned(),
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.HEALTHY, label, why)
+        self.assertIn("progress seen 60s ago in the gate log", why)
+        self.assertNotIn(label, supervisor.RELAUNCHABLE)
+
+        # The same run with nothing moving is reported, never relaunched.
+        self.seen(None)
+        label, why = supervisor.classify(row(updated=aged(5000)), self.spawned(),
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.HUNG, label, why)
+        self.assertNotIn(label, supervisor.RELAUNCHABLE)
+
+    def test_an_exited_spawn_is_still_dead_when_no_live_marker_speaks_for_the_stage(self):
+        # The control for the test above: the marker is what changes the answer.
+        self.liveness(spawn=False, owner=True)
+        label, why = supervisor.classify(row(updated=aged(5000)), self.spawned(),
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.DEAD, label, why)
+
+        # A record that names no owner cannot vouch for a live session either.
+        self.dispatch(age=60)
+        label, why = supervisor.classify(row(updated=aged(5000)), self.spawned(),
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.DEAD, label, why)
+
+    def test_a_live_spawn_with_a_marker_and_no_progress_for_hung_seconds_is_hung(self):
+        self.make_row("task-0001")
+        self.dispatch(age=3000, owner=self.OWNER_PID, timeout=state.BUSY_TIMEOUT)
+        self.liveness(spawn=True, owner=True)
+        progress = self.seen(None)
+        label, why = supervisor.classify(row(updated=aged(5000)), self.spawned(),
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.HUNG, label, why)
+        progress.assert_called_once_with("task-0001")
+
+        # Through the real handler: reported only, nothing spawned, no cap spent.
+        reg = supervisor.empty_registry()
+        stale = dict(self.read_row(), updated=aged(5000))
+        with unittest.mock.patch.object(state, "task_dir", return_value="active"), \
+                unittest.mock.patch.object(supervisor.subprocess, "Popen") as popen:
+            event = supervisor.handle_run(stale, reg, cfg(), time.time(), act=True)
+        popen.assert_not_called()
+        self.assertEqual(supervisor.HUNG, event["classification"], event["why"])
+        self.assertEqual("reported only", event["action"])
+        self.assertEqual([], reg["actions"])
+
+    def test_a_live_spawn_with_a_marker_and_recent_progress_is_healthy(self):
+        self.dispatch(age=3000, owner=self.OWNER_PID, timeout=state.BUSY_TIMEOUT)
+        self.liveness(spawn=True, owner=True)
+        self.seen(60, "the working tree")
+        label, why = supervisor.classify(row(updated=aged(5000)), self.spawned(),
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.HEALTHY, label, why)
+        self.assertIn("progress seen 60s ago in the working tree", why)
+
+    def test_a_live_spawn_without_a_marker_is_healthy_and_asks_for_no_progress(self):
+        self.liveness(spawn=True)
+        progress = self.seen(None)
+        label, why = supervisor.classify(row(updated=aged(5000)), self.spawned(),
+                                         cfg(), time.time())
+        self.assertEqual(supervisor.HEALTHY, label, why)
+        self.assertIn(f"pid {self.SPAWN_PID} is alive", why)
+        progress.assert_not_called()
+
     # --- what HUNG may never do -------------------------------------------------
 
     def test_hung_is_not_relaunchable_and_relaunch_refuses_it(self):
@@ -2543,13 +2688,16 @@ class ProgressEvidenceTest(Sandbox):
         os.utime(path, (time.time() - ago, time.time() - ago))
 
     def gate_row(self, ago: float) -> None:
-        conn = state.connect()
-        try:
-            conn.execute("INSERT INTO gate_log (task, stage, cmd, exit, at) VALUES (?, ?, ?, ?, ?)",
-                         ("task-0001", "implement", "cmd", 0, stamp(time.time() - ago)))
-            conn.commit()
-        finally:
-            conn.close()
+        """A `gate` row in the event journal beside the sandboxed run store, with a
+        chosen timestamp (events.append stamps its own, so the INSERT is direct)."""
+        with unittest.mock.patch.object(events, "STATE_DIR", Path(state.DB_PATH).parent):
+            conn = events._connect()
+            try:
+                conn.execute(events._INSERT, (stamp(time.time() - ago), "", "task-0001", "",
+                                              "gate", "implement", "", events.GATE_PASS,
+                                              "test", "{}"))
+            finally:
+                conn.close()
 
     def status(self, *lines: str) -> None:
         """What `status --porcelain -z` prints, as git_state._git hands it back:

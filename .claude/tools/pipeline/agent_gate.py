@@ -26,24 +26,45 @@ profiles:
 Every profile also denies SETTING the approvals level, workflow mode or swarm flag
 (approvals.py / mode.py / swarm.py with an argument other than --show); reading is
 allowed.
-The dev profile is also denied Write/Edit on anything under .agentry/state/, and
-Bash that writes there (a redirect target, or an operand of tee, sed -i, cp, mv,
-rm, truncate).
+Every profile is denied Write/Edit on anything under .agentry/state/, on
+.agentry/pipeline.json and on the live harness (see pretool_gate.is_live_harness),
+and Bash that writes there (a redirect target, or an operand of tee, sed -i, cp, mv,
+rm, truncate). Paths are judged by where they RESOLVE (realpath, NTFS stream suffix
+removed, the payload cwd and any `cd` in the command applied), not by spelling.
+
+The readonly and docs profiles are default-deny on Bash: every simple command's
+argv0 must be on ALLOWED_PROGRAMS (read-only utilities, git, codegraph), or be an
+interpreter running one of ALLOWED_SCRIPTS from <ROOT>/.claude/tools/, or be named
+by a `--allow-script NAME` flag on the agent's hook line. `python -c`, `python -`,
+`python -m` and a script the agent wrote itself are therefore refused whatever the
+spelling. The dev profile cannot be default-deny (running code is its job): an
+interpreter one-liner there is NOT COVERED - see rules/orchestration.md, "Subagent
+enforcement".
 
 Deny = exit 2 with a one-line reason on stderr (same convention as
-pretool_gate.py). Fail-open: any internal error allows the tool (exit 0) - a
-bug here must never brick an agent.
+pretool_gate.py). The dev profile is fail-open: any internal error allows the tool
+(exit 0) - a bug here must never brick the agent that builds the harness. readonly and
+docs fail CLOSED for Bash and the file tools: the allowlist (check_program) runs before
+every lexical check, an error inside it denies, and an error anywhere else in the handler
+denies too (SEC-A H2 of task-0120), because a gate that fails open is bypassed by whatever
+input crashes it.
 """
 
 from __future__ import annotations
 
 import argparse
+import glob
+import json
+import os
 import re
 import shlex
 import sys
 from collections import Counter
+from pathlib import Path
 
 import pretool_gate
+import state
+import zones
 
 # Git subcommands that mutate the working tree, history, or environment. Matched
 # through pretool_gate.git_invocations() rather than `\bgit\s+commit\b` regexes:
@@ -139,19 +160,24 @@ runs_approve_script = pretool_gate.runs_approve_script
 # Matching is by FILE NAME only, as it is for approve.py: an unrelated
 # `app/mode.py` invoked with an argument is denied the same way.
 #
+# zones.py joins for `--prove` / `--release`: the frozen zone map decides which paths a
+# dev agent may write, so a subagent that could freeze or release it could lift its own
+# fence (SEC-A of task-0120). `--show` reads and stays allowed.
+#
 # repo_scan.py joins the list for its `--write`, which edits the protected
 # .agentry/pipeline.json: it writes repos{} (and lanes{}), and the `stages` command
 # lists inside repos{} are what stack_gate.py later runs with shell=True. Its
 # other forms only print a scan, so they stay allowed; see is_setting_call().
 STATE_SETTER_RE = re.compile(
-    r"(?:^|[\\/])(?:approvals|mode|swarm|repo_scan)\.py[. )]*$", re.IGNORECASE)
+    r"(?:^|[\\/])(?:approvals|mode|swarm|zones|repo_scan)\.py[. )]*$", re.IGNORECASE)
 STATE_SETTER_MSG = ("{script} is orchestrator-only when it SETS the approvals level, the "
-                    "workflow mode or the swarm flag, or WRITES the pipeline config "
+                    "workflow mode or the swarm flag, freezes or releases the swarm zone map "
+                    "(zones.py --prove / --release), or WRITES the pipeline config "
                     "(repo_scan.py --write) - that decides what clears without "
-                    "the CEO, which procedure is in force and which commands the gates "
-                    "run. Ask the orchestrator to change it; --show (or no argument) "
-                    "still reads the first three, and repo_scan.py without --write "
-                    "only prints a scan.")
+                    "the CEO, which procedure is in force, which paths a dev agent may write "
+                    "and which commands the gates run. Ask the orchestrator to change it; "
+                    "--show (or no argument) still reads the first three, zones.py --show "
+                    "reads the map, and repo_scan.py without --write only prints a scan.")
 REPO_SCAN_SCRIPT = "repo_scan.py"
 # argparse accepts any unambiguous prefix of a long option, and every prefix of
 # `--write` from `--w` up is unambiguous in repo_scan.py (--root, --json, --table
@@ -183,7 +209,9 @@ def real_arguments(tokens: list) -> list:
         if REDIRECT_TOKEN_RE.match(tok):
             skip_target = bool(BARE_REDIRECT_RE.match(tok))
             continue
-        tok = tok.rstrip(")`")
+        # pad_separators puts GLUED_CLOSE in front of a substitution closer that stays glued
+        # to its word (`--show)`): it is not part of the argument either.
+        tok = tok.replace(pretool_gate.GLUED_CLOSE, "").rstrip(")`")
         if tok.strip():
             out.append(tok)
     return out
@@ -337,10 +365,40 @@ is_root_claude_md = pretool_gate.is_root_claude_md
 # Windows resolves `state.` and `state ` (and `state./x`, `pipeline.json.`) to the
 # same entry (measured), so the segment tolerates trailing dots and spaces.
 PROTECTED_STATE_RE = re.compile(r"(^|/)\.agentry/(state[. ]*(/|$)|pipeline\.json[. ]*$)")
-PROTECTED_STATE_MSG = ("{who}: '{path}' is under .agentry/state/ or is .agentry/pipeline.json, "
-                       "which hold the approvals level, workflow mode, run flags and gate "
-                       "settings that decide what clears without the CEO. "
-                       "Report the change you need to the orchestrator.")
+PROTECTED_STATE_MSG = ("{who}: '{path}' is under .agentry/state/, is .agentry/pipeline.json, is "
+                       "the live harness (.claude/tools, rules, skills, commands, settings, agent "
+                       "definitions of the project root), or is inside a .git directory. They hold "
+                       "the approvals level, workflow mode, run flags, gate settings and gate code "
+                       "that decide what clears without the CEO, and the git hooks and config that "
+                       "run as the orchestrator at its next commit. Report the change you need to "
+                       "the orchestrator.")
+# Any repository's .git directory (or the gitfile named .git): a hook written there runs
+# as the orchestrator at its next commit or push, and `config` can name a program for
+# every later git call (SEC-A M3 of task-0120). Windows ignores trailing dots and spaces
+# on a name, so `.git.` and `.git ` are the same entry. `.gitignore`, `.github` and
+# `.githooks` are different names and stay ordinary files.
+GIT_DIR_RE = re.compile(r"(^|/)\.git[. ]*(/|$)")
+# The live workspace's instruction trees. A docs agent writes documents, and rules, skills
+# and commands steer every later session, so its edits there go through the orchestrator.
+# Only the project ROOT's copy counts; a checkout under src/ is ordinary code.
+LIVE_INSTRUCTIONS_RE = re.compile(r"\.claude/(?:rules|skills|commands)(?:/.*)?")
+LIVE_INSTRUCTIONS_MSG = ("Docs agent: '{path}' is in the live workspace's .claude/rules, .claude/skills "
+                         "or .claude/commands, which steer every later session. Write the change under "
+                         "src/.claude/ (the checkout) or report it to the orchestrator.")
+UNPARSEABLE_MSG = ("{who}: this command cannot be tokenised (an unbalanced quote - often an "
+                   "apostrophe in a message or a heredoc body), so the gate cannot tell what "
+                   "it runs and refuses it. Balance the quotes, or write the text with "
+                   "Write/Edit instead of a heredoc.")
+TOO_COMPLEX_MSG = ("{who}: this command is too complex to check - it nests shells or "
+                   "substitutions past the gate's scan budget, so the gate cannot tell what "
+                   "it runs and refuses it. Split it into simpler commands.")
+
+
+def unparseable_msg(who: str, command: str) -> str:
+    """The deny text for a command the gate cannot read: one over the scan budget
+    says so instead of blaming the quotes."""
+    template = TOO_COMPLEX_MSG if pretool_gate.too_complex(command) else UNPARSEABLE_MSG
+    return template.format(who=who)
 
 
 def deny(reason: str) -> int:
@@ -389,8 +447,52 @@ def handle_web(profile: str, tool: str, ti: dict) -> int:
     return allow()
 
 
-def is_protected_state(path: str) -> bool:
-    return bool(PROTECTED_STATE_RE.search(normalize(path)))
+def resolves_into_state(form: str) -> bool:
+    """True when the absolute `form` is the real state directory (or below it), or
+    the same file as the live pipeline.json. The regex only knows the NAME
+    `.agentry/state/`; this follows a junction or symlink at either end, and a
+    hard link to pipeline.json (samefile compares the file identity)."""
+    if not os.path.isabs(form):
+        return False
+    try:
+        real = normalize(os.path.realpath(form))
+        state_dir = normalize(os.path.realpath(state.STATE_DIR))
+        if real == state_dir or real.startswith(state_dir + "/"):
+            return True
+        return os.path.samefile(form, state.PIPELINE_PATH)
+    except (OSError, ValueError):
+        return False
+
+
+def is_protected_state(path: str, cwd: str = "") -> bool:
+    """`path` is under .agentry/state/ or is .agentry/pipeline.json, by name or by
+    where it resolves (see pretool_gate.path_forms). `cwd` is the payload cwd, which
+    a relative path resolves against."""
+    forms = pretool_gate.path_forms(path, cwd)
+    return (any(PROTECTED_STATE_RE.search(normalize(f)) for f in forms)
+            or any(resolves_into_state(f) for f in forms))
+
+
+def is_git_internals(path: str, cwd: str = "") -> bool:
+    """`path` is, or lies inside, a .git directory, by name or by where it resolves."""
+    return any(GIT_DIR_RE.search(normalize(f)) for f in pretool_gate.path_forms(path, cwd))
+
+
+def is_live_instructions(path: str, cwd: str = "") -> bool:
+    """`path` resolves to <ROOT>/.claude/rules, skills or commands (or below)."""
+    root = normalize(os.path.realpath(state.ROOT))
+    for form in pretool_gate.path_forms(path, cwd):
+        p = normalize(form)
+        if p.startswith(root + "/") and LIVE_INSTRUCTIONS_RE.fullmatch(p[len(root) + 1:]):
+            return True
+    return False
+
+
+def is_protected(path: str, cwd: str = "") -> bool:
+    """What no subagent profile may write: the state tree, pipeline.json, the live
+    harness, and any .git directory."""
+    return (is_protected_state(path, cwd) or pretool_gate.is_live_harness(path, cwd)
+            or is_git_internals(path, cwd))
 
 
 def is_docs_path(path: str) -> bool:
@@ -414,10 +516,14 @@ def is_docs_path(path: str) -> bool:
     return bool(README_RE.search(p))
 
 
-def git_mutates(command: str, _depth: int = 0) -> str:
+def git_mutates(command: str, _depth: int = 0, subs: frozenset | None = None) -> str:
     """Return the mutating git invocation, or '' if every git call is read-only.
     Unparseable git text is treated as mutating (fail-closed) - see
     pretool_gate.git_invocations().
+
+    `subs` swaps the question for "does any git call use one of these subcommands"
+    (ZONED_GIT_DENIED): every spelling of a listed subcommand counts, `git stash` and
+    `git checkout <branch>` included, and the text-only nets below stay out of it.
 
     Two layers, in the order task-0078 requires. argv resolution is the real
     check, and it now recurses into every nested body (a shell's `-c` argument,
@@ -431,13 +537,17 @@ def git_mutates(command: str, _depth: int = 0) -> str:
     for sub, args in pretool_gate.git_invocations(command):
         if sub == pretool_gate.GIT_UNKNOWN:
             return "git (command could not be parsed)"
+        if subs is not None:
+            if sub in subs and not (sub == "stash" and args and args[0].lower() in ("list", "show")):
+                return f"git {sub}"
+            continue
         if sub in MUTATING_GIT_SUBS:
             return f"git {sub}"
         if sub == "stash" and args and args[0].lower() in MUTATING_GIT_STASH_ARGS:
             return f"git stash {args[0].lower()}"
         if sub == "checkout" and "--" in args:
             return "git checkout --"
-    if pretool_gate.gate_tokens(command) is None:
+    if subs is None and pretool_gate.gate_tokens(command) is None:
         # Heredoc-stripped: the body is data on stdin, and this net would
         # otherwise read a document that MENTIONS `git add` as a `git add`.
         m = MUTATING_GIT_FALLBACK_RE.search(pretool_gate.strip_heredocs(command))
@@ -446,7 +556,7 @@ def git_mutates(command: str, _depth: int = 0) -> str:
     if pretool_gate.unscannable_depth(command, _depth):
         return pretool_gate.DEPTH_EXCEEDED
     for body in pretool_gate.nested_command_bodies(command):
-        hit = git_mutates(body, _depth + 1)
+        hit = git_mutates(body, _depth + 1, subs)
         if hit:
             return hit
     return ""
@@ -576,41 +686,1064 @@ def destination_operand(args: list) -> list:
     return operands[-1:]
 
 
-def writes_protected_state(command: str, _depth: int = 0) -> str:
-    """The `.agentry/state/` path a Bash command writes through a redirect or a
-    mutating command (`tee`, `sed -i`, `cp` onto it, `rm`, ...), else ''.
+GLOB_RE = re.compile(r"[*?\[]")
+MAX_GLOB_HITS = 64
 
-    task-0097 denied the dev profile a Write or Edit there, but `echo auto >
-    .agentry/state/approvals` set the same level from Bash. Only paths named in
-    the command are seen: a relative target after a `cd` into the tree, and code
-    an interpreter runs (`python -c "open(...)"`), are not (task-0100: readonly
-    is not hermetic against inline interpreter code either, so no heuristic is
-    claimed for it)."""
+
+def base_dir(cwd: str) -> str:
+    """The directory a relative path resolves against: the payload cwd when it is
+    absolute, else the project root."""
+    return cwd if cwd and os.path.isabs(cwd) else str(state.ROOT)
+
+
+# What a substitution is replaced by: a shell variable, because what it expands to is
+# unknown to the gate and an argument that holds it counts as an expansion (dynamic_arg).
+SUBST_WORD = "$X"
+# A process substitution always expands to a /dev/fd/N path, never to an option.
+PROCESS_SUBST_WORD = "/dev/fd/9"
+
+
+def flatten_substitutions(command: str) -> str:
+    """`command` with every `$( ... )`, `<( ... )`, `>( ... )` and backtick span
+    replaced by SUBST_WORD, quoting respected as in pretool_gate.command_substitutions.
+    shlex does not know a substitution: `level=$(python x.py --show)` tokenises into an
+    assignment followed by a bogus argv0 `x.py`. The bodies are judged on their own,
+    through nested_command_bodies."""
+    out, i, n, dq = [], 0, len(command), False
+    while i < n:
+        ch = command[i]
+        if ch == "\\":
+            out.append(command[i:i + 2])
+            i += 2
+        elif ch == '"':
+            dq = not dq
+            out.append(ch)
+            i += 1
+        elif ch == "'" and not dq:
+            j = command.find("'", i + 1)
+            j = n if j < 0 else j + 1
+            out.append(command[i:j])
+            i = j
+        elif ch == "`":
+            j = command.find("`", i + 1)
+            out.append(SUBST_WORD)
+            i = n if j < 0 else j + 1
+        elif (ch in "$<>" and command.startswith(ch + "(", i) and (ch == "$" or not dq)
+              and not command.startswith("$((", i)):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                depth += (command[j] == "(") - (command[j] == ")")
+                j += 1
+            out.append(SUBST_WORD if ch == "$" else PROCESS_SUBST_WORD)
+            i = j
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+def walk_segments(command: str, cwd: str = "", expand_project_dir: bool = False) -> list | None:
+    """[(simple command tokens, directory it runs in)], in order, None when the
+    text cannot be tokenised. A `cd DIR` / `pushd DIR` moves the directory for every
+    later command, so `cd .agentry && sed -i s/a/b/ pipeline.json` is judged on the
+    file it writes. A subshell cd is applied too: more denies, never fewer.
+    `expand_project_dir` reads a leading $CLAUDE_PROJECT_DIR in the target as the
+    project root (the caller refuses a command that assigns the variable)."""
+    segments = pretool_gate.command_segments(command)
+    if segments is None:
+        return None
+    cur, out = base_dir(cwd), []
+    for seg in segments:
+        out.append((seg, cur))
+        i = pretool_gate.argv0_index(seg)
+        if i is not None and base_name(seg[i]) in ("cd", "pushd"):
+            target = next((t for t in seg[i + 1:] if not t.startswith("-")), "")
+            if expand_project_dir:
+                target = PROJECT_DIR_VAR_RE.sub(lambda _: str(state.ROOT), target)
+            target = pretool_gate.msys_to_win(target)
+            if target and not target.startswith("~"):
+                cur = os.path.normpath(os.path.join(cur, target))
+    return out
+
+
+def strip_quotes(tok: str) -> str:
+    return tok.strip().strip("'\"")
+
+
+def protected_operand(tok: str, dirs: list) -> bool:
+    """`tok` names (or, as a glob, expands to) a protected path from any of `dirs`."""
+    for d in dirs:
+        if is_protected(tok, d):
+            return True
+        if GLOB_RE.search(tok):
+            try:
+                hits = glob.glob(os.path.join(d, strip_quotes(tok)))[:MAX_GLOB_HITS]
+            except (OSError, ValueError):
+                continue
+            if any(is_protected(h, d) for h in hits):
+                return True
+    return False
+
+
+def sed_files(args: list) -> list:
+    """The file operands of `sed -i`: the non-option words, minus the script, which is
+    the first of them unless -e/-f (or their long forms) supplied it."""
+    plain, script_given, skip = [], False, False
+    for tok in args:
+        if skip:
+            skip = False
+        elif tok == "--":
+            continue
+        elif tok.startswith("-") and len(tok) > 1:
+            if tok.startswith(("-e", "-f", "--expression", "--file")):
+                script_given = True
+                skip = tok in ("-e", "-f", "--expression", "--file")
+        else:
+            plain.append(tok)
+    return plain if script_given else plain[1:]
+
+
+def path_operands(name: str, args: list) -> list:
+    """The words of one mutating command that name a path: no options, no `chmod` mode,
+    no `sed` script. Only for the commands that write the files they name."""
+    if name == "sed -i":
+        return sed_files(args)
+    plain = [t for t in args if t != "--" and not (t.startswith("-") and len(t) > 1)]
+    return plain[1:] if name == "chmod" else plain
+
+
+def write_operands(command: str, cwd: str = "", _depth: int = 0, paths_only: bool = False):
+    """Yield (operand, directories it may resolve against, mutating command) for every
+    path `command` writes through a redirect or a mutating command (`tee`, `sed -i`,
+    `cp` onto it, `rm`, ...). A redirect yields '' as the command and every directory
+    the command visits; an operand yields the directory its own segment runs in. Nested
+    shell bodies are walked too. `paths_only` keeps the commands that write the files
+    they name (not `npm install`) and reduces their words to those files."""
+    walked = walk_segments(command, cwd) or []
+    dirs = list(dict.fromkeys([base_dir(cwd)] + [d for _, d in walked]))
     for frag in pretool_gate.redirect_write_fragments(command):
-        target = pretool_gate.redirect_target(frag).strip("'\"")
-        if is_protected_state(target):
-            return target
-    for segment in pretool_gate.command_segments(command) or []:
-        if not mutating_command(segment):
+        yield pretool_gate.redirect_target(frag).strip("'\""), dirs, ""
+    for segment, cur in walked:
+        name = mutating_command(segment)
+        if not name or (paths_only and name not in PATH_WRITERS):
             continue
         i = pretool_gate.argv0_index(segment)
         operands = real_arguments(segment[i + 1:])
         if base_name(segment[i]) == "cp":
             operands = target_directory(operands) or destination_operand(operands)
+        elif paths_only:
+            operands = path_operands(name, operands)
         for tok in operands:
-            if is_protected_state(tok):
-                return tok
+            yield tok, [cur], name
     if _depth < pretool_gate.MAX_SHELL_DEPTH:
         for body in pretool_gate.nested_command_bodies(command):
-            hit = writes_protected_state(body, _depth + 1)
-            if hit:
-                return hit
+            yield from write_operands(body, cwd, _depth + 1, paths_only)
+
+
+def writes_protected_state(command: str, _depth: int = 0, cwd: str = "") -> str:
+    """The protected path (see is_protected) a Bash command writes through a
+    redirect or a mutating command (`tee`, `sed -i`, `cp` onto it, `rm`, ...), else ''.
+
+    task-0097 denied the dev profile a Write or Edit there, but `echo auto >
+    .agentry/state/approvals` set the same level from Bash. Operands are judged where
+    they resolve (junction, 8.3 name, case, `..`, a stream suffix, a glob, the payload
+    cwd, a `cd` earlier in the command). Code an interpreter runs (`python -c
+    "open(...)"`) is still not seen (task-0100): the readonly and docs profiles refuse
+    the interpreter itself (program_denied), the dev profile does not."""
+    for tok, dirs, _ in write_operands(command, cwd, _depth):
+        if protected_operand(tok, dirs):
+            return tok
     return ""
 
 
-def handle_dev(tool: str, ti: dict, cwd: str = "") -> int:
+# --- Default-deny Bash for the readonly and docs profiles (task-0116) --------
+# The gates above recognise writes lexically, so a Python one-liner, a script the
+# agent wrote itself or any program the denylist forgot (awk, dd of=, perl -i, curl
+# -o, node) reaches the same files. These two profiles have no reason to run code, so
+# they are inverted: a simple command runs only when its argv0 is on this list.
+# Every program here has an option allowlist of its own (FLAG_SPECS, below: an option
+# that is not named is refused, SEC-A H1 of task-0120); sed and awk are absent on purpose
+# (`sed -n 'w f'`, `awk system()`), the Read/Grep/Glob tools replace them.
+READ_ONLY_PROGRAMS = frozenset({
+    "cat", "head", "tail", "ls", "dir", "pwd", "echo", "printf", "wc", "cut", "tr", "nl", "tac",
+    "rev", "column", "fold", "comm", "paste", "diff", "cmp", "stat", "file", "du", "which",
+    "where", "basename", "dirname", "realpath", "readlink", "date", "uname", "whoami",
+    "hostname", "id", "sleep", "seq", "expr", "type", "true", "false", "test", "[", "[[", "cd", "read",
+    "for", "exit", "grep", "egrep", "fgrep", "rg", "jq", "find", "sort", "uniq", "git",
+    "codegraph",
+})
+ALLOWED_PROGRAMS = {"readonly": READ_ONLY_PROGRAMS, "docs": READ_ONLY_PROGRAMS}
+# Harness scripts an interpreter may run, and only from <ROOT>/.claude/tools/ - which
+# no dev or docs agent can write (is_live_harness), so a copy planted under another
+# directory under the same name does not qualify. The setters among them are refused
+# separately (sets_pipeline_state) unless they only read.
+ALLOWED_SCRIPTS = frozenset({
+    "memory.py", "state.py", "handoff.py", "events.py", "approvals.py", "mode.py", "swarm.py",
+    "repo_scan.py",
+})
+PYTHON_ENV_RE = re.compile(r"^PYTHON\w*=", re.IGNORECASE)
+PROJECT_DIR_ASSIGN_RE = re.compile(r"CLAUDE_PROJECT_DIR\s*=")
+PROJECT_DIR_VAR_RE = re.compile(r"^\$\{?CLAUDE_PROJECT_DIR\}?")
+ASSIGNMENT_RE = pretool_gate.ASSIGNMENT_RE
+ALLOWLIST_PHRASE = "not on the Bash allowlist"
+PROGRAM_MSG = ("{who}: '{what}' is " + ALLOWLIST_PHRASE + " of this profile (read-only "
+               "utilities, git, codegraph, and the harness scripts memory.py, state.py, "
+               "handoff.py, events.py, approvals.py, mode.py, swarm.py and repo_scan.py). "
+               "Use Read/Grep/Glob, or ask the orchestrator to run it. The options of the allowed "
+               "programs are allowlisted too (agent_gate.FLAG_SPECS), as are NAME=value prefixes "
+               "(none) and shell expansions in the arguments of programs with a write or exec "
+               "option. A tool this agent legitimately needs is added with --allow-script on "
+               "its hook line.")
+
+
+# --- git for the readonly and docs profiles (FX-3 of task-0120) --------------
+# `git log --pretty=format:auto --output=.agentry/state/approvals` exits 0 and writes
+# `auto` into the approvals file: an allowed program's own flag is a file write. The
+# same family reaches the exec side (`git -c core.fsmonitor=CMD status`, an alias set
+# with `git config`, GIT_EXTERNAL_DIFF) and the subcommands that write by design
+# (`archive -o`, `format-patch -o`, `bundle create`, `apply`, `hash-object -w`). A
+# denylist of writers cannot be complete, so the subcommand is default-denied like the
+# program is: only the read-only ones below run, and the options that write are refused
+# inside them. A `git branch` or `git stash` is allowed in its listing form only.
+GIT_READ_SUBS = frozenset({
+    "log", "show", "diff", "status", "blame", "annotate", "shortlog", "describe", "rev-parse",
+    "rev-list", "merge-base", "name-rev", "show-ref", "for-each-ref", "ls-files", "ls-tree",
+    "cat-file", "grep", "diff-tree", "diff-index", "diff-files", "whatchanged", "show-branch",
+    "cherry", "range-diff", "count-objects", "check-ignore", "check-attr", "verify-commit",
+    "verify-tag", "patch-id", "var", "version",
+})
+# Global options that run something or force a pager: `-c`/`--config-env` inject
+# config (core.fsmonitor, core.pager, alias.*), `-p`/`--paginate` start the pager.
+GIT_EXEC_GLOBALS = frozenset({"-c", "--config-env", "-p", "--paginate"})
+# Global options whose value is the NEXT word (`--opt=value` is one token). Not
+# `--exec-path`, which takes its value with `=` only.
+GIT_VALUE_GLOBALS = frozenset({"-C", "--git-dir", "--work-tree", "--namespace", "--super-prefix",
+                               "--attr-source"})
+# Long options that write a file or run a program: `--output=FILE` (diff, log, show),
+# `--ext-diff`, grep's `--open-files-in-pager`. git abbreviates any unambiguous prefix and
+# an ambiguous one is an error, so a prefix of any of these counts (see
+# is_long_option_prefix). `--output-indicator-new` is longer than `--output`, so it is
+# not a prefix of it and stays allowed.
+GIT_WRITE_LONG_OPTIONS = ("--output", "--ext-diff", "--open-files-in-pager")
+# A variable a git child honours as a program to run: GIT_EXTERNAL_DIFF, GIT_PAGER,
+# GIT_SSH_COMMAND, GIT_CONFIG_*, and the pager/editor fallbacks.
+GIT_ENV_RE = re.compile(r"^(?:GIT_\w*|PAGER|EDITOR|VISUAL)=", re.IGNORECASE)
+BRANCH_READ_LONG = frozenset({
+    "--list", "--show-current", "--all", "--remotes", "--verbose", "--contains", "--no-contains",
+    "--merged", "--no-merged", "--points-at", "--sort", "--format", "--abbrev", "--no-abbrev",
+    "--column", "--no-column", "--color", "--no-color", "--ignore-case",
+})
+BRANCH_LISTING = frozenset({"--list", "--show-current", "--contains", "--no-contains", "--merged",
+                            "--no-merged", "--points-at", "--sort", "--format"})
+BRANCH_READ_SHORT = frozenset("avrliq")
+
+
+def branch_lists(rest: list) -> bool:
+    """`git branch` that only lists: read-only flags, and a positional word (a pattern,
+    or the value of `--contains`) only when a listing flag is present. `git branch NAME`
+    creates a branch, `-d`/`-m`/`-c`/`-f`/`-u` delete, rename, copy or re-point one."""
+    listing = positional = False
+    for tok in rest:
+        if tok.startswith("--"):
+            name = tok.partition("=")[0]
+            if name not in BRANCH_READ_LONG:
+                return False
+            listing = listing or name in BRANCH_LISTING
+        elif tok.startswith("-") and len(tok) > 1:
+            if not set(tok[1:]) <= BRANCH_READ_SHORT:
+                return False
+            listing = listing or "l" in tok
+        else:
+            positional = True
+    return listing or not positional
+
+
+def git_option_writes(sub: str, tok: str) -> bool:
+    """True when one argument of an allowed git subcommand is an option that writes a
+    file or runs a program. `grep -O[CMD]` runs CMD (any short cluster holding the
+    O, `-nOless`); `diff -O<file>` only READS an order file and is not refused."""
+    if tok.startswith("--"):
+        name = tok.partition("=")[0]
+        return any(is_long_option_prefix(name, o) for o in GIT_WRITE_LONG_OPTIONS)
+    return sub == "grep" and tok.startswith("-") and "O" in tok
+
+
+def git_denied(args: list) -> str:
+    """What makes `git ARGS` more than a read ('' when nothing does): a global option
+    that injects config or starts a pager, a subcommand outside GIT_READ_SUBS, a
+    `branch`/`stash` that is not a listing, or an option that writes a file or runs a
+    program. A git call with no subcommand (`git --version`) is a read."""
+    args = real_arguments(args)
+    n = 0
+    while n < len(args) and args[n].startswith("-"):
+        flag, eq, _ = args[n].partition("=")
+        if flag in GIT_EXEC_GLOBALS:
+            return flag
+        n += 2 if flag in GIT_VALUE_GLOBALS and not eq else 1
+    if n >= len(args):
+        return ""
+    sub, rest = args[n].lower(), args[n + 1:]
+    if sub == "stash" and rest[:1] not in (["list"], ["show"]):
+        return "stash"
+    if sub == "branch" and not branch_lists(rest):
+        return "branch (not a listing)"
+    if sub not in GIT_READ_SUBS | {"stash", "branch"}:
+        return sub
+    return next((f"{sub} {tok}" for tok in rest if git_option_writes(sub, tok)), "")
+
+
+# --- memory.py --out / --db (FX-3 of task-0120) -------------------------------
+# `memory.py --export --out FILE` overwrites FILE with a markdown export and `--db FILE`
+# creates a store there, so a path anywhere else replaces pipeline.json, a state file
+# or gate code - and a broken gate script exits non-2, which is an allow. memory.py is
+# on ALLOWED_SCRIPTS for readonly and docs and a dev agent runs it too, so the target is
+# checked for every profile. memory.py refuses the same places itself (second layer).
+MEMORY_SCRIPT = "memory.py"
+MEMORY_TOOL_TAIL = "/.claude/tools/memory/memory.py"
+MEMORY_TARGET_MSG = ("{who}: memory.py {option} '{value}' is not under .agentry/memory/ or tmp/. "
+                     "--export --out overwrites the file it names and --db creates one, so a "
+                     "target elsewhere can replace pipeline.json, a state file or gate code. "
+                     "Write the export under tmp/ (or leave --out off for the default) and "
+                     "report what you need changed to the orchestrator.")
+
+
+def memory_options(args: list) -> list:
+    """[(option, value)] for every `--out` and `--db` among a memory.py call's arguments,
+    in argparse's spellings: `--out F`, `--out=F` and any prefix of `--out` (`--o`,
+    `--ou`; no other memory.py option starts `--o`). `--db` has no unambiguous
+    abbreviation (`--d` is also `--dry-run`)."""
+    found, n = [], 0
+    while n < len(args):
+        tok, n = args[n], n + 1
+        if tok == "--":
+            break
+        name, eq, value = tok.partition("=")
+        if is_long_option_prefix(name, "--out"):
+            option = "--out"
+        elif name == "--db":
+            option = "--db"
+        else:
+            continue
+        if not eq:
+            value, n = (args[n] if n < len(args) else ""), n + 1
+        found.append((option, value))
+    return found
+
+
+def memory_target_ok(value: str, cur: str, roots: list) -> bool:
+    """True when `value` is a plain path that resolves under one of `roots`. A value the
+    shell would still expand (`$VAR`, a substitution, `~`) names no path the gate can
+    see, so it is not ok."""
+    if not value or "$" in value or "`" in value or value.startswith("~"):
+        return False
+    real = [normalize(f) for f in pretool_gate.path_forms(value, cur)[1:]]  # [0] is the spelling as written
+    return bool(real) and all(any(f == r or f.startswith(r + "/") for r in roots) for f in real)
+
+
+def memory_target_denied(command: str, cwd: str = "", _depth: int = 0) -> tuple:
+    """(option, value) of the first `--out`/`--db` of a harness memory.py call in
+    `command` that points outside .agentry/memory/ and tmp/, else ()."""
+    roots = [normalize(os.path.realpath(state.ROOT / ".agentry" / "memory")),
+             normalize(os.path.realpath(state.ROOT / "tmp"))]
+    for seg, cur in walk_segments(command, cwd) or []:
+        for i, word in pretool_gate.exec_tokens(seg):
+            if i < 0 or script_label(word) != MEMORY_SCRIPT:
+                continue
+            tool = normalize(os.path.realpath(os.path.join(cur, pretool_gate.msys_to_win(word))))
+            if not tool.endswith(MEMORY_TOOL_TAIL):
+                continue  # not the harness script: a profile that may not run it is refused elsewhere
+            for option, value in memory_options(real_arguments(seg[i + 1:])):
+                if not memory_target_ok(value, cur, roots):
+                    return option, value
+    if _depth < pretool_gate.MAX_SHELL_DEPTH:
+        for body in pretool_gate.nested_command_bodies(command):
+            hit = memory_target_denied(body, cwd, _depth + 1)
+            if hit:
+                return hit
+    return ()
+
+
+def memory_target_deny(who: str, command: str, cwd: str) -> int:
+    """deny() for a memory.py target outside its two directories, allow() otherwise.
+    Fails CLOSED: this check guards a write, so an error in it is a refusal."""
+    try:
+        hit = memory_target_denied(command, cwd)
+    except Exception:
+        hit = ("--out/--db", "(the target check failed on this command)")
+    return deny(MEMORY_TARGET_MSG.format(who=who, option=hit[0], value=hit[1])) if hit else allow()
+
+
+# --- git writing options in the dev profile (FX-3b of task-0120) --------------
+# readonly and docs refuse every git call that is not a read. The dev profile commits
+# and branches, so git stays open there, but `git log --output=FILE` writes FILE exactly
+# as a redirect does: onto the approvals file, the trunk-push marker, pipeline.json or
+# the live harness, which every profile is refused. So the file or directory a git
+# option names is judged like a redirect target, and a target the gate cannot resolve is
+# refused. Other git writes to working files stay allowed. The options come from
+# `git <sub> -h` (2.51): git abbreviates any unambiguous long option, so a prefix counts.
+GIT_TARGET_LONG = ("--output", "--output-directory", "--export-marks")
+# The short option that names a file or directory, per subcommand (`archive -o FILE`,
+# `format-patch -o DIR`, `index-pack -o FILE`, `config -f FILE`). Elsewhere `-o` is a
+# flag (`ls-files -o`), not a target.
+GIT_TARGET_SHORT = {"archive": "o", "format-patch": "o", "index-pack": "o", "config": "f"}
+# Global options that can move git's working tree, so a relative target no longer
+# resolves against the directory the gate sees. A GIT_* assignment anywhere in the
+# command can do the same (GIT_WORK_TREE, GIT_DIR, GIT_CONFIG_*).
+GIT_MOVING_GLOBALS = frozenset({"-c", "--config-env", "--work-tree", "--git-dir"})
+GIT_ENV_ASSIGN_RE = re.compile(r"(?<!\w)GIT_\w*\s*=", re.IGNORECASE)
+GIT_TARGET_MSG = ("{who}: git {option} '{value}' writes into .agentry/state/, .agentry/pipeline.json "
+                  "or the live harness (.claude/tools, settings, agent definitions of the project "
+                  "root), or its target cannot be resolved, so the gate refuses it. `git log "
+                  "--output=FILE` writes FILE like a redirect does. Write under tmp/ and report "
+                  "what you need changed to the orchestrator.")
+
+
+def git_target_options(sub: str, rest: list) -> list:
+    """[(option, value)] for every option of `git SUB REST` that names a file or directory
+    git writes: `--output`, `--output-directory`, `--export-marks` and `config --file`
+    (`--opt=V`, `--opt V` and every unambiguous prefix), the short option of
+    GIT_TARGET_SHORT (`-o V`, `-oV`, inside a cluster `-no V`) and the words after
+    `bundle create`. A missing value is ''. Arguments after a bare `--` are pathspecs."""
+    found = []
+    words = [w for w in rest if not w.startswith("-")]
+    if sub == "bundle" and words[:1] == ["create"]:
+        found += [("bundle create", w) for w in words[1:]]
+    long_names = GIT_TARGET_LONG + (("--file",) if sub == "config" else ())
+    letter, n = GIT_TARGET_SHORT.get(sub, ""), 0
+    while n < len(rest):
+        tok, n = rest[n], n + 1
+        if tok == "--":
+            break
+        name, eq, value = tok.partition("=")
+        if tok.startswith("--"):
+            if any(is_long_option_prefix(name, o) for o in long_names):
+                found.append((name, value if eq else (rest[n] if n < len(rest) else "")))
+        elif letter and tok.startswith("-") and letter in tok[1:]:
+            glued = tok[1:].partition(letter)[2]
+            found.append((f"-{letter}", glued or (rest[n] if n < len(rest) else "")))
+    return found
+
+
+def git_call_target_hit(seg: list, cur: str, moved: bool) -> tuple:
+    """(option, value) of the first git target in one simple command that is protected or
+    unresolvable, else (). `-C DIR` moves the directory the target resolves against;
+    `moved` says an environment assignment may have moved the working tree."""
+    for i, tok in enumerate(seg):
+        if not pretool_gate.GIT_TOKEN_RE.match(tok):
+            continue
+        args, n, base, lost = real_arguments(seg[i + 1:]), 0, cur, False
+        while n < len(args) and args[n].startswith("-"):
+            flag, eq, _ = args[n].partition("=")
+            lost = lost or flag in GIT_MOVING_GLOBALS
+            if flag == "-C" and n + 1 < len(args):
+                where = args[n + 1]
+                if "$" in where or "`" in where or where.startswith("~"):
+                    lost = True
+                else:
+                    base = os.path.normpath(os.path.join(base, pretool_gate.msys_to_win(where)))
+            n += 2 if (flag in GIT_VALUE_GLOBALS or flag in ("-c", "--config-env")) and not eq else 1
+        if n >= len(args):
+            continue
+        for option, value in git_target_options(args[n].lower(), args[n + 1:]):
+            if (lost or moved or not value or "$" in value or "`" in value or value.startswith("~")
+                    or protected_operand(value, [base])):
+                return option, value
+    return ()
+
+
+def git_target_denied(command: str, cwd: str = "", _moved: bool | None = None, _depth: int = 0) -> tuple:
+    """(option, value) of the first git option in `command` whose target is protected state,
+    pipeline.json or the live harness, or cannot be resolved, else ()."""
+    moved = bool(GIT_ENV_ASSIGN_RE.search(command)) if _moved is None else _moved
+    for seg, cur in walk_segments(command, cwd) or []:
+        hit = git_call_target_hit(seg, cur, moved)
+        if hit:
+            return hit
+    if _depth < pretool_gate.MAX_SHELL_DEPTH:
+        for body in pretool_gate.nested_command_bodies(command):
+            hit = git_target_denied(body, cwd, moved, _depth + 1)
+            if hit:
+                return hit
+    return ()
+
+
+def git_target_deny(who: str, command: str, cwd: str) -> int:
+    """deny() for a git write target the dev profile may not touch, allow() otherwise.
+    Fails CLOSED, like memory_target_deny: an error in a check that guards a write is a
+    refusal."""
+    try:
+        hit = git_target_denied(command, cwd)
+    except Exception:
+        hit = ("option", "(the target check failed on this command)")
+    return deny(GIT_TARGET_MSG.format(who=who, option=hit[0], value=hit[1])) if hit else allow()
+
+
+# --- Per-program flag allowlists (SEC-A H1 of task-0120) ------------------------------
+# A program on READ_ONLY_PROGRAMS runs with the options listed for it here and no others.
+# The denylist this replaces (find actions, sort -o, uniq's second operand, rg --pre) was
+# closed under nothing: `sort --compress-program=PROG` runs PROG, `rg --search-zip` runs a
+# decompressor, `RIPGREP_CONFIG_PATH=f rg` loads a config that carries `--pre`, `date -s`
+# sets the clock, `file -C` writes a compiled magic file. An option not named below is
+# refused, so a flag a future version adds is refused until someone reads what it does.
+#
+# What is NOT a spelling this module can judge, and is refused instead:
+#   * a `NAME=value` in front of the program (see text_program_denied): the environment
+#     reaches the program's own configuration (RIPGREP_CONFIG_PATH, GIT_*, PAGER, PATH);
+#   * a word the shell will still expand (`$x`, `$(..)`, a backtick, a leading `{`) in an
+#     argument of a program that has a write or exec option, because the expansion can be
+#     `-o` or `--output=f` and the gate sees `$x`. After a bare `--` the words are operands
+#     and may expand (`rg -- "$term" docs`);
+#   * options and operands the allowlist does not name.
+# Not covered: a glob that expands to a file NAMED like an option (`sort *` beside a file
+# called `--output=x`). The gate sees `*`; a docs agent could create such a file.
+#
+# Programs left out on purpose (a Bash tool is the wrong tool for them): sed and awk
+# (`w file`, `system()`), tar (`--to-command`, `-I`), less and more (pager shell escape),
+# xargs as a program (it is a wrapper: the command behind it is judged), curl, dd, tee.
+class FlagSpec:
+    """The options one allowed program takes. `short` and `short_value` are letters
+    (`-n`, a cluster `-rn`; a value letter ends a cluster and takes the rest of the word or
+    the next word), `long` are boolean names, `long_value` the names that take values (an
+    `:N` suffix says how many words, default 1). `max_operands` caps the non-option words;
+    `operand_prefix` is what every operand must start with."""
+
+    def __init__(self, short: str = "", short_value: str = "", long: str = "",
+                 long_value: str = "", max_operands: int | None = None, operand_prefix: str = ""):
+        self.short = frozenset(short)
+        self.short_value = frozenset(short_value)
+        self.long = frozenset(long.split())
+        self.long_value = {n: int(c or 1) for n, _, c in (item.partition(":") for item in long_value.split())}
+        self.max_operands = max_operands
+        self.operand_prefix = operand_prefix
+
+
+_HELP = "--help --version"
+_HEAD_TAIL = FlagSpec("qvz", "nc", "--quiet --silent --verbose --zero-terminated " + _HELP,
+                      "--lines --bytes")  # no -f/-F/--follow/--pid/--retry: they never return
+_LS = FlagSpec(
+    "aAbBcCdDfFgGhHiklLmnNopqQrRsStuUvxXZ1", "ITw",
+    "--all --almost-all --escape --ignore-backups --classify --file-type --dereference "
+    "--dereference-command-line --directory --human-readable --si --inode --kibibytes "
+    "--numeric-uid-gid --literal --hide-control-chars --show-control-chars --quote-name "
+    "--reverse --recursive --size --group-directories-first --no-group --author --full-time "
+    "--color --context " + _HELP,
+    "--block-size --format --hide --ignore --indicator-style --quoting-style --sort --time "
+    "--time-style --width --tabsize")
+_GREP = FlagSpec(
+    "abcEFGHhIiLlnoPqRrsTUuVvwxyZz", "ABCDdefmX",
+    "--basic-regexp --byte-offset --count --dereference-recursive --extended-regexp "
+    "--files-with-matches --files-without-match --fixed-strings --perl-regexp --ignore-case "
+    "--no-ignore-case --initial-tab --invert-match --line-buffered --line-number --line-regexp "
+    "--no-filename --no-messages --null --null-data --only-matching --quiet --recursive "
+    "--silent --text --binary --unix-byte-offsets --with-filename --word-regexp "
+    "--no-group-separator --color --colour " + _HELP,
+    "--after-context --before-context --binary-files --context --devices --directories "
+    "--exclude --exclude-dir --exclude-from --file --group-separator --include --label "
+    "--max-count --regexp")
+
+FLAG_SPECS = {
+    "cat": FlagSpec("AbeEnstTuv", "", "--show-all --number-nonblank --show-ends --number "
+                    "--squeeze-blank --show-tabs --show-nonprinting " + _HELP),
+    "head": _HEAD_TAIL, "tail": _HEAD_TAIL, "ls": _LS, "dir": _LS,
+    "pwd": FlagSpec("LP", "", "--logical --physical " + _HELP),
+    "wc": FlagSpec("cmlLw", "", "--bytes --chars --lines --max-line-length --words " + _HELP),
+    "cut": FlagSpec("nsz", "bcdf", "--complement --only-delimited --zero-terminated " + _HELP,
+                    "--bytes --characters --delimiter --fields --output-delimiter"),
+    "tr": FlagSpec("cCdst", "", "--complement --delete --squeeze-repeats --truncate-set1 " + _HELP),
+    "nl": FlagSpec("p", "bdfhilnsvw", "--no-renumber " + _HELP,
+                   "--body-numbering --section-delimiter --footer-numbering --header-numbering "
+                   "--line-increment --join-blank-lines --number-format --number-separator "
+                   "--starting-line-number --number-width"),
+    "tac": FlagSpec("br", "s", "--before --regex " + _HELP, "--separator"),
+    "rev": FlagSpec("hV"),
+    "column": FlagSpec("txJ", "scoNRTHEWl", "--table --json " + _HELP),
+    "fold": FlagSpec("bs", "w", "--bytes --spaces " + _HELP, "--width"),
+    "comm": FlagSpec("123z", "", "--check-order --nocheck-order --total --zero-terminated " + _HELP,
+                     "--output-delimiter"),
+    "paste": FlagSpec("sz", "d", "--serial --zero-terminated " + _HELP, "--delimiters"),
+    # no -l / --paginate: it pipes the output through `pr`
+    "diff": FlagSpec(
+        "abBcdEfiNnpqrsTtuwyZ", "CUDFIWxXLS",
+        "--text --ignore-space-change --ignore-blank-lines --ignore-case --ignore-tab-expansion "
+        "--ignore-trailing-space --ignore-all-space --expand-tabs --initial-tab --minimal "
+        "--brief --report-identical-files --recursive --new-file --unidirectional-new-file "
+        "--no-dereference --strip-trailing-cr --side-by-side --left-column "
+        "--suppress-common-lines --show-c-function --speed-large-files --ed --rcs --unified "
+        "--context --normal --color --ignore-file-name-case --no-ignore-file-name-case "
+        "--suppress-blank-empty " + _HELP,
+        "--ignore-matching-lines --label --exclude --exclude-from --width --starting-file "
+        "--show-function-line"),
+    "cmp": FlagSpec("bls", "inI", "--print-bytes --verbose --silent --quiet " + _HELP,
+                    "--ignore-initial --bytes --skip-bytes --ignore-bytes"),
+    "stat": FlagSpec("LftZ", "c", "--dereference --file-system --terse " + _HELP,
+                     "--format --printf"),
+    # no -C / --compile (writes a compiled magic file), no -z / -Z / --uncompress (runs a
+    # decompressor)
+    "file": FlagSpec("bhiIkLnNprsv", "fmeP",
+                     "--brief --mime --mime-type --mime-encoding --keep-going --dereference "
+                     "--no-dereference --no-buffer --no-pad --preserve-date --raw --special-files "
+                     "--print0 " + _HELP, "--files-from --magic-file --exclude --parameter"),
+    "du": FlagSpec("abchHkLmPsSxX0", "dtB",
+                   "--all --apparent-size --bytes --total --dereference-args --human-readable --si "
+                   "--inodes --dereference --separate-dirs --summarize --one-file-system "
+                   "--count-links --no-dereference --null --time " + _HELP,
+                   "--block-size --exclude --exclude-from --max-depth --threshold --time-style"),
+    "which": FlagSpec("asV", "", "--all --version --help"),
+    "where": FlagSpec(),
+    "basename": FlagSpec("az", "s", "--multiple --zero " + _HELP, "--suffix"),
+    "dirname": FlagSpec("z", "", "--zero " + _HELP),
+    "realpath": FlagSpec("eEmsqzLP", "", "--canonicalize-existing --canonicalize-missing "
+                         "--no-symlinks --quiet --strip --zero --logical --physical " + _HELP,
+                         "--relative-to --relative-base"),
+    "readlink": FlagSpec("femnqsvz", "", "--canonicalize --canonicalize-existing "
+                         "--canonicalize-missing --no-newline --quiet --silent --verbose --zero " + _HELP),
+    # no -s / --set (sets the clock); an operand that does not start with + would
+    "date": FlagSpec("uRI", "drf", "--utc --universal --rfc-email --debug --resolution "
+                     "--iso-8601 " + _HELP, "--date --reference --file --rfc-3339",
+                     operand_prefix="+"),
+    "uname": FlagSpec("asnrvmpio", "", "--all --kernel-name --nodename --kernel-release "
+                      "--kernel-version --machine --processor --hardware-platform "
+                      "--operating-system " + _HELP),
+    "whoami": FlagSpec("", "", _HELP),
+    "hostname": FlagSpec("sfiIdaAyv", "", _HELP, max_operands=0),  # an operand SETS the name
+    "id": FlagSpec("agGnrRuzZ", "", "--context --group --groups --name --real --user --zero " + _HELP),
+    "seq": FlagSpec("w", "fs", "--equal-width " + _HELP, "--format --separator"),
+    "type": FlagSpec("afpPt"),
+    "read": FlagSpec("res", "dinNptu"),  # operands are variable names, see safe_var
+    "grep": _GREP, "egrep": _GREP, "fgrep": _GREP,
+    # no --pre / --pre-glob (run a program per file), no -z / --search-zip (run a
+    # decompressor), no --hostname-bin, no --generate
+    "rg": FlagSpec(
+        "FHILNPSUVabchilnopqsuvwx0", "ABCEMTdefgjmrt",
+        "--auto-hybrid-regex --binary --block-buffered --byte-offset --case-sensitive --column "
+        "--count --count-matches --crlf --debug --files --files-with-matches --files-without-match "
+        "--fixed-strings --follow --glob-case-insensitive --heading --hidden --ignore-case "
+        "--ignore-file-case-insensitive --include-zero --invert-match --json --line-buffered "
+        "--line-number --line-regexp --max-columns-preview --mmap --multiline --multiline-dotall "
+        "--no-binary --no-block-buffered --no-byte-offset --no-column --no-config --no-crlf "
+        "--no-filename --no-glob-case-insensitive --no-heading --no-hidden --no-ignore "
+        "--no-ignore-dot --no-ignore-exclude --no-ignore-files --no-ignore-global "
+        "--no-ignore-messages --no-ignore-parent --no-ignore-vcs --no-include-zero "
+        "--no-invert-match --no-line-buffered --no-line-number --no-max-columns-preview "
+        "--no-messages --no-mmap --no-multiline --no-multiline-dotall --no-one-file-system "
+        "--no-pcre2 --no-require-git --no-sort-files --no-stats --no-trim --no-unicode --null "
+        "--null-data --one-file-system --only-matching --passthru --pcre2 --pretty --quiet "
+        "--smart-case --sort-files --stats --text --trace --trim --type-list --unicode "
+        "--unrestricted --vimgrep --with-filename --word-regexp " + _HELP,
+        "--after-context --before-context --color --colors --context --context-separator "
+        "--dfa-size-limit --encoding --engine --field-context-separator --field-match-separator "
+        "--file --glob --iglob --ignore-file --max-columns --max-count --max-depth --maxdepth "
+        "--max-filesize --path-separator --regex-size-limit --regexp --replace --sort --sortr "
+        "--threads --type --type-add --type-clear --type-not"),
+    "jq": FlagSpec(
+        "CMSabcehjnrsRV", "fL",
+        "--null-input --raw-input --slurp --compact-output --raw-output --raw-output0 "
+        "--join-output --ascii-output --color-output --monochrome-output --sort-keys --tab --seq "
+        "--stream --stream-errors --unbuffered --exit-status --binary --args --jsonargs " + _HELP,
+        "--indent --arg:2 --argjson:2 --slurpfile:2 --rawfile:2 --from-file --library-path"),
+    # no -o / --output, no --compress-program (runs a program), no -T / --temporary-directory,
+    # no --files0-from, no --parallel
+    "sort": FlagSpec(
+        "bdfghiMnRrVcCsumz", "ktS",
+        "--ignore-leading-blanks --dictionary-order --ignore-case --general-numeric-sort "
+        "--human-numeric-sort --ignore-nonprinting --month-sort --numeric-sort --random-sort "
+        "--reverse --version-sort --check --stable --unique --zero-terminated --merge --debug "
+        + _HELP, "--key --field-separator --buffer-size --sort"),
+    # a second operand is the OUTPUT file
+    "uniq": FlagSpec("cdDiuz", "fsw", "--count --repeated --all-repeated --ignore-case --unique "
+                     "--zero-terminated --group " + _HELP,
+                     "--skip-fields --skip-chars --check-chars", max_operands=1),
+}
+# Programs whose words are not options: shell builtins and tests, `expr 5 - 3`, `sleep 1`.
+# None of them takes an option that writes or runs anything. `for` and `printf` get a
+# check of their own (loop variable, `printf -v`), `find` and `codegraph` are judged below.
+ANY_FLAGS = frozenset({"echo", "test", "[", "[[", "true", "false", "expr", "sleep", "exit", "cd"})
+# Programs with a write or exec option of their own: a word the shell will still expand
+# is refused in their arguments (see the block comment). The second set refuses it after
+# `--` too, because there a second word is a second operand (uniq's output file, date's
+# new time, hostname's new name) or a predicate (find -delete).
+DYNAMIC_REFUSED = frozenset({"find", "sort", "uniq", "rg", "git", "codegraph", "date", "file",
+                             "hostname", "diff"})
+DYNAMIC_ANYWHERE = frozenset({"find", "uniq", "date", "hostname"})
+DYNAMIC_RE = re.compile(r"\$[\w@*#?!$'\"{(-]|`")
+# find takes single-dash predicates, so the allowlist is a set of names. `-newerXY` is
+# matched by FIND_NEWER_RE. Left out: -exec -execdir -ok -okdir -delete -fprint -fprint0
+# -fprintf -fls (run a program or write a file) and -files0-from.
+FIND_ALLOWED = frozenset({
+    "-H", "-L", "-P", "-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename", "-regex",
+    "-iregex", "-regextype", "-type", "-xtype", "-size", "-mtime", "-atime", "-ctime", "-mmin",
+    "-amin", "-cmin", "-newer", "-anewer", "-cnewer", "-used", "-perm", "-user", "-group", "-uid",
+    "-gid", "-nouser", "-nogroup", "-links", "-inum", "-samefile", "-lname", "-ilname", "-fstype",
+    "-empty", "-executable", "-readable", "-writable", "-true", "-false", "-print", "-print0",
+    "-ls", "-printf", "-prune", "-quit", "-not", "-and", "-or", "-a", "-o", "-depth", "-d",
+    "-maxdepth", "-mindepth", "-mount", "-xdev", "-follow", "-noleaf", "-daystart",
+    "-ignore_readdir_race", "-noignore_readdir_race", "-warn", "-nowarn", "-help", "-version",
+})
+FIND_NEWER_RE = re.compile(r"^-newer[acBmt][acBmt]$")
+# A negative number is a predicate's VALUE (`-mtime -7`, `-size -10k`, `-perm -644`), never an option.
+FIND_NUMBER_RE = re.compile(r"^-\d+[A-Za-z]*$")
+# codegraph's read commands. init, uninit, index, sync, install, uninstall, upgrade, daemon,
+# unlock, serve and telemetry write the index, the agent configuration or the binary.
+CODEGRAPH_READ = frozenset({"explore", "callers", "callees", "impact", "affected", "query", "node",
+                            "files", "status", "version", "help"})
+CODEGRAPH_GLOBALS = frozenset({"-V", "-v", "--version", "-h", "--help"})
+# A shell variable an agent may assign: lower case and not already in the environment. An
+# exported name (PATH, HOME, TEMP, a GIT_* or *_PROXY left by the host) reaches every child
+# process; a new lower-case name stays a shell variable and is never exported.
+SAFE_VAR_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def safe_var(name: str) -> bool:
+    return bool(SAFE_VAR_RE.match(name)) and name.casefold() not in {k.casefold() for k in os.environ}
+
+
+def dynamic_arg(args: list, anywhere: bool) -> str:
+    """The first word that still holds a shell expansion (`$x`, `${x}`, `$(`, a backtick,
+    a leading `{` for brace expansion), before a bare `--` unless `anywhere`."""
+    for tok in args:
+        if tok == "--" and not anywhere:
+            break
+        if DYNAMIC_RE.search(tok) or tok.startswith("{"):
+            return tok
+    return ""
+
+
+def scan_flags(spec: FlagSpec, args: list) -> tuple:
+    """(first option the spec does not name or '', the operands). A word after a bare `--`
+    is an operand; a lone `-` is stdin. Long options are matched by their whole name:
+    getopt also accepts an unambiguous prefix (`--out` for `--output`), and a prefix is not
+    on the list, so it is refused."""
+    operands, n = [], 0
+    while n < len(args):
+        tok, n = args[n], n + 1
+        if tok == "--":
+            operands.extend(args[n:])
+            break
+        if tok.startswith("--"):
+            name, eq, _ = tok.partition("=")
+            if name in spec.long:
+                continue
+            if name in spec.long_value:
+                n += 0 if eq else spec.long_value[name]
+                continue
+            return tok, operands
+        if tok.startswith("-") and len(tok) > 1:
+            for k, ch in enumerate(tok[1:], 1):
+                if ch in spec.short_value:
+                    n += 0 if k < len(tok) - 1 else 1
+                    break
+                if ch not in spec.short and not ch.isdigit():
+                    return tok, operands
+            continue
+        operands.append(tok)
+    return "", operands
+
+
+def find_denied(args: list) -> str:
+    """The first word of a `find` that is a single-dash predicate or option it does not
+    allow (`-exec`, `-delete`, `-fprint`, ...)."""
+    return next((a for a in args if a.startswith("-") and len(a) > 1 and a not in FIND_ALLOWED
+                 and not FIND_NEWER_RE.match(a) and not FIND_NUMBER_RE.match(a)), "")
+
+
+def codegraph_denied(args: list) -> str:
+    """'' for a read command (or a version/help flag), else the word that is not one."""
+    if not args:
+        return ""
+    return "" if args[0] in CODEGRAPH_READ | CODEGRAPH_GLOBALS else args[0]
+
+
+def unsafe_args(name: str, args: list) -> str:
+    """The argument that gives an allowed program a write or exec mode, or that the
+    program's allowlist does not name, else ''. Fails closed for a program on
+    READ_ONLY_PROGRAMS that has no entry above."""
+    args = real_arguments(args)
+    if name in DYNAMIC_REFUSED:
+        hit = dynamic_arg(args, name in DYNAMIC_ANYWHERE)
+        if hit:
+            return f"{hit} (a shell expansion the gate cannot read)"
+    if name == "git":
+        return git_denied(args)
+    if name == "find":
+        return find_denied(args)
+    if name == "codegraph":
+        return codegraph_denied(args)
+    if name == "printf":  # bash's `printf -v VAR` assigns a shell variable, PATH included
+        return args[0] if args[:1] and args[0].startswith("-v") else ""
+    if name == "for":
+        return args[0] if args and not safe_var(args[0]) else ""
+    if name in ANY_FLAGS:
+        return ""
+    spec = FLAG_SPECS.get(name)
+    if spec is None:
+        return "(no flag allowlist for this program)"
+    flag, operands = scan_flags(spec, args)
+    if flag:
+        return flag
+    if name == "read":
+        return next((o for o in operands if not safe_var(o)), "")
+    if spec.max_operands is not None and len(operands) > spec.max_operands:
+        return f"{operands[spec.max_operands]} (operand)"
+    return next((o for o in operands if not o.startswith(spec.operand_prefix)), "")
+
+
+def planted_binary(token: str, cur: str) -> bool:
+    """A path-qualified argv0 that resolves INSIDE the project: a file the agent could
+    have written under the name of an allowed program. System binaries live outside."""
+    if not re.search(r"[\\/]", token):
+        return False
+    real = normalize(os.path.realpath(os.path.join(cur, token)))
+    root = normalize(os.path.realpath(state.ROOT))
+    return real == root or real.startswith(root + "/")
+
+
+def interpreter_script_denied(seg: list, i: int, cur: str, extra: set, project_dir: bool) -> str:
+    """'' when the python at seg[i] runs a harness script it may run, else what it
+    runs. `-c`, stdin (`-`, `< file`, a pipe) and a bare REPL name no script. `-m MOD`
+    is the file MOD.py resolved from the current directory, which is where python looks
+    first, so a planted copy elsewhere does not qualify."""
+    if any(PYTHON_ENV_RE.match(t) for t in seg[:i]):
+        return "python (PYTHON* variable)"
+    found = pretool_gate.script_operand(seg, i)
+    if found is None:
+        return "python (no script file)"
+    n, word = found
+    if any(t.startswith("-") and not t.startswith("--") and "c" in t[1:] for t in seg[i + 1:n + 1]):
+        return "python -c"
+    name = script_label(word)
+    if name in extra:
+        return ""
+    if project_dir:
+        word = PROJECT_DIR_VAR_RE.sub(lambda _: str(state.ROOT), word)
+    tools = normalize(os.path.realpath(state.ROOT / ".claude" / "tools"))
+    real = normalize(os.path.realpath(os.path.join(cur, word)))
+    if name in ALLOWED_SCRIPTS and real.startswith(tools + "/"):
+        return ""
+    return f"python {word}"
+
+
+def text_program_denied(text: str, profile: str, extra: set, cwd: str, project_dir: bool) -> str:
+    """program_denied() for ONE command text, its substitutions flattened out."""
+    walked = walk_segments(flatten_substitutions(text), cwd, project_dir)
+    if walked is None:
+        return "(command could not be parsed)"
+    allowed = ALLOWED_PROGRAMS[profile]
+    for seg, cur in walked:
+        i = pretool_gate.argv0_index(seg)
+        if i is None:
+            # `PATH=docs/bin; ls` assigns without running anything, and the assignment
+            # outlives the segment. Only a new lower-case name is a harmless variable.
+            bad = next((t for t in seg if ASSIGNMENT_RE.match(t)
+                        and not safe_var(t.partition("=")[0])), "")
+            if bad:
+                return f"{bad.partition('=')[0]}= (an assignment to a name the environment may use)"
+            continue
+        name = base_name(seg[i])
+        # `NAME=value prog` hands the value to the program: RIPGREP_CONFIG_PATH loads a
+        # config that carries `--pre`, GIT_* names a pager, PYTHONPATH a module. Refused
+        # in front of every program, an interpreter running a harness script included.
+        assignment = next((t for t in seg[:i] if ASSIGNMENT_RE.match(t)), "")
+        if pretool_gate.PYTHON_RE.match(seg[i]) and name not in extra:
+            if assignment:
+                return f"python ({assignment.partition('=')[0]}= prefix)"
+            hit = interpreter_script_denied(seg, i, cur, extra, project_dir)
+            if hit:
+                return hit
+        elif name in extra:
+            continue
+        elif name not in allowed or planted_binary(seg[i], cur):
+            return seg[i]
+        elif assignment:
+            if name == "git" and GIT_ENV_RE.match(assignment):
+                return "git (GIT_*, PAGER, EDITOR or VISUAL variable)"
+            return f"{name} ({assignment.partition('=')[0]}= prefix)"
+        else:
+            hit = unsafe_args(name, seg[i + 1:])
+            if hit:
+                return f"{name} {hit}"
+    return ""
+
+
+def program_denied(command: str, profile: str, allow_scripts: tuple = (), cwd: str = "") -> str:
+    """The first program `command` runs that `profile` may not ('' when all are
+    allowed). Default-deny: a simple command whose argv0 is not on ALLOWED_PROGRAMS,
+    not an allowed harness script and not named in `allow_scripts` is the hit.
+    Substitution bodies (`$( )`, backticks, `<( )`) are judged the same way. A nested
+    shell or `eval` is no allowed program, so its body never needs unwrapping. Text that
+    cannot be tokenised is a hit."""
+    extra = {base_name(a) for a in allow_scripts}
+    project_dir = not PROJECT_DIR_ASSIGN_RE.search(command)
+    for text in [command, *pretool_gate.substitution_bodies(command)]:
+        hit = text_program_denied(text, profile, extra, cwd, project_dir)
+        if hit:
+            return hit
+    return ""
+
+
+# --- Swarm zones (task-0060 S3) -----------------------------------------------
+# While a frozen zone map is in force (zones.load(): the umbrella task sits at implement
+# or test) a dev agent may write only inside the zone its own dispatch prompt names, or
+# under a shared directory. Everything else is refused, with the owning zone named. The
+# zone comes from the agent's OWN transcript (docs/technical/agent-identity-2.1.295.md);
+# the parent transcript names every agent's zone and is never read. With no zones.json,
+# or with its task outside implement/test, none of this runs and dev behaves as before.
+# A map that is unusable denies: an agent must not slip out of its zone because the file
+# was damaged.
+PATH_WRITERS = MUTATING_COMMANDS | {"sed -i"}
+# Git commands that rewrite files without naming a path, or move work between zones.
+ZONED_GIT_DENIED = frozenset({
+    "checkout", "switch", "stash", "reset", "restore", "clean",
+    "apply", "am", "merge", "rebase", "cherry-pick", "revert", "pull", "rm", "mv",
+})
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}$")
+ZONE_MSG = ("Dev agent: '{path}' is outside your swarm zone {zone}: {owner}. Write only "
+            "inside your zone, under tmp/ or in the swarm state dir; report the change you "
+            "need to the orchestrator.")
+ZONE_NONE_MSG = ("Dev agent: a swarm zone map is in force and your dispatch prompt names no "
+                 "'Swarm zone: <id>' line the gate can read, so you may not write ('{path}'). "
+                 "Report it to the orchestrator.")
+ZONE_GIT_MSG = ("Dev agent: {hit} is not available while a swarm zone map is in force - it "
+                "rewrites files outside your zone and can undo a sibling's work. Ask the "
+                "orchestrator.")
+ZONE_BROKEN_MSG = ("Dev agent: a swarm zone map exists ({why}) but cannot be used, so writes "
+                   "are refused until the orchestrator re-freezes it (zones.py --prove).")
+
+
+def valid_zone_map(data: object) -> bool:
+    """The frozen map has the shape zones.py writes: a task id and zone id -> paths, every
+    path an exact path or dir/**."""
+    if not (isinstance(data, dict) and isinstance(data.get("task"), str)
+            and isinstance(data.get("zones"), dict)):
+        return False
+    try:
+        return all(isinstance(paths, list) and paths
+                   and all(isinstance(p, str) and zones.parse_path(p) for p in paths)
+                   for paths in data["zones"].values())
+    except ValueError:
+        return False
+
+
+def map_is_dormant() -> bool:
+    """zones.load() said None. True when that is only 'its task is not at implement/test'
+    (a well-formed map of a finished swarm); False when the file is unreadable or not a map,
+    or when the task's stage could not be READ (a locked or corrupt run.db): an unknown
+    stage is not a finished swarm (SEC-A M5 of task-0120). The stage is read again here, and
+    only a stage that is read and is not live counts, so a database that was unreadable a
+    moment ago and says implement now is refused as well."""
+    try:
+        data = json.loads(zones.zones_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return False
+    if not valid_zone_map(data):
+        return False
+    stage = zones.task_stage(data["task"])
+    return stage != zones.STAGE_UNREADABLE and stage not in zones.LIVE_STAGES
+
+
+def agent_zone(payload: dict) -> str | None:
+    """The zone of the calling agent, read from its own transcript, or None. Needs the
+    payload's agent_id (absent on the main thread), session_id and transcript_path."""
+    agent_id, sid, transcript = (payload.get(k) for k in ("agent_id", "session_id",
+                                                           "transcript_path"))
+    if not (isinstance(agent_id, str) and isinstance(sid, str) and isinstance(transcript, str)
+            and transcript and SESSION_ID_RE.match(sid)):
+        return None
+    return zones.zone_for_agent(agent_id, Path(transcript).parent / sid / "subagents")
+
+
+def zone_path_denial(path: str, dirs: list, zone: str, data: dict) -> str:
+    """'' when every place `path` can name (resolved against each of `dirs`, a glob
+    expanded) lies in `zone` or under a shared directory, else the deny text."""
+    root = pretool_gate.normalize(os.path.realpath(state.ROOT))
+    state_dir = pretool_gate.normalize(os.path.realpath(state.STATE_DIR))
+    shared = [root + "/tmp"] + ([state_dir] if state_dir.startswith(root + "/") else [])
+    swarm = zones.swarm_dir(data.get("task"))
+    if swarm is not None:  # the board and QA reports of THIS swarm, no other task folder
+        shared.append(pretool_gate.normalize(os.path.realpath(swarm)))
+    places = []
+    for d in dirs:
+        # [0] is the path as written; only where it resolves counts here
+        places += pretool_gate.path_forms(path, d)[1:]
+        if GLOB_RE.search(path):
+            places += glob.glob(os.path.join(d, strip_quotes(path)))[:MAX_GLOB_HITS]
+    if not places:
+        return ZONE_MSG.format(path=path, zone=zone, owner="the path could not be resolved")
+    failures = []
+    for place in dict.fromkeys(places):
+        p = pretool_gate.normalize(os.path.realpath(place))
+        if any(p.startswith(s + "/") for s in shared):
+            continue
+        if not p.startswith(root + "/"):
+            failures.append((None, "it is outside the project"))
+            continue
+        rel = p[len(root) + 1:]
+        owner = zones.owner_of(rel, data)
+        if owner is None and os.path.isdir(place):
+            owner = zones.owner_of(rel + "/_", data)  # a zone's own directory is the zone's
+        if owner != zone:
+            failures.append((owner, f"it belongs to zone {owner}" if owner
+                             else "no zone owns it (undeclared or shared)"))
+    if not failures:
+        return ""
+    # a place another zone owns is the useful thing to name, not the first place tried
+    why = next((text for owner, text in failures if owner), failures[0][1])
+    return ZONE_MSG.format(path=path, zone=zone, owner=why)
+
+
+def zone_targets(tool: str, ti: dict, cwd: str):
+    """(path, directories) for every file one tool call writes by an explicit path."""
+    if tool == "Bash":
+        for tok, dirs, _ in write_operands(str(ti.get("command", "")), cwd, paths_only=True):
+            if tok.strip():
+                yield tok, dirs
+        return
+    path, _ = pretool_gate.edit_target(tool, ti)
+    if path.strip():
+        yield path, [base_dir(cwd)]
+
+
+def zone_denial(tool: str, ti: dict, cwd: str, payload: dict | None) -> str:
+    """The reason a swarm zone refuses this dev tool call, '' when it does not. `payload`
+    is the hook payload; None (a direct call without one) means no identity, no check."""
+    if payload is None or not (tool == "Bash" or tool in pretool_gate.EDIT_TOOLS):
+        return ""
+    try:
+        if not zones.zones_path().exists():
+            return ""
+    except OSError:
+        return ""
+    try:
+        data = zones.load()
+        if data is None and map_is_dormant():
+            return ""
+        hit = git_mutates(str(ti.get("command", "")), subs=ZONED_GIT_DENIED) if tool == "Bash" else ""
+        targets = list(zone_targets(tool, ti, cwd))
+        if not hit and not targets:
+            return ""  # a read: nothing here for a zone to judge
+        if data is None:
+            return ZONE_BROKEN_MSG.format(why="unreadable, or the run database it depends on cannot be read")
+        if not valid_zone_map(data):
+            return ZONE_BROKEN_MSG.format(why="malformed")
+        if hit:
+            return ZONE_GIT_MSG.format(hit=hit)
+        zone = agent_zone(payload)
+        for path, dirs in targets:
+            if zone is None:
+                return ZONE_NONE_MSG.format(path=path)
+            reason = zone_path_denial(path, dirs, zone, data)
+            if reason:
+                return reason
+        return ""
+    except Exception:
+        return ZONE_BROKEN_MSG.format(why="the check itself failed")
+
+
+def handle_dev(tool: str, ti: dict, cwd: str = "", allow_scripts: tuple = (),
+               payload: dict | None = None) -> int:
     if tool == "Bash":
         command = str(ti.get("command", ""))
+        if unparseable(command):
+            return deny(unparseable_msg("Dev agent", command))
         if runs_approve_script(command):
             return deny("approve.py is orchestrator-only. Recording CEO approval from a "
                         "dev agent is self-approval - report readiness to the orchestrator instead.")
@@ -620,9 +1753,18 @@ def handle_dev(tool: str, ti: dict, cwd: str = "") -> int:
         setter = sets_pipeline_state(command)
         if setter:
             return deny(STATE_SETTER_MSG.format(script=setter))
-        written = writes_protected_state(command)
+        written = writes_protected_state(command, cwd=cwd)
         if written:
             return deny(PROTECTED_STATE_MSG.format(who="Dev agent", path=written))
+        target = memory_target_deny("Dev agent", command, cwd)
+        if target != allow():
+            return target
+        target = git_target_deny("Dev agent", command, cwd)
+        if target != allow():
+            return target
+        zoned = zone_denial(tool, ti, cwd, payload)
+        if zoned:
+            return deny(zoned)
         if is_force_push(command):
             return deny("Force push is forbidden for all agents (rules/git-workflow.md).")
         hit = unnarrowed_test_cmd(command)
@@ -637,9 +1779,12 @@ def handle_dev(tool: str, ti: dict, cwd: str = "") -> int:
         path, content = pretool_gate.edit_target(tool, ti)
         # handle_edit allows anything under .agentry/ as bookkeeping, which would
         # let a dev agent write the approvals level or the mode directly.
-        if is_protected_state(path):
+        if is_protected(path, cwd):
             return deny(PROTECTED_STATE_MSG.format(who="Dev agent", path=path))
-        return pretool_gate.handle_edit(path, content)
+        zoned = zone_denial(tool, ti, cwd, payload)
+        if zoned:
+            return deny(zoned)
+        return pretool_gate.handle_edit(path, content, cwd=cwd)
     return allow()
 
 
@@ -718,68 +1863,113 @@ def unnarrowed_test_cmd(command: str) -> str:
     return ""
 
 
-def handle_readonly(tool: str, ti: dict, cwd: str = "") -> int:
+def unparseable(command: str) -> bool:
+    return pretool_gate.gate_tokens(command) is None
+
+
+def program_hit(profile: str, command: str, cwd: str, allow_scripts: tuple) -> str:
+    """What program_denied() refuses in `command` ('' when nothing). An error inside it is a
+    hit: this is the one check whose failure must never read as an allow."""
+    try:
+        return program_denied(command, profile, allow_scripts, cwd)
+    except Exception:
+        return "(the allowlist check failed on this command)"
+
+
+def check_program(who: str, profile: str, command: str, cwd: str, allow_scripts: tuple) -> int:
+    hit = program_hit(profile, command, cwd, allow_scripts)
+    return deny(PROGRAM_MSG.format(who=who, what=hit)) if hit else allow()
+
+
+# readonly and docs share one Bash chain; only the label and the advice differ.
+READONLY_ADVICE = ("Use Read/Grep/Glob or read-only git commands; report changes you would make "
+                   "to the orchestrator.")
+DOCS_ADVICE = "Use Write/Edit for documents under .claude/, .agentry/ or docs/."
+RESTRICTED_BASH = {"readonly": ("Read-only agent", READONLY_ADVICE), "docs": ("Docs agent", DOCS_ADVICE)}
+
+
+def lexical_bash_checks(profile: str, command: str, cwd: str) -> int:
+    """The spelling-based refusals for a readonly or docs Bash call, in order. Each is a
+    second wall behind the allowlist; see restricted_bash()."""
+    who, advice = RESTRICTED_BASH[profile]
+    if runs_approve_script(command):
+        return deny("approve.py is orchestrator-only.")
+    if runs_waive(command):
+        return deny("handoff.py --waive is orchestrator-only - it records a CEO waiver.")
+    setter = sets_pipeline_state(command)
+    if setter:
+        return deny(STATE_SETTER_MSG.format(script=setter))
+    piped = pretool_gate.check_piped_test_suite(command)
+    if piped != allow():
+        return piped
+    written = writes_protected_state(command, cwd=cwd)
+    if written:
+        return deny(PROTECTED_STATE_MSG.format(who=who, path=written))
+    target = memory_target_deny(who, command, cwd)
+    if target != allow():
+        return target
+    frag = bash_mutates(command)
+    if frag:
+        return deny(f"{who}: mutating Bash denied (matched: '{frag}'). {advice}"
+                    f"{pretool_gate.bare_nul_note(frag)}")
+    return pretool_gate.check_nul_redirect(command)
+
+
+def restricted_bash(profile: str, command: str, cwd: str, allow_scripts: tuple) -> int:
+    """A readonly or docs Bash call. The allowlist decides FIRST (SEC-A H2 of task-0120): it is
+    the one check that does not depend on recognising a spelling, so a lexical check that
+    raises (evaluate() turns that into a refusal for these profiles) is never the only thing
+    between an unlisted program and the shell. When it refuses, the lexical checks still run
+    for one reason only: to name the boundary the command also crosses (approve.py, a state
+    setter, a protected file), which tells the agent more than 'not on the allowlist'. The
+    refusal does not depend on them, and an error in them changes nothing."""
+    who = RESTRICTED_BASH[profile][0]
+    if unparseable(command):
+        return deny(unparseable_msg(who, command))
+    hit = program_hit(profile, command, cwd, allow_scripts)
+    if not hit:
+        return lexical_bash_checks(profile, command, cwd)
+    try:
+        code = lexical_bash_checks(profile, command, cwd)
+    except Exception:
+        code = allow()
+    return code if code != allow() else deny(PROGRAM_MSG.format(who=who, what=hit))
+
+
+def handle_readonly(tool: str, ti: dict, cwd: str = "", allow_scripts: tuple = ()) -> int:
     if tool in pretool_gate.EDIT_TOOLS:
         return deny("This agent is read-only - it audits and reports, it does not modify files. "
                     "Return findings to the orchestrator.")
     if tool == "Bash":
-        command = str(ti.get("command", ""))
-        if runs_approve_script(command):
-            return deny("approve.py is orchestrator-only.")
-        if runs_waive(command):
-            return deny("handoff.py --waive is orchestrator-only - it records a CEO waiver.")
-        setter = sets_pipeline_state(command)
-        if setter:
-            return deny(STATE_SETTER_MSG.format(script=setter))
-        piped = pretool_gate.check_piped_test_suite(command)
-        if piped != allow():
-            return piped
-        written = writes_protected_state(command)
-        if written:
-            return deny(PROTECTED_STATE_MSG.format(who="Read-only agent", path=written))
-        frag = bash_mutates(command)
-        if frag:
-            return deny(f"Read-only agent: mutating Bash denied (matched: '{frag}'). "
-                        f"Use Read/Grep/Glob or read-only git commands; report changes "
-                        f"you would make to the orchestrator."
-                        f"{pretool_gate.bare_nul_note(frag)}")
-        return pretool_gate.check_nul_redirect(command)
+        return restricted_bash("readonly", str(ti.get("command", "")), cwd, allow_scripts)
     return allow()
 
 
-def handle_docs(tool: str, ti: dict, cwd: str = "") -> int:
+def handle_docs(tool: str, ti: dict, cwd: str = "", allow_scripts: tuple = ()) -> int:
     if tool in pretool_gate.EDIT_TOOLS:
         path, _ = pretool_gate.edit_target(tool, ti)
+        # First, so the agent hears which tree this is (pretool_gate.is_live_harness covers
+        # the same trees now, and its answer would be the generic protected-file text), and
+        # so the rule holds on its own if that predicate narrows again.
+        if is_live_instructions(path, cwd):
+            return deny(LIVE_INSTRUCTIONS_MSG.format(path=path))
+        if is_protected(path, cwd):
+            return deny(PROTECTED_STATE_MSG.format(who="Docs agent", path=path))
         if not is_docs_path(path):
-            if is_protected_state(path):
-                return deny(PROTECTED_STATE_MSG.format(who="Docs agent", path=path))
             return deny(f"Docs agent: writes allowed only under .claude/, .agentry/, docs/, "
                         f"README files or the root CLAUDE.md - '{path}' is outside that "
                         f"scope. Code changes belong to dev agents via the pipeline.")
         return allow()
     if tool == "Bash":
-        command = str(ti.get("command", ""))
-        if runs_approve_script(command):
-            return deny("approve.py is orchestrator-only.")
-        if runs_waive(command):
-            return deny("handoff.py --waive is orchestrator-only - it records a CEO waiver.")
-        setter = sets_pipeline_state(command)
-        if setter:
-            return deny(STATE_SETTER_MSG.format(script=setter))
-        piped = pretool_gate.check_piped_test_suite(command)
-        if piped != allow():
-            return piped
-        written = writes_protected_state(command)
-        if written:
-            return deny(PROTECTED_STATE_MSG.format(who="Docs agent", path=written))
-        frag = bash_mutates(command)
-        if frag:
-            return deny(f"Docs agent: mutating Bash denied (matched: '{frag}'). "
-                        f"Use Write/Edit for documents under .claude/, .agentry/ or docs/."
-                        f"{pretool_gate.bare_nul_note(frag)}")
-        return pretool_gate.check_nul_redirect(command)
+        return restricted_bash("docs", str(ti.get("command", "")), cwd, allow_scripts)
     return allow()
 
+
+FAIL_CLOSED_PROFILES = ("readonly", "docs")
+PROFILE_LABELS = {"readonly": "Read-only agent", "docs": "Docs agent", "dev": "Dev agent"}
+FAIL_CLOSED_MSG = ("{who}: the gate failed while checking this {tool} call, so it refuses it rather "
+                   "than guess. Retry with a simpler command; if it keeps failing, report the "
+                   "command to the orchestrator.")
 
 HANDLERS = {
     "dev": handle_dev,
@@ -799,6 +1989,9 @@ def main() -> int:
 def evaluate() -> int:
     parser = argparse.ArgumentParser(description="Per-agent PreToolUse gate")
     parser.add_argument("--profile", choices=sorted(HANDLERS), required=True)
+    parser.add_argument("--allow-script", action="append", default=[], metavar="NAME",
+                        help="extra program or interpreter script this agent may run "
+                             "(readonly and docs profiles; repeatable)")
     try:
         args = parser.parse_args()
     except SystemExit:
@@ -812,13 +2005,24 @@ def evaluate() -> int:
         payload = pretool_gate.read_payload()
     except (ValueError, OSError, UnicodeDecodeError):
         return allow()
+    tool = ""
     try:
         tool = payload.get("tool_name", "")
         ti = payload.get("tool_input", {}) or {}
         if tool in WEB_TOOLS:
             return handle_web(args.profile, tool, ti)
-        return HANDLERS[args.profile](tool, ti, str(payload.get("cwd", "")))
+        extra = {"payload": payload} if args.profile == "dev" else {}
+        return HANDLERS[args.profile](tool, ti, str(payload.get("cwd", "")),
+                                      tuple(args.allow_script), **extra)
     except Exception:
+        # Fail-open is right for the dev profile: its job is running code, a bug here must
+        # not brick the agent that builds the harness, and its writes have the approval
+        # gates behind them. readonly and docs are the profiles whose whole value is
+        # that they cannot write, and an exception is exactly what a crafted command
+        # provokes, so for them a crash in any check refuses the tools that write (SEC-A
+        # H2 of task-0120). Reads and web tools stay allowed.
+        if args.profile in FAIL_CLOSED_PROFILES and (tool == "Bash" or tool in pretool_gate.EDIT_TOOLS):
+            return deny(FAIL_CLOSED_MSG.format(who=PROFILE_LABELS[args.profile], tool=tool))
         return allow()
 
 
