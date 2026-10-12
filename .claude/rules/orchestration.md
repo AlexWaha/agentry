@@ -58,7 +58,9 @@ to the context-absorption chain from `pipeline.md`.
    one-shot trunk push,
    still needs its recorded approval. Each checkpoint that exists is enforced
    deterministically (see Hooks). The CEO may also reject at a checkpoint, which
-   sends the task back to `implement`. The commit checkpoint can be made optional
+   sends the task back to `implement`. Every task type except those in
+   `skip_for_types` (`bugfix`, `techdebt`) also has an earlier checkpoint, the plan approval (`approve.py --gate plan`), which no
+   approvals level grants; rejecting there keeps the task at `plan`. The commit checkpoint can be made optional
    per project: list it in the `ready` stage's `auto_approve` array in
    `pipeline.json` and `advance.py` approves it itself (no parking) - the
    approval flag is still set, so every downstream hook works unchanged. The push
@@ -80,7 +82,8 @@ to the context-absorption chain from `pipeline.md`.
   single source of truth for where a task is. Inspect with
   `python .claude/tools/pipeline/state.py --show`.
 - `.agentry/pipeline.json` - the declarative stage machine, split into
-  `pipelines.build` (implement -> test -> review -> ready -> done) and
+  `pipelines.build` (plan -> plan-approval -> implement -> test -> review ->
+  ready -> done; the types in `skip_for_types`, `bugfix` and `techdebt`, skip the first two) and
   `pipelines.plan` (formalize -> draft -> plan-review -> approval ->
   breakdown -> done): stages, owner agent, allowed tools, and the exit-gate
   command per stage. Finalized by onboarding.
@@ -176,11 +179,19 @@ For each task, drive the deterministic FSM - never hand-wave a stage as done:
    only, never from another branch** (verify with
    `git merge-base --is-ancestor origin/main HEAD`, which must exit `0`). Then run
    `python .claude/tools/pipeline/advance.py --task task-XXXX --type <type>`.
-   This records the run at the first stage. A task started on a non-`main` base,
+   This records the run at the first stage: `plan` for every type except those in
+   `skip_for_types`, `implement` for a `bugfix` or `techdebt`. A task started on a non-`main` base,
    or not registered via `advance.py`, is OUTSIDE the pipeline - the gates are not
    enforced for it - and must NEVER reach commit or push. If you find a task in
    that state, stop and recreate it correctly from `main`.
-2. **Work the stage.** Dispatch the stage's owner agent (from `pipeline.json`)
+2. **Work the stage.** At stage `plan`, dispatch the task's assignee to write
+   what it intends to change and why to `.agentry/plans/<date>-<slug>-<task>.md`
+   (at least 400 characters; the file name must contain the task id). Edits
+   outside `.agentry/` are denied until the CEO's plan approval is recorded.
+   Then run `advance.py` (gate: `artifact_gate.py`), run it again to park at
+   `plan-approval`, present the plan, and after the CEO approves run
+   `approve.py --task task-XXXX --gate plan`, then `advance.py`. For every
+   other stage, dispatch the stage's owner agent (from `pipeline.json`)
    as a background subagent to do the work. The `implement` owner is the generic
    `dev`: it resolves to the task's `assignee` - senior-frontend-dev for frontend
    work, senior-backend-dev for backend, etc. `advance.py` prints the resolved
@@ -196,7 +207,8 @@ For each task, drive the deterministic FSM - never hand-wave a stage as done:
    The script runs the stage's exit gate itself and only advances on a real pass.
    On failure it bumps `retries` and tells you to fix and re-run; after the
    budget it marks the task `blocked`.
-4. **Repeat** through `implement -> test -> review`.
+4. **Repeat** through `plan -> plan-approval -> implement -> test -> review`
+   (a `bugfix` or `techdebt` starts at `implement`).
 5. **Checkpoint - commit.** Entering `ready` parks the task (`awaiting_human=commit`).
    Surface the full diff. When the CEO approves, run
    `approve.py --task task-XXXX --gate commit`, then `git commit`, then `advance.py`.
@@ -234,7 +246,7 @@ umbrella task runs under [Swarm mode](#swarm-mode) instead.
 
 Autonomy is pipelined: while one task waits at a checkpoint, the orchestrator
 starts the next ready task instead of idling. But **at most one task occupies an
-editing stage (`implement`/`test`/`review`) at a time** - parked tasks are frozen
+editing stage (`plan`/`implement`/`test`/`review`) at a time** - parked tasks are frozen
 (no edits), so there are never concurrent edits to the working tree. A task is
 "ready to start" when its file sits in `.agentry/tasks/backlog/` and every
 `depends_on` task is done. There is no `status:` field to set - moving a file
@@ -277,15 +289,42 @@ order and without improvising:
      no work, not to claim a green stack. Say so in the commit message ("gates
      not run - preempted mid-stage"), and run the full gate normally when the
      task resumes at step 4. No other commit in this pipeline may skip it.
-2. **Return to `main`.** Never branch the urgent task off the preempted one -
+2. **Pause the preempted task:** `python .claude/tools/pipeline/approve.py
+   --task task-XXXX --pause "<why>"`. The run keeps its stage, `retries`,
+   `continuations` and approval flags and gets `stage_status=paused` plus a
+   record of the reason and of whether the branch had commits (`committed`) or
+   nothing at all (`clean`). The command is refused while the tree holds
+   uncommitted work, so step 1 cannot be skipped by accident. A paused run is
+   not driven by the Stop hook, needs no busy marker to keep it quiet, does not
+   count as occupying an editing stage, and `advance.py` refuses to move it.
+   **Never use `advance.py --busy` to park a task:** the marker means a gate or
+   a dispatched agent is running, and neither is true.
+3. **Return to `main`.** Never branch the urgent task off the preempted one -
    `branch-base-must-be-main` still holds, and the gate enforces it.
-3. **Branch and register the urgent task**, then work it normally.
-4. **Resume the preempted task afterwards** by re-running `advance.py` on it.
+4. **Branch and register the urgent task**, then work it normally.
+5. **Resume the preempted task afterwards:** `approve.py --task task-XXXX
+   --resume` (refused while another task holds an editing stage), switch back to
+   its branch, then re-run `advance.py` on it. It continues at the stage it was
+   paused at. Pausing never touches an approval flag. Resuming a run that sits
+   at an editing stage clears its commit and push approvals, because a flag
+   there can only be the preempt-commit approval from step 1, and leaving it
+   would let the finished work skip the CEO's read of the diff at `ready`; a run
+   paused at a checkpoint stage keeps its approvals.
 
 If the preempted task has NO commits and no edits - nothing was written yet -
 step 1 is skipped, and that is the only case where it may be. Say so explicitly
-in the record, because "nothing to commit" and "forgot to commit" look identical
-in git a week later.
+in the record - the pause records it as `clean` - because "nothing to commit"
+and "forgot to commit" look identical in git a week later.
+
+Two tasks worked on one branch (what a preemption can leave behind) are judged
+by the commit message, not the branch name: a commit tagged `[task-NNNN]` is
+approved by that task's run. A tag that names a task other than the branch's is
+accepted only when that task is registered, not done, and declares `branch:
+<the checked-out branch>` in its task-file frontmatter; otherwise the commit is
+denied naming both ids. An untagged commit is judged by the branch, as before.
+The drift reconciler (`stop_gate` step 4) is deliberately not reachable while a
+run needs driving; a task file moved by hand does not stop the hook, pausing
+does.
 
 ### The busy marker is a choice between two failures, not a discipline problem
 
@@ -336,7 +375,8 @@ bite:
   and only the per-stage budget accumulates.
 - **Recovery got more expensive, so the park is not free noise.** The only exit
   from `blocked` is `approve.py --reject`, which returns the task to `implement`
-  and clears `commit_approved`. A park at `review` therefore costs two stages of
+  (to `plan` when the block happened before the plan approval) and clears
+  `commit_approved`. A park at `review` therefore costs two stages of
   rework; a park at `ready` costs an approval the CEO had already given. That
   used to be the price of 30 unanswered nags and is now the price of 3.
 - **The bound is on the SENTENCE, not the task.** Answer the instruction, or do
@@ -420,12 +460,12 @@ task that fixes it.
 reachable only by exhausting the retry budget, editing `run.db` by hand is
 forbidden, `approve.py --reject` moves a task the wrong way (to `implement`), and
 `stop_gate.decide()`'s in-flight branch outranks its drift reconciler, so moving
-the file back to `backlog/` does not quiet the hook either. Until `task-0059`
-lands, a preempted run keeps being demanded by the Stop hook. If you silence it
-with a busy marker, say in its stage label that it is NOT a dispatch
-(`--busy preempted-not-a-dispatch`) - a signal you have to lie to is a missing
-state, and an undocumented lie in the pipeline's own records is worse than the
-nagging it avoids.
+the file back to `backlog/` does not quiet the hook either. task-0059 closed
+this gap: pause a preempted run with `approve.py --task task-XXXX --pause
+"<reason>"` and bring it back with `--resume`; a paused run is never driven or
+charged by the Stop hook. Do not silence a preempted run with a busy marker any
+more - a signal you have to lie to is a missing state, and that state now
+exists.
 
 ## Steering a running agent (do not wait for the report)
 
@@ -483,7 +523,11 @@ This project's specifics:
 - **One umbrella task.** The scripts do not change. The epic registers as ONE
   umbrella task `task-<epic>` on ONE branch
   (`advance.py --task task-<epic> --type feature`), and the parallelism lives
-  inside that task's `implement` stage. "Edit-serialized" holds between tasks,
+  inside that task's `implement` stage. Registered as `feature`, the umbrella
+  starts at `plan`: write the plan, get the CEO's plan approval
+  (`approve.py --gate plan`), and only then launch the waves, because every
+  write outside `.agentry/` is denied to the branch until it is recorded.
+  "Edit-serialized" holds between tasks,
   not between the agents inside the umbrella task; the supervisor is the main
   session. The subtask files stay in `.agentry/tasks/backlog/` as the work list
   and move to `done/` with the umbrella task after the merge.
@@ -554,7 +598,8 @@ the pipeline above does not depend on it.
 A `blocked` task (gate failed past budget, unconfigured gate, or stuck past the
 continuation ceiling) is surfaced to the CEO and never auto-retried. The CEO
 fixes the blocker or rejects; then `approve.py --reject` sends it back to
-`implement` to retry cleanly.
+`implement` to retry cleanly (to `plan` if it was blocked before the plan
+approval).
 
 ## What the model must never do
 

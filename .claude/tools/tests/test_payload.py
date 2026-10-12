@@ -17,6 +17,8 @@ were live during development:
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import sys
 import unittest
@@ -162,6 +164,94 @@ class FrontmatterListTest(unittest.TestCase):
         flow = "name: probe\nskills: [write-tests, bug-fix]\n"
         self.assertEqual(payload.list_key(flow, "skills"), ["write-tests", "bug-fix"])
         self.assertEqual(payload.list_key("name: probe\n", "skills"), [])
+
+
+def run_main(*argv: str) -> str:
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = payload.main(list(argv))
+    assert code == 0
+    return out.getvalue()
+
+
+class PrintedFiguresTest(unittest.TestCase):
+    """Every token figure that reaches the output goes through the divisor.
+
+    Fixture sizes in characters, none divisible by four so a wrong divisor or a
+    missing floor shows: root CLAUDE.md 5, .claude/CLAUDE.md 20, one rule file
+    100, the agent file 20, no skills, no hooks. Sum 145, which is 36 tokens.
+    """
+
+    def setUp(self):
+        self.root = tmproot.sandbox(self, "payload-figures")
+        build_tree(self.root, rules={"a.md": "a" * 100}, excludes=[],
+                   imports=["a.md"], hooks=[])
+
+    def test_chars_to_tokens_floors_by_the_constant(self):
+        self.assertEqual(payload.chars_to_tokens(145), 36)
+        self.assertEqual(payload.chars_to_tokens(3), 0)
+        self.assertEqual(payload.chars_to_tokens(4), 1)
+
+    def test_row_tokens_use_the_conversion(self):
+        self.assertEqual(payload.Row("x", 7, payload.COMPUTED).tokens, 1)
+        self.assertEqual(payload.Row("x", 8, payload.COMPUTED).tokens, 2)
+
+    def test_json_row_and_total_figures(self):
+        data = json.loads(run_main("--root", str(self.root), "--json"))
+        probe = data["agents"]["probe"]
+        self.assertEqual([r["chars"] for r in probe["paths"][:4]], [5, 20, 100, 20])
+        self.assertEqual([r["tokens"] for r in probe["paths"][:4]], [1, 5, 25, 5])
+        self.assertEqual(probe["total_chars"], 145)
+        self.assertEqual(probe["total_tokens"], 36)
+
+    def test_text_breakdown_total_and_roster_lines(self):
+        text = run_main("--root", str(self.root), "--agent", "probe")
+        self.assertRegex(text, r"FLOOR \(sum of rows above\)\s+145\s+36\n")
+        self.assertRegex(text, r"probe\s+unknown\s+145\s+36\n")
+
+    def test_the_divisor_constant_drives_every_printed_figure(self):
+        original = payload.TOKEN_CHARS
+        payload.TOKEN_CHARS = 10
+        self.addCleanup(setattr, payload, "TOKEN_CHARS", original)
+        data = json.loads(run_main("--root", str(self.root), "--json"))
+        self.assertEqual(data["agents"]["probe"]["total_tokens"], 14)
+        text = run_main("--root", str(self.root), "--agent", "probe")
+        self.assertRegex(text, r"FLOOR \(sum of rows above\)\s+145\s+14\n")
+
+
+class SettingsLayerDisclosureTest(unittest.TestCase):
+    """The figures cover the project settings layer only and must say so."""
+
+    def setUp(self):
+        self.root = tmproot.sandbox(self, "payload-layers")
+
+    def test_text_output_names_the_layer_read_and_the_ones_not(self):
+        build_tree(self.root, rules={"a.md": "a"}, excludes=[], imports=["a.md"], hooks=[])
+        text = run_main("--root", str(self.root))
+        self.assertIn("settings layers read: .claude/settings.json.", text)
+        self.assertIn("NOT read: user (~/.claude/settings.json)", text)
+        self.assertIn("plugin-provided hooks", text)
+        self.assertIn("FLOOR, not a total", text)
+
+    def test_no_line_calls_the_figure_a_total_without_the_floor_label(self):
+        build_tree(self.root, rules={"a.md": "a"}, excludes=[], imports=["a.md"], hooks=[])
+        text = run_main("--root", str(self.root), "--all")
+        self.assertNotIn("TOTAL", text)
+        self.assertIn("tokens (floor)", text)
+
+    def test_json_output_carries_the_layers_and_the_floor_flag(self):
+        build_tree(self.root, rules={"a.md": "a"}, excludes=[], imports=["a.md"], hooks=[])
+        data = json.loads(run_main("--root", str(self.root), "--json"))
+        self.assertIs(data["is_floor"], True)
+        self.assertEqual(data["layers_read"], [".claude/settings.json"])
+        self.assertIn("plugin-provided hooks", data["layers_not_read"])
+
+    def test_a_tree_without_a_settings_file_reads_no_layer(self):
+        build_tree(self.root, rules={"a.md": "a"}, excludes=[], imports=["a.md"], hooks=[])
+        (self.root / ".claude" / "settings.json").unlink()
+        harness = payload.Harness(self.root)
+        self.assertEqual(harness.layers_read(), [])
+        self.assertIn("none (no project settings file)", harness.layers_warning())
 
 
 class RealTreeTest(unittest.TestCase):

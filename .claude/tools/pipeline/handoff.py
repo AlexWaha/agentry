@@ -324,15 +324,35 @@ def drop_scaffold_markers(still_owed: set) -> None:
         pass
 
 
+def clean_slate() -> bool:
+    """True on a checkout that has never run a task here: no handoff doc on disk
+    AND nothing in tasks/done/. Both folders are gitignored (task-0063, CEO
+    decision 2026-10-06: the docs describe one project's internals and the repo
+    is public), so a fresh clone carries the full tagged history of main and none
+    of the documents. Either condition alone is NOT a clean slate: docs with an
+    empty done/ is a half-wiped tree, and done/ files with no docs is genuine
+    debt. Fail-closed: False on any error, so an unreadable tree still reports."""
+    try:
+        done_dir = state.ROOT / ".agentry" / "tasks" / "done"
+        return (not any(handoff_dir().glob("task-*.md"))
+                and not any(done_dir.glob("task-*.md")))
+    except OSError:
+        return False
+
+
 def latest_main_task_undocumented() -> dict | None:
     """The newest '[task-XXXX]'-tagged commit on main whose task lacks a valid
     handoff doc - INCLUDING tasks grandfathered by the baseline and tasks merged
     out-of-band. Used when the ready backlog holds a single task: the incoming
     agent must have the previous work documented (read it if it exists, generate
     it if it does not) before implementing. Config flag:
-    handoff.document_latest_on_start. Fail-open: None on any error."""
+    handoff.document_latest_on_start. A clean slate (clean_slate) is exempt: the
+    history on a new checkout was never this checkout's to document.
+    Fail-open: None on any error."""
     try:
         if not enabled() or not cfg().get("document_latest_on_start"):
+            return None
+        if clean_slate():
             return None
         log = subprocess.run(
             ["git", "-C", str(state.ROOT), "log", _main_branch(),

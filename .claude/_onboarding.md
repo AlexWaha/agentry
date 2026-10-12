@@ -1,253 +1,330 @@
-# Onboarding - Adapting This Template to a New Project
+# Onboarding: adopting the harness in a project
 
-This file is the entry point for using this `.claude/` agent system on a brand-new project. Work through it top-to-bottom the first time you copy the template into a new repo.
+**Date:** 2026-10-09
+**Author:** Technical Writer
+**Status:** Draft
+**Version:** 2.0
 
-## 0. What you just copied
+---
 
-```
-.claude/
-├── _onboarding.md           # this file
-├── project/                # project-specific overlay (REPLACE THIS)
-│   ├── README.md
-│   ├── project-context.md   # product, domain, architecture summary
-│   ├── architecture.md      # module/folder layout, dependency rules
-│   ├── api-conventions.md   # framework-specific API patterns
-│   └── stack.md             # stack, commands, env vars, routes
-├── CLAUDE.md                # orchestrator instructions (keep as-is)
-├── settings.json            # permissions (tune per project)
-├── settings.local.example.json   # copy to settings.local.json, do NOT commit
-├── agents/                  # agent role files (universal, with placeholders + per-agent gate hooks)
-├── rules/                   # universal rules (with project-specific stubs)
-├── skills/                  # reusable skills (incl. new-task, new-epic, self-learning)
-├── hooks/                   # shell helpers (cleanup-nul.sh)
-├── tools/
-│   ├── pipeline/            # deterministic FSM: state/gate/advance/approve + agent_gate
-│   ├── hooks/               # session_start.py, subagent_stop.py, dangerous_patterns.py
-│   ├── memory/              # memory.py (store + CLI), inject.py (retrieval), update.py, codebase_sync.py
-│   └── setup/               # apply_optimization.py (fleet rollout tool)
-├── pipeline.json            # declarative execution stage machine (finalized in onboarding Phase B)
-├── specs/                   # specs written by spec-developer (_template.md inside)
-├── state/                   # run.db pipeline state + memory stamps (gitignored)
-├── tasks/
-│   ├── active/              # empty - tasks you create
-│   ├── done/                # empty - completed tasks
-│   ├── epics/               # epics created by product-manager (spec decomposition)
-│   └── templates/           # task + epic templates
-├── memory/                  # project memory store: memory.db (lesson/pattern/module rows, gitignored) - see memory/README.md
-└── plans/                   # empty - in-flight plans
-```
+## Table of Contents
 
-Also at the PROJECT root (one level above `.claude/`): `.mcp.json` wires the
-codegraph MCP server per-project - keep it committed.
+- [What this covers](#what-this-covers)
+- [Layout](#layout)
+- [Before you start](#before-you-start)
+- [What the setup detects for you](#what-the-setup-detects-for-you)
+- [Decision 1: repositories](#decision-1-repositories)
+- [Decision 2: gates per repository](#decision-2-gates-per-repository)
+- [Decision 3: lanes](#decision-3-lanes)
+- [Decision 4: approval level](#decision-4-approval-level)
+- [Decision 5: workflow mode](#decision-5-workflow-mode)
+- [Checkpoints you will meet](#checkpoints-you-will-meet)
+- [Adopting mid-project](#adopting-mid-project)
+- [Self-check](#self-check)
+- [Day-two commands](#day-two-commands)
+- [Version history](#version-history)
 
-## 0.1 Prerequisites (per machine, once)
+---
 
-- **Python 3** on PATH (pipeline engine and hooks)
-- **codegraph CLI** - install via PowerShell (Windows) or shell (macOS/Linux)
-  installer from github.com/colbymchenry/codegraph, or `npm i -g
-  @colbymchenry/codegraph` (Node 22.5+). Verify: `codegraph --version`.
-  Do NOT run `codegraph install` (it writes the user-global MCP config; this
-  template wires MCP per-project via `.mcp.json`).
+## What this covers
 
-## 1. Replace `project/` contents
+Copy `.claude/` into a project, run the init prompt, and the setup detects most
+of what it needs. Five things it cannot know are yours to decide, in this order:
 
-Everything under `.agentry/project/` is placeholder content from the previous project. Delete or rewrite each file:
+1. Which repositories the workspace holds.
+2. Which commands gate each repository.
+3. Which lanes run, and which repository each lane serves.
+4. How many checkpoints clear without you (the approval level).
+5. Whether the project is `pr` or `solo` (the workflow mode).
 
-- [ ] `project/project-context.md` - write your product description, domain terminology, key concepts, phase activation
-- [ ] `project/architecture.md` - draft once you have module/layer decisions (can be deferred until architect agent runs)
-- [ ] `project/api-conventions.md` - draft once you know your framework's controller/validator/resource pattern
-- [ ] `project/stack.md` - fill in stack, commands, env vars, routes, placeholder values
-- [ ] `project/README.md` - usually left as-is (it explains what the folder is for)
+The rest of this file explains those five, then lists the checkpoints you will
+meet afterward and a self-check. The mechanical steps are in
+`.claude/_init-prompt.md`: paste it into Claude Code at the project root. Phase A
+runs without questions. Phase B asks you the five decisions through
+`AskUserQuestion` cards.
 
-If the workspace holds more than one repository, stack facts that are true of
-only one of them (its commands, ports, framework conventions) go in that repo's
-own nested `CLAUDE.md`, which is loaded when an agent reads, writes or edits a
-file inside that repo (Write and Edit since build 2.1.288). See `docs/technical/nested-claude-md.md`.
+## Layout
 
-## 2. Fill in placeholders across the template
+The harness and the project's own work product live in different trees.
 
-Search-and-replace these across `.claude/` files. Values you define in `project/stack.md` are the source of truth.
+| Path | Holds |
+|---|---|
+| `.claude/` | The harness: `CLAUDE.md`, `settings.json`, `agents/`, `rules/`, `skills/`, `hooks/`, `tools/` |
+| `.claude/tools/pipeline/` | State machine, gates and approvals (`advance.py`, `approve.py`, `approvals.py`, `mode.py`, `swarm.py`, `stack_gate.py`, `supervisor.py`) |
+| `.claude/tools/setup/` | Onboarding helpers (`repo_scan.py`, `substitute_tokens.py`, `rebuild_pipeline.py`) |
+| `.agentry/pipeline.json` | Stage machine, gates, `repos`, `lanes`, `workflow`, `handoff`, `memory` |
+| `.agentry/project/` | Product, architecture, stack and API overlay for this project |
+| `.agentry/tasks/` | `backlog/`, `active/`, `done/`, `epics/`, `handoffs/`, `templates/` |
+| `.agentry/specs/`, `.agentry/plans/` | Specs and per-task plans |
+| `.agentry/memory/` | Memory store (`memory.db`, gitignored) |
+| `.agentry/state/` | Run store, mode, approvals, swarm flag (gitignored) |
+| `.mcp.json` (project root) | Wires the codegraph MCP server for this project; commit it |
 
-| Placeholder | Meaning | Example |
-|-------------|---------|---------|
-| `{{PROJECT_NAME}}` | Product name | Acme SaaS Platform |
-| `{{STACK}}` | Primary stack summary | Laravel 12 + React 19, Next.js 15, Django 5, Rails 7, etc. |
-| `{{LANG}}` | Primary language + version | PHP 8.4, TypeScript 5.x, Python 3.12, Go 1.23 |
-| `{{FRAMEWORK}}` | Main server framework | Laravel 12, Next.js 15, Django 5, NestJS 10 |
-| `{{BACKEND_STACK}}` | Backend details | Laravel 12 + nwidart/laravel-modules v12 |
-| `{{TEST_CMD}}` | How to run tests | `composer test`, `npm test`, `pytest`, `go test ./...` |
-| `{{FORMAT_CMD}}` | How to auto-format | `composer format`, `npm run format`, `black .`, `gofmt -w .` |
-| `{{LINT_CMD}}` | Format/lint check (no fix) | `composer format-lint`, `npm run lint`, `ruff check .` |
-| `{{BUILD_CMD}}` | Build command | `npm run build`, `go build ./...`, `mvn package` |
-| `{{DEV_CMD}}` | Dev server command | `npm run dev`, `php artisan serve`, `python manage.py runserver` |
-| `{{MAIN_BRANCH}}` | Primary branch | `main` or `master` |
-| `{{DEFAULT_DB}}` | Default database | PostgreSQL 16, MySQL 8, SQLite |
-| `{{AUTH_METHOD}}` | Auth mechanism | Laravel Sanctum, NextAuth, JWT, OAuth2 |
-| `{{TEST_FRAMEWORK}}` | Test framework | Pest 4, Jest, Vitest, pytest, RSpec |
-| `{{FORMATTER}}` | Code formatter | Laravel Pint, Prettier, Black, gofmt |
-| `{{CONTAINER_TOOL}}` | Container/orchestration | Docker Compose, Podman, Kubernetes |
-| `{{CI_TOOL}}` | CI/CD | GitHub Actions, GitLab CI, CircleCI |
+A task's state is the folder it sits in. There is no `status:` field.
 
-| `{{FRAMEWORK_DOCS_URL}}` | Link to framework docs | `https://laravel.com/docs/12.x` |
+## Before you start
 
-### Files that typically contain placeholders
+- Python 3 on `PATH`. The pipeline and every hook are Python.
+- The codegraph CLI (`codegraph --version`). Install it from
+  github.com/colbymchenry/codegraph or with `npm i -g @colbymchenry/codegraph`
+  (Node 22.5 or later). Do not run `codegraph install`: it writes the user-global
+  MCP config, and this harness wires MCP per project in `.mcp.json`. Without the
+  CLI, onboarding continues and `session_start.py` degrades to Grep and Glob.
+- Copy `.claude/settings.local.example.json` to `.claude/settings.local.json` for
+  personal permissions, and gitignore it.
+- Hook commands use `$CLAUDE_PROJECT_DIR`. Leave them alone. An absolute path
+  leaks your machine into the repo, and a relative one breaks when the shell
+  directory drifts.
 
-- `.claude/settings.json` and `.claude/agents/*.md` - hook commands use `$CLAUDE_PROJECT_DIR` (runtime-resolved by the harness); they need no replacement and must NEVER be rewritten to absolute local paths (those leak into the repo and break on other machines)
-- `.agentry/project/stack.md` - the table there is the canonical map
-- `.claude/agents/senior-backend-dev.md`
-- `.claude/agents/senior-frontend-dev.md`
-- `.claude/agents/qa-engineer.md`
-- `.claude/agents/devops-engineer.md`
-- `.claude/agents/architect.md`
-- `.claude/agents/reviewer.md`
-- `.claude/agents/technical-writer.md`
-- `.claude/skills/feature-scaffold/SKILL.md`
-- `.claude/skills/health-check/SKILL.md`
-- `.claude/skills/migration/SKILL.md`
-- `.claude/skills/write-tests/SKILL.md`
-- `.claude/skills/infrastructure/SKILL.md`
-- `.claude/skills/bug-fix/SKILL.md`
-- `.agentry/tasks/templates/task-template.md`
+## What the setup detects for you
 
-Grep to find anything still un-replaced:
+Phase A fills these without asking. Do not answer them by hand; correct the
+output if it is wrong.
+
+| Used to be asked | Now filled from |
+|---|---|
+| Which repositories exist | `repo_scan.py`: one row per `.git` directory, fields `key`, `path`, `manifests` |
+| Language and stack of each repository | `repo_scan.py` field `stack` (`unknown` when a `.git` has no recognised manifest) |
+| Framework, test framework, formatter, container tool, CI tool, database, auth, main branch | Phase A1 inspection, written to the placeholder table in `.agentry/project/stack.md` |
+| Replacing `{{PLACEHOLDER}}` tokens file by file | `python .claude/tools/setup/substitute_tokens.py --target .`, driven by that table |
+| Test, format, lint, build and dev commands | The same table; they land in the gates you confirm in decision 2 |
+| The four pipeline keys to rewrite by hand (`main_branch` and the three exit gates) | Decision 1 and decision 2 write them |
+
+If `substitute_tokens.py` leaves a token behind, the row in `stack.md` is still
+empty. Fill that row and rerun; the script skips rows that hold a marker.
+`grep -rE '\{\{[A-Z_]+\}\}' .claude/` should then return only `_onboarding.md`,
+`_init-prompt.md` and `tasks/templates/handoff-template.md`, whose tokens are
+runtime values.
+
+## Decision 1: repositories
+
+A workspace may hold one repository or several. Run:
 
 ```bash
-grep -rE '\{\{[A-Z_]+\}\}' .claude/
+python .claude/tools/setup/repo_scan.py --root .
 ```
 
-### `pipeline.json` is already filled in - this repo is also a live project
+It prints a table of key, path, stack and manifests, walking the root and two
+levels down, and skipping `node_modules`, `vendor`, `.claude`, dot directories
+and build output. The root repository is named after its directory, so rename
+it to something you will recognise. A single-repository workspace is a
+one-row table, not an error.
 
-This repository is self-hosting: it is the template AND a project the harness
-runs on itself. So `.agentry/pipeline.json` carries this harness's own real
-values, and the grep above will NOT flag them. Four keys must be replaced with
-your project's commands - the originals from the pristine template are on the
-right:
+The init prompt shows you this table as a proposal with two options: "Looks
+right" and "Correct it". Correct a key, a path, a stack, or drop a row. Save
+the corrected rows as a JSON list in `tmp/repos.json` and write them:
 
-| Key in `pipeline.json` | Value you inherit (this harness) | Template original |
+```bash
+AGENTRY_MAIN_THREAD=1 python .claude/tools/setup/repo_scan.py --root . --table tmp/repos.json --write .agentry/pipeline.json
+```
+
+This rewrites only `repos` and `lanes`, reads the result back through the
+pipeline's own readers, and restores the original bytes if either reader drops
+an entry. If the hook denies the write to `pipeline.json`, run the command
+yourself in a terminal.
+
+Each task names its repository in the `repo:` field of its frontmatter. The
+value is matched to a `repos` key exactly, then by the first path segment, then
+by an entry's `path`. A `repo:` that matches nothing fails closed: the task
+parks instead of falling back to another repository.
+
+## Decision 2: gates per repository
+
+A stage advances only when its gate command exits 0. Each repository gets its own
+commands for `implement`, `test` and `review`, stored under `repos.<key>.stages`:
+
+```json
+"repos": {
+  "api": {
+    "path": "api",
+    "stack": "php",
+    "stages": {
+      "implement": ["composer dump-autoload"],
+      "test": ["composer test"],
+      "review": ["composer format-lint"]
+    }
+  }
+}
+```
+
+Three rules to know:
+
+- An empty list is an explicit pass. A repository of YAML and markdown gets
+  `[]`, never a command borrowed from another stack.
+- `stack_gate.py` runs these commands. Wire it as the exit gate of each stage in
+  `pipelines.build` in `.agentry/pipeline.json`, because the shipped config does
+  not do it for you:
+  `python .claude/tools/pipeline/stack_gate.py --task {task} --stage test`.
+  Until you do, the exit gates keep the harness's own commands (`compileall`,
+  `unittest`, `ruff`), and a build stage passes without touching your code.
+  A gate that passes for the wrong reason is worse than no gate.
+- Do not put the full test suite in `repos.<key>.stages.test` if your agents are
+  barred from running it. `gates.dev_forbidden_commands` lists the commands dev
+  agents may not run, so the suite runs once, in the `test` stage's exit gate.
+
+Confirm these `gates` keys in the same pass, with defaults inferred from your
+stack: `destructive_command_patterns`, `destructive_allow_if`,
+`repl_write_keyword`, `repl_write_patterns`, `dev_forbidden_commands`,
+`forbid_dev_null` (true on Windows with Git Bash). The branch-base, attribution
+and dash gates run without configuration.
+
+Set `main_branch` and `retry_budget` (default 3 gate failures before a task is
+parked `blocked`). Set `ui_evidence` to false on the `test` stage if the project
+has no UI.
+
+The stage order is `plan`, `plan-approval`, `implement`, `test`, `review`,
+`ready`, `done`. There is no separate diff-review stage: you read the diff
+yourself at `ready` with Claude Code's `/diff`.
+
+## Decision 3: lanes
+
+A lane is an independent conveyor: its own run store, mode, approval level,
+swarm flag and trunk-push marker, so two sessions do not step on each other. A
+session picks its lane with the `PIPELINE_LANE` environment variable; unset
+means `default`.
+
+`lanes` in `.agentry/pipeline.json` binds each lane to exactly one repository:
+
+```json
+"lanes": {
+  "default": {"repo": "api"},
+  "web": {"repo": "web"}
+}
+```
+
+`repo_scan.py --write` generates this: the first repository gets lane `default`,
+every other one a lane named after its key. A row in your corrected table may
+carry `lane` to override the name. Rules that follow from the file:
+
+- A backlog task is offered only to the lane whose repository equals its `repo:`.
+  A task with an empty `repo:` goes to `default`.
+- A task whose `repo:` is not a key of `repos` is offered to no lane, and the
+  Stop hook names it once when the lane has nothing else ready.
+- A session in a lane that `lanes` does not declare is offered nothing.
+- Approval level, mode and swarm are per lane. A second lane starts at `manual`;
+  raise it in that lane's own session:
+  `PIPELINE_LANE=web python .claude/tools/pipeline/approvals.py assisted`.
+- With one repository you need no extra lanes. If you drop `lanes` entirely, every
+  session is offered the whole backlog.
+
+The coordination protocol between lanes is in
+`docs/technical/cross-lane-coordination.md`.
+
+## Decision 4: approval level
+
+The level says how many checkpoints clear without you. Set it per lane:
+
+```bash
+python .claude/tools/pipeline/approvals.py assisted
+python .claude/tools/pipeline/approvals.py --show
+```
+
+| Level | Clears without you | Waits for you |
 |---|---|---|
-| `main_branch` | `main` | `{{MAIN_BRANCH}}` |
-| `pipelines.build.stages[implement].exit_gate.cmd` | `python -m compileall -q .claude/tools` | `{{BUILD_CMD}}` |
-| `pipelines.build.stages[test].exit_gate.cmd` | `python -m unittest discover -s .claude/tools && python .claude/tools/pipeline/ui_evidence.py --task {task}` | `{{TEST_CMD}}` |
-| `pipelines.build.stages[review].exit_gate.cmd` | `ruff check .claude/tools` | `{{LINT_CMD}}` |
+| `manual` (default) | Nothing | Starting each task, the commit, the push |
+| `assisted` | The commit | Starting each task; the push is never granted |
+| `auto` | Starting the next ready task and the commit | The push, unless you remove it from `approvals_never_granted` |
 
-Left as-is, your `implement` stage compiles the harness's Python and reports
-green without touching your code at all - a gate that passes for the wrong
-reason is worse than no gate. Replace all four before the first task.
+Two checkpoints are withheld at every level: the plan approval and the one-shot
+trunk push. `approvals_never_granted` in `pipeline.json` ships as
+`["push", "trunk_push"]`, so no level pushes. Editing that list is your decision,
+not the agent's. For finer control, list checkpoints in the `ready` stage's
+`auto_approve` array; the default `[]` keeps the commit manual.
 
-## 3. Decide which optional rules apply
+Start at `manual`. Move to `assisted` once the gates have proved they catch real
+failures in your project.
 
-These rules are included but gated. None of them is in the core set, so each one already reaches only the agents whose `rules:` key declares it (`.claude/CLAUDE.md`, section Rules).
+## Decision 5: workflow mode
 
-| Rule | Keep if… |
-|------|----------|
-| `rules/i18n.md` | Project ships multilingual UI/API |
-| `rules/mobile.md` | Project includes a mobile app (React Native, Flutter, native) |
-| `rules/business-standards.md` | Business planning agents will be activated |
+`workflow.mode` in `pipeline.json` describes how code reaches the trunk. Do not
+confuse it with the session mode from `mode.py` (`build`, `plan`, `talk`), which
+picks the stage machine for the current session.
 
-Dropping one is three edits, not one: remove it from every agent `rules:` key that names it, remove its entry from `claudeMdExcludes` in `.claude/settings.json`, then delete the file. Leaving the file in place is not free and not inert - an unreferenced rule file is still loaded for every context by the `.claude/rules/` walk unless `claudeMdExcludes` names it, whatever `[DEFERRED]` or `[OPTIONAL]` says in its header.
+| `workflow.mode` | Use when | Path to the trunk |
+|---|---|---|
+| `pr` (default when absent) | Someone else reviews and merges | Commit, push the branch, a human opens and merges the pull request |
+| `solo` | One author, nobody to hand a pull request to | Commit, then a gated local merge of the task branch into the trunk |
 
-## 4. Configure permissions
+In `solo` mode the local merge still needs a branch named `<type>/task-NNNN`, a
+run in the store, and an approved commit checkpoint. `workflow.push_needs_approval`
+stays `true` in both modes. Publishing the trunk takes your explicit say-so in
+chat, recorded once with `python .claude/tools/pipeline/approve.py --trunk-push`;
+the push consumes the marker. An unattended session is refused it. Full rules:
+`.claude/rules/git-workflow.md`.
 
-- Keep `.claude/settings.json` committed. Add stack-specific permissions (e.g. your test/build/format commands) to its `permissions.allow` list.
-- Copy `.claude/settings.local.example.json` → `.claude/settings.local.json` and fill in personal preferences. Never commit `settings.local.json` - add it to `.gitignore`.
+## Checkpoints you will meet
 
-## 5. Verify hooks work on your OS
+| Checkpoint | When | Command the orchestrator runs after you agree |
+|---|---|---|
+| Plan | `feature` and `enhancement` tasks, before any code is written. `bugfix` and `techdebt` skip it | `approve.py --task task-XXXX --gate plan` |
+| Commit | At `ready`, after you read the diff with `/diff` | `approve.py --task task-XXXX --gate commit` |
+| Push | `pr` mode only; never granted by a level | `approve.py --task task-XXXX --gate push` |
+| Trunk push | `solo` mode only, one push per approval | `approve.py --trunk-push` |
 
-- **Hook script paths are portable.** The `settings.json` and agent hooks invoke Python scripts via `$CLAUDE_PROJECT_DIR/.claude/tools/...` - the harness sets this variable for every hook run, on every machine. Do NOT replace it with an absolute path (leaks a machine-local path into the repo) and do NOT make paths relative (`python .claude/tools/...` breaks when the shell cwd drifts, and a missing-file exit bricks Bash/Edit/Write via the PreToolUse gate).
-- Per-agent gate hooks (`agents/*.md`, `hooks.PreToolUse` blocks) use `$CLAUDE_PROJECT_DIR` the same way - leave them untouched.
-- `tools/hooks/dangerous_patterns.py` - wired in dev-agent frontmatter (PostToolUse); scans edited files for debug/eval/exec patterns across PHP, JS/TS, Python, Ruby, Go. Extend the pattern table if your language is not covered.
-- `hooks/cleanup-nul.sh` - Windows-only cleanup for accidental `nul`/`NUL` files left by the `2>NUL` redirect spelling (bash has no device named `NUL`, so it opens a file; `2>/dev/null` does not do this on MSYS2 and is denied by policy instead - measured 2026-09-14, see `rules/quality-standard.md`). Cleanup runs from bash because Python cannot unlink such an entry. Harmless on *nix.
+All of these live in `.claude/tools/pipeline/approve.py`. While a plan is
+unapproved, the gate denies every write outside `.agentry/` on the task's branch,
+so the plan is the only thing that can change. Rejecting at the plan step keeps
+the task at `plan`; rejecting the diff at `ready` returns it to `implement` and
+keeps the plan approval.
 
-## 5.1 Code knowledge graph (codegraph)
+Writing the checkpoint decision in chat is not enough. The orchestrator records
+it with `approve.py`, and the `PreToolUse` hook blocks `git commit` and
+`git push` until it does.
 
-- From the project root run `codegraph init` - the index builds into
-  `.codegraph/` at the project root. Codegraph does not allow relocating it
-  under `.claude/` (`CODEGRAPH_DIR` accepts a plain directory name only), so
-  add `.codegraph/` to the PROJECT root `.gitignore` - it is a per-machine
-  artifact and stays per-project either way.
-- Confirm `.mcp.json` exists at the project root (codegraph MCP server entry).
-- Verify: `codegraph status` shows indexed files; in a session the
-  `codegraph_explore` MCP tool answers a code question in one call.
-- The index dir is gitignored (per-machine artifact). SessionStart runs
-  `codegraph sync` automatically; the CLI's own watcher keeps it fresh.
+## Adopting mid-project
 
-## 6. Initial task
+Skip this section on a fresh project.
 
-For feature work the planning pipeline produces the first artifacts:
-`spec-0001` (spec-developer) -> `epic-0001` + tasks (product-manager via
-skills/new-epic). For a single-task start (e.g. "Set up infrastructure"),
-create `.agentry/tasks/backlog/task-0001.md` directly via skills/new-task.
-Remember: `advance.py` refuses tasks without acceptance criteria or with an
+- Set `handoff.baseline` and `memory.baseline` in `pipeline.json` to the highest
+  existing done task id. Earlier tasks are grandfathered, so nobody writes
+  retroactive handoff docs. On a fresh project both stay `""`.
+- Before the next task registers, the previous completed task needs a handoff doc
+  in `.agentry/tasks/handoffs/` and a memory stamp. Check with
+  `python .claude/tools/pipeline/handoff.py --check`, and after distilling the
+  task into memory rows, stamp it with
+  `python .claude/tools/memory/update.py --stamp --task task-XXXX` and
+  `python .claude/tools/memory/codebase_sync.py --stamp`.
+- Seed the module map (Phase A7.5 of the init prompt) before the first task.
+
+## Self-check
+
+- [ ] `.agentry/project/project-context.md` describes this product, not the previous one.
+- [ ] `.agentry/project/stack.md` has concrete commands and no placeholders.
+- [ ] `grep -r 'PROJECT-SPECIFIC - REPLACE ME' .agentry/project/` returns nothing.
+- [ ] `grep -rE '\{\{[A-Z_]+\}\}' .claude/` returns only the three runtime-token files named above.
+- [ ] `python .claude/tools/pipeline/state.py --show` prints `[]`.
+- [ ] `python .claude/tools/setup/repo_scan.py --root .` agrees with `repos` in `pipeline.json`.
+- [ ] Every stage in `pipelines.build` runs your commands, not the harness's.
+- [ ] Every key of `lanes` points at a key of `repos`.
+- [ ] `python .claude/tools/pipeline/mode.py --show` prints the three dials as you intend.
+- [ ] `workflow.mode` is the one you chose, and `approvals_never_granted` still lists `push` and `trunk_push`.
+- [ ] `.claude/settings.local.json` is gitignored.
+
+Then create the first task. For feature work, run the plan pipeline: architect
+plan, `spec-developer` writes `spec-0001`, and after you approve it
+`product-manager` produces the epic and the task files in `.agentry/tasks/backlog/`.
+For a one-off start, write `.agentry/tasks/backlog/task-0001.md` with the
+`new-task` skill. `advance.py` refuses a task with no acceptance criteria or an
 unapproved spec.
 
-## 7. Self-check
+## Day-two commands
 
-Before starting real work, confirm:
+| Need | Command |
+|---|---|
+| See where the pipeline stands | The status line shows `task | stage | owed | lane | mode | approvals | swarm`; `python .claude/tools/pipeline/state.py --show` dumps every run |
+| Change the session mode | `python .claude/tools/pipeline/mode.py plan` (`build`, `plan` or `talk`) |
+| Run each epic as a parallel swarm | `python .claude/tools/pipeline/swarm.py on` (`off` by default) |
+| Set a task aside for an urgent one | `python .claude/tools/pipeline/approve.py --task task-XXXX --pause "<reason>"`; refused while the tree has uncommitted work |
+| Bring it back | `python .claude/tools/pipeline/approve.py --task task-XXXX --resume` |
+| Stop the background supervisor | `python .claude/tools/pipeline/supervisor.py --stop` |
 
-- [ ] `project/project-context.md` describes your product, not the previous one
-- [ ] `project/stack.md` has concrete commands (no placeholders left)
-- [ ] `grep -rE '\{\{[A-Z_]+\}\}' .claude/` returns zero matches (or only inside `_onboarding.md` itself and `tasks/templates/handoff-template.md`, whose `{{...}}` are runtime tokens for `handoff.py --for`)
-- [ ] `grep -r 'PROJECT-SPECIFIC - REPLACE ME' .agentry/project/` is empty (you filled everything in)
-- [ ] `.claude/settings.local.json` is gitignored
-- [ ] `.claude/CLAUDE.md` lists only the core rules, each with its recorded main-thread reason, and `claudeMdExcludes` names every other rule file
+The status line is registered in `.claude/settings.json` and needs a session
+restart the first time it is added. A run waiting on you shows `owed:` with what
+it needs, such as `commit approval` or `plan approval`.
 
-## 8. Autonomous pipeline (deterministic orchestration)
+## Version history
 
-This template ships a deterministic orchestration layer so the agent runs tasks
-end-to-end without babysitting. State and gate checks live in code, not the
-model's context (`.claude/tools/pipeline/` + `.agentry/state/run.db`). The full
-contract is in `rules/orchestration.md`; the stage machine in `rules/pipeline.md`.
-
-- The interactive **Phase B** of `_init-prompt.md` is where you configure it:
-  pipeline stages, exit-gate commands, stage owners, allowed tools, branching, and
-  the retry budget - written into `.agentry/pipeline.json`.
-- The `Stop` hook keeps the agent advancing (it will not stop mid-pipeline to ask
-  "shall I continue?"); the `PreToolUse` hook enforces the human checkpoints
-  `workflow.mode` leaves in place (approve commit, then approve push in `pr`
-  mode; commit only in `solo` mode, where the local merge follows - see
-  `rules/git-workflow.md`) via `tools/pipeline/approve.py`.
-- Optional automation: the `ready` stage's `auto_approve` array (pipeline.json)
-  lists checkpoints that need NO human approval - `advance.py` approves them
-  itself. The push is never grantable. Default `[]` keeps the commit manual;
-  decide at Phase B per project.
-- Requires Python 3 on PATH. Verify the engine:
-  `python .claude/tools/pipeline/state.py --show` (prints `[]` when idle).
-- Obedience is enforced inside subagents too: dev/readonly/docs agents carry
-  `hooks.PreToolUse` -> `tools/pipeline/agent_gate.py` in their frontmatter
-  (see `rules/orchestration.md`, "Subagent enforcement").
-- `SubagentStart` queries the memory store and injects the rows that match the
-  dispatch; `SubagentStop` injects a lesson-recording nudge after each subagent
-  finishes; `PreCompact` re-injects pipeline state so compaction cannot lose it;
-  SessionStart syncs codegraph and checks module-map drift.
-- `autoMemoryEnabled` is off and no agent declares `memory: project`: lessons go
-  into `.agentry/memory/memory.db` through `tools/memory/memory.py --record`
-  (gitignored, see `rules/self-learning.md`).
-- Planning flow: plan (architect) -> spec (spec-developer, `.agentry/specs/`) ->
-  epic + tasks (product-manager, `.agentry/tasks/epics/`) -> CEO approval flips
-  tasks `backlog` -> `active`. Spec + epic are mandatory for multi-task work.
-- **Handoff chain** (`pipeline.json` `handoff` block, checked at Phase B): confirm
-  `enabled`, decide `hard_edit_gate` (default true: code edits freeze while a
-  completed task lacks its handoff doc), and set `baseline` - `""` for a fresh
-  project; when adopting the template mid-project, the highest pre-existing done
-  task id (those are grandfathered, no retro-docs). The doc chain itself is
-  enforced by `advance.py` / `stop_gate.py` / `pretool_gate.py` via
-  `tools/pipeline/handoff.py`. NOTE: the `{{...}}` tokens inside
-  `tasks/templates/handoff-template.md` are RUNTIME tokens substituted by
-  `handoff.py --for` - do NOT fill them during onboarding.
-- **Orchestrator gate** (`pipeline.json` `orchestrator_gate`): the main thread
-  is hook-denied from writing outside `.claude/`, `.agentry/`, `docs/`,
-  `README*`, root `CLAUDE.md` - the "orchestrator never writes code" rule is
-  enforced, not prompted. Add project-specific exceptions to `extra_allow` at
-  Phase B (B9).
-- **Memory layers** (`.agentry/memory/`, contract in `memory/README.md`): L1
-  codebase map (synced at every session start via
-  `tools/memory/codebase_sync.py`), L2 lessons, L3 reusable patterns.
-  SubagentStart hooks inject the right layers per agent type; the stop gate
-  blocks the next task until the finished one is distilled and stamped
-  (`tools/memory/update.py`). Seed the L1 map at Phase A7.5; set
-  `memory.baseline` like the handoff baseline when adopting mid-project.
-- **Documentation-first pickup** (`handoff.document_latest_on_start`): when the
-  ready backlog holds a single task, the latest task-tagged commit on main must
-  have its handoff doc (read it, or generate it) before implementation starts.
-
-You're done. Delete or keep this file - it's useful as a reference for future template refreshes.
+| Version | Date | Author | Change |
+|---|---|---|---|
+| 2.0 | 2026-10-09 | Technical Writer | Rewritten around five decisions (repositories, gates per repository, lanes, approval level, workflow mode); questions the autodetect answers removed; layout moved to `.agentry/` for work product and `.claude/` for the harness; plan checkpoint added, no separate diff-review stage |
+| 1.0 | n/a | n/a | Single-repository, single-lane onboarding checklist |

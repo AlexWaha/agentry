@@ -470,8 +470,11 @@ DEFAULTS = {
     "max_actions_per_hour": 6,
     # Consecutive polls with nothing in flight after which the daemon exits and
     # releases its lock, rather than sitting on a machine forever with no work.
-    # The next SessionStart starts it again, so stopping costs nothing. 0 means
-    # never exit on idle.
+    # "Nothing in flight" means every run is done or parked: blocked, paused or
+    # awaiting a human (state.is_parked). A parked run waits for a person, so it
+    # does not hold the daemon up; any other run does, and resets the count on
+    # every poll. The next SessionStart starts it again, so stopping costs
+    # nothing. 0 means never exit on idle.
     "idle_exit_polls": 30,
     # Argv, never a shell string: a shell here would be one string-interpolated
     # task id away from command injection. Placeholders: {task} {stage} {prompt}
@@ -1706,10 +1709,12 @@ def report_debt(reg: dict) -> list[str]:
 def poll_once(cfg: dict, act: bool = True) -> dict:
     """One pass over every run in this lane's run.db.
 
-    Returns {"events": [...], "stop": "<reason or ''>", "debt": [...]}. The
-    `stop` reason is set when a cap is hit or the pass itself failed; main()
-    then stops the supervisor and notifies rather than polling on. `debt` is the
-    outstanding handoff and memory debt, reported and never acted on."""
+    Returns {"events": [...], "stop": "<reason or ''>", "debt": [...],
+    "in_flight": bool}. The `stop` reason is set when a cap is hit or the pass
+    itself failed; main() then stops the supervisor and notifies rather than
+    polling on. `debt` is the outstanding handoff and memory debt, reported and
+    never acted on. `in_flight` is true when some run is neither done nor parked
+    (blocked, paused or awaiting a human); the idle-exit counter reads it."""
     reg = load_registry()
     events: list[dict] = []
     stop = ""
@@ -1748,6 +1753,15 @@ def poll_once(cfg: dict, act: bool = True) -> dict:
             stop = event["stop"]
             break
 
+    # What the idle counter in poll_loop reads. Counting EVENTS was the defect
+    # (task-0064): a run parked blocked or at a checkpoint still yields an event
+    # on every poll, so the counter never advanced and the daemon outlived any
+    # blocked task. The event stays, because the log line is the evidence the
+    # run was looked at; what changed is the question the counter asks - "is any
+    # run still moving?" - which is answered from the runs themselves via
+    # state.is_parked(), the one definition the Stop hook and advance.py share.
+    in_flight = any(not state.is_parked(r) for r in runs if r.get("stage") != "done")
+
     prune_registry(reg, runs)
     debt = report_debt(reg)
     if not save_registry(reg):
@@ -1761,7 +1775,7 @@ def poll_once(cfg: dict, act: bool = True) -> dict:
                f"clock cannot persist, so every poll re-seeds it from the run row and a "
                f"stalled run may read HEALTHY indefinitely. Fix the path or the permissions; "
                f"detection is degraded until then.")
-    return {"events": events, "stop": stop, "debt": debt}
+    return {"events": events, "stop": stop, "debt": debt, "in_flight": in_flight}
 
 
 def prune_registry(reg: dict, runs: list[dict]) -> int:
@@ -2270,7 +2284,12 @@ def poll_loop(cfg: dict, args, act: bool, daemon: bool = False) -> int:
         # watch, and say so when it does: the next SessionStart starts a fresh
         # one, so exiting costs nothing and an unattended process nobody
         # remembers starting costs confusion later.
-        idle_polls = 0 if result["events"] else idle_polls + 1
+        # A poll is idle when no run is in flight: every run is done or parked
+        # (blocked, paused, awaiting a human), because a parked run waits for a
+        # person and will not change on its own. This is NOT "no events": parked
+        # runs still produce one each poll. A genuinely in-flight run resets the
+        # counter on every poll, so the limit cannot become a timer on activity.
+        idle_polls = 0 if result.get("in_flight") else idle_polls + 1
         if idle_limit and idle_polls >= idle_limit:
             notify(f"nothing in flight for {idle_polls} consecutive polls "
                    f"(idle_exit_polls={idle_limit}). Exiting and releasing the lock - the "

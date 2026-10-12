@@ -13,7 +13,7 @@ rules:
   - i18n.md
 hooks:
   PreToolUse:
-    - matcher: "Bash|Edit|Write|WebSearch"
+    - matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit|WebSearch"
       hooks:
         - type: command
           command: 'python "$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/agent_gate.py" --profile docs'

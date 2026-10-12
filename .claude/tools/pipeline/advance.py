@@ -65,6 +65,14 @@ FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 CRITERIA_RE = re.compile(r"##\s*Acceptance Criteria\s*\n(.*?)(\n##\s|\Z)", re.DOTALL)
 CHECKBOX_RE = re.compile(r"-\s*\[[ x]\]")
 
+# The one refusal that waits on the CEO rather than on an agent (task-0114,
+# FR-50): the spec is not approved. Every other refusal is work for an agent.
+# The marker is shared by the refusal text and refusal_human(), so the two
+# cannot drift apart.
+SPEC_NOT_APPROVED = "only an approved spec may be implemented"
+SPEC_NOT_APPROVED_HUMAN = ("{task} cannot start: its spec is not approved. Read the spec "
+                           "and approve it, or send the task back to planning.")
+
 
 def _frontmatter(text: str) -> dict:
     """Tiny YAML-less frontmatter reader: top-level 'key: value' pairs between
@@ -180,11 +188,26 @@ def check_task_ready(task: str) -> str:
             spec_fm = _frontmatter(matches[0].read_text(encoding="utf-8", errors="replace"))
             if spec_fm.get("status") != "approved":
                 return (f"{task}: spec '{spec_id}' has status "
-                        f"'{spec_fm.get('status', '?')}' - only an approved spec may "
-                        f"be implemented. Surface it to the CEO.")
+                        f"'{spec_fm.get('status', '?')}' - {SPEC_NOT_APPROVED}. "
+                        f"Surface it to the CEO.")
         return ""
     except Exception:
         return ""  # fail-open
+
+
+def refusal_human(task: str, refusal: str) -> str:
+    """The sentence for the CEO when a refusal waits on him, else "".
+
+    The model reads `message` in the Bash tool result; the person reads this,
+    through hooks/refusal_notice.py (PostToolUse on Bash). NEVER raises: a message
+    that cannot be built is dropped and the refusal stands - the task is still
+    not registered (supervisor decision on task-0114, over the NFR-4 wording)."""
+    try:
+        if SPEC_NOT_APPROVED in refusal:
+            return SPEC_NOT_APPROVED_HUMAN.format(task=task)
+    except Exception:
+        pass
+    return ""
 
 
 def _task_frontmatter(task: str) -> dict:
@@ -230,10 +253,18 @@ def finish_or_wait_for_merge(task: str, run: dict) -> int:
         # Absence of evidence is not evidence of a merge. Neither signal was
         # found, so git cannot tell - park and name both. A task moved to done/
         # on this path once hid unmerged code on a sibling's branch for a day.
-        missing = (f"the declared branch 'origin/{declared}' (and local "
-                   f"'{declared}') does not exist in any repo" if declared else
-                   "no branch matching this task id exists in any repo, and the task "
-                   "declares no 'branch:' in its frontmatter")
+        # A declared `repo:` that names no known repo searches nothing at all
+        # (git_state.repos_for_task), which is a different cause from "searched
+        # and found nothing" - say so, and show the value either way.
+        repo = state.task_repo(task) or ""
+        scope = (f"the task's repo: '{repo}' did not resolve to any known repo, so no "
+                 f"repo was searched (check repos in pipeline.json); "
+                 if repo and not git_state.repos_for_task(task) else "")
+        searched = f" (task repo: '{repo}')" if repo and not scope else ""
+        missing = (f"{scope}the declared branch 'origin/{declared}' (and local "
+                   f"'{declared}') does not exist in any repo{searched}" if declared else
+                   f"{scope}no branch matching this task id exists in any repo{searched}, "
+                   f"and the task declares no 'branch:' in its frontmatter")
         run = _merge_wait(task, run, "merge")
         return result("park", task, run,
                       f"Cannot confirm a merge - both signals are missing: (1) carrier "
@@ -301,6 +332,26 @@ def stage_checkpoints(stage_def: dict) -> list:
     if pretool_gate.workflow_mode() == pretool_gate.WORKFLOW_SOLO:
         checkpoints = [c for c in checkpoints if c != approvals.PUSH]
     return checkpoints
+
+
+def start_stage(pipeline: dict, which: str, task_type: str) -> str:
+    """The stage a new run of `task_type` starts at: the first one whose
+    `skip_for_types` does not name the type (case-insensitive).
+
+    This is where small work skips the build flow's plan step (task-0045), as
+    configuration and not as a per-task flag: the CEO's rule is "bugfix and
+    techdebt skip it, feature always asks", and approvals.never_granted() still
+    refuses the plan at every level. Read once, at registration - a run in
+    flight keeps the stage it is on. A stage list that skips everything, or one
+    nobody can read, starts at the first stage, which is the strict answer."""
+    wanted = str(task_type).strip().lower()
+    stage_defs = state.stages(pipeline, which)
+    for stage_def in stage_defs:
+        skip = stage_def.get("skip_for_types")
+        if isinstance(skip, list) and wanted in {str(t).strip().lower() for t in skip}:
+            continue
+        return str(stage_def.get("name") or "")
+    return state.stage_names(pipeline, which)[0]
 
 
 def stage_owner(pipeline: dict, name: str, task: str = "", which: str = state.BUILD) -> str:
@@ -407,17 +458,22 @@ def main() -> int:
         refusal = check_task_ready(args.task)
         if refusal:
             conn.close()
+            human = refusal_human(args.task, refusal)
             print(json.dumps({"action": "refused", "task": args.task,
-                              "message": refusal}, indent=2))
+                              "message": refusal, **({"human": human} if human else {})},
+                             indent=2))
             return 0
-        run = state.create_run(conn, args.task, args.type, first, which)
+        begin = start_stage(pipeline, which, args.type)
+        run = state.create_run(conn, args.task, args.type, begin, which)
         conn.close()
         # Taking a task on IS the move out of the queue - there is no separate
         # status to flip, and nothing lands in active/ that is not really moving.
         state.move_task(args.task, "active")
+        skipped = (f" ({first}..{begin} skipped for type '{args.type}': skip_for_types in "
+                   f"pipeline.json)" if begin != first else "")
         return result("started", args.task, run,
-                      f"started at '{first}' on the {which} flow "
-                      f"(owner: {stage_owner(pipeline, first, args.task, which)}). "
+                      f"started at '{begin}' on the {which} flow{skipped} "
+                      f"(owner: {stage_owner(pipeline, begin, args.task, which)}). "
                       f"Do the stage work, then re-run advance.py --task {args.task}.")
 
     cur = run["stage"]
@@ -425,6 +481,17 @@ def main() -> int:
     if cur == "done":
         conn.close()
         return finish_or_wait_for_merge(args.task, run)
+
+    # A paused run is not advanced: running its gate here would rewrite its
+    # stage_status and silently end the pause. The record says why it was set
+    # aside and the only way out is the explicit resume.
+    if state.is_paused(run):
+        conn.close()
+        return result("paused", args.task, run,
+                      f"{args.task} is PAUSED at stage '{cur}' ({run.get('pause_kind') or '?'}: "
+                      f"{run.get('pause_reason') or 'no reason recorded'}). Nothing is advanced "
+                      f"while it is paused. Resume it first: python "
+                      f".claude/tools/pipeline/approve.py --task {args.task} --resume")
 
     # A stage name the config does not define is a dead end, not a pass. Such a
     # stage has no exit_gate, and gate.py reports a missing gate as configured
@@ -568,8 +635,13 @@ def main() -> int:
         run = state.get_run(conn, args.task)
         conn.close()
         owner = stage_owner(pipeline, nxt, args.task, which)
+        # A checkpoint stage is not driven by the Stop hook, so nothing would ever
+        # tell the orchestrator to park the plan for the CEO. Say it here.
+        nxt_def = state.get_stage(pipeline, nxt, which) or {}
+        then = (f" '{nxt}' awaits the CEO's plan approval: re-run advance.py --task "
+                f"{args.task} to park it." if approvals.PLAN in stage_checkpoints(nxt_def) else "")
         return result("advanced", args.task, run,
-                      f"gate passed: '{cur}' -> '{nxt}' (owner: {owner}). Proceed.")
+                      f"gate passed: '{cur}' -> '{nxt}' (owner: {owner}). Proceed.{then}")
 
     retries = run["retries"] + 1
     if retries >= budget:

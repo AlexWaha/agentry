@@ -290,7 +290,7 @@ def merge_settings(dst_claude: Path, target_root: Path, report: dict) -> None:
     ensure("SessionStart", None,
            py_hook(target_root, "tools/hooks/session_start.py", 60,
                    "Session start: pipeline state, codegraph sync, memory health..."))
-    ensure("PreToolUse", "Bash|Edit|Write",
+    ensure("PreToolUse", "Bash|Edit|Write|MultiEdit|NotebookEdit",
            py_hook(target_root, "tools/pipeline/pretool_gate.py", 20))
     ensure("Stop", None,
            py_hook(target_root, "tools/pipeline/stop_gate.py", 20))
@@ -340,7 +340,7 @@ def hooks_yaml(profile: str, root: Path) -> str:
     lines = [
         "hooks:",
         "  PreToolUse:",
-        '    - matcher: "Bash|Edit|Write"',
+        '    - matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit"',
         "      hooks:",
         "        - type: command",
         f"          command: '{gate}'",
@@ -349,7 +349,7 @@ def hooks_yaml(profile: str, root: Path) -> str:
     if profile == "dev":
         lines += [
             "  PostToolUse:",
-            '    - matcher: "Edit|Write"',
+            '    - matcher: "Edit|Write|MultiEdit|NotebookEdit"',
             "      hooks:",
             "        - type: command",
             f"          command: '{danger}'",

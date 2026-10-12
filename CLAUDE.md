@@ -41,7 +41,7 @@ Every task follows this pipeline. No shortcuts.
    (steps 2-6 are the per-task flow; in swarm mode QA runs once after ALL
    implementation agents report done - see "Swarm mode" in `rules/orchestration.md`)
 7. **All passes** → CEO reads the diff at the commit checkpoint (`/diff` in the
-   session); rejecting routes the task back to `implement`
+   session); rejecting routes the task back to `implement`. Every task type except those in `skip_for_types` (`bugfix`, `techdebt`) first passes the plan approval (`approve.py --gate plan`) before any code is written
 8. **Approved** → Orchestrator presents summary to CEO, commit and push follow
    the approval checkpoints
 

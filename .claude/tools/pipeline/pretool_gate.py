@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """PreToolUse brain - deterministic backstop for the human checkpoints.
 
-Wired to Claude Code's `PreToolUse` event (matchers: Bash, Edit|Write). It denies
-(exit code 2, reason on stderr) when:
+Wired to Claude Code's `PreToolUse` event (matchers: Bash, Edit|Write|MultiEdit|NotebookEdit). It denies
+(exit code 2, reason on stderr; a deny that waits on the CEO also prints a
+{"systemMessage": ...} document on stdout for him - see HUMAN_NOTICES) when:
   - `git commit` runs while the current task's commit is not yet approved;
   - `git commit` / `git push` runs on a task branch whose run row cannot be
     read, or is absent from the lane's run store - the approval cannot be
@@ -58,6 +59,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 import shlex
 import subprocess
@@ -1046,10 +1048,53 @@ def check_bare_nul(command: str) -> int:
 # Lowercase, trailing slash, plain prefixes only - README*, the root CLAUDE.md,
 # ~/.claude/plans/ and extra_allow globs are special cases handled below.
 ORCH_ALLOW_PREFIXES = (".claude/", ".agentry/", "docs/")
-README_RE = re.compile(r"(^|[\\/])readme[^\\/]*(\.md)?$", re.IGNORECASE)
+# A README file and nothing else: the basename is `readme` or `readme.md|rst|txt`.
+# The old `readme[^/]*(\.md)?$` was a prefix match, so `readme_gen.py` passed.
+# agent_gate imports this same object - one pattern, two gates.
+README_RE = re.compile(r"(^|[\\/])readme(\.(md|rst|txt))?$", re.IGNORECASE)
 ORCH_SED_RE = re.compile(r"\bsed\s+(-\w*\s+)*-i", re.IGNORECASE)
 ORCH_TEE_RE = re.compile(r"\btee\s+(?:-\w+\s+)*(?P<t>[^\s;|&]+)", re.IGNORECASE)
 ORCH_PATCH_RE = re.compile(r"(^|[\s;|&])(patch\b|git\s+apply\b)", re.IGNORECASE)
+
+
+def normalize(path: str) -> str:
+    """Lowercase posix spelling with `..` resolved, so `docs/../src/a.py` is judged
+    as the `src/a.py` it names and not as the `docs/` prefix it starts with. The
+    single definition: orch_allowed_path(), is_bookkeeping() and agent_gate all
+    judge the path this returns."""
+    return posixpath.normpath(path.replace("\\", "/").lower())
+
+
+def is_root_claude_md(path: str) -> bool:
+    """The repository-root CLAUDE.md, resolved against the project root. Root only:
+    a CLAUDE.md inside an application tree is not the document the technical-writer
+    owns."""
+    p = Path(path)
+    if not p.is_absolute():
+        p = state.ROOT / p
+    try:
+        return p.resolve().relative_to(state.ROOT.resolve()).as_posix().lower() == "claude.md"
+    except (OSError, ValueError):
+        return False
+
+
+# Every tool that writes a file. Claude Code 2.1.295 lists them as
+# Write, Edit, MultiEdit, NotebookEdit; each hook matcher must name all four.
+EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+
+
+def edit_target(tool: str, ti: dict) -> tuple[str, str]:
+    """(path, new text) of one file-writing tool call, for the path and dash checks."""
+    if tool == "NotebookEdit":
+        return str(ti.get("notebook_path", "")), str(ti.get("new_source", ""))
+    path = str(ti.get("file_path", ""))
+    if tool == "MultiEdit":
+        edits = ti.get("edits")
+        if not isinstance(edits, list):
+            return path, ""
+        return path, "\n".join(str(e.get("new_string", "")) for e in edits
+                               if isinstance(e, dict))
+    return path, str(ti.get("new_string", "") or ti.get("content", ""))
 
 
 def orch_cfg() -> dict:
@@ -1072,8 +1117,7 @@ def orch_allowed_path(file_path: str) -> bool:
     orchestrator is supposed to write, so leaving it out denied the main
     thread its own job."""
     try:
-        raw = file_path.replace("\\", "/")
-        low = raw.lower()
+        low = normalize(file_path)
         for prefix in ORCH_ALLOW_PREFIXES:
             if low.startswith(prefix) or "/" + prefix in low:
                 return True
@@ -1145,9 +1189,70 @@ GIT_C_RE = re.compile(r"git\s+-C\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)")
 CD_RE = re.compile(r"(?:^|&&|\|\||;)\s*cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)")
 
 
-def deny(reason: str) -> int:
+# What the CEO owes the run, for the denies that wait on him (task-0114, FR-50).
+# `reason` on stderr is for the MODEL ("do X next"); a deny that asks the human
+# carries one more sentence, printed by emit_human() as the hook's stdout JSON
+# {"systemMessage": ...}. Measured on claude.exe 2.1.295 with a real PreToolUse
+# hook: with exit code 2 the tool call is blocked on stderr alone, exactly as
+# before, and the stdout document reaches the person as a "PreToolUse:Bash says:
+# <message>" notice in the main thread (a subagent's stream showed no notice).
+# Not in this table: the policy denies, which ask nobody for anything.
+# Words that belong to the model (approve.py, advance.py, --reject) stay out.
+HUMAN_NOTICES = {
+    "commit": "{task} is ready to commit and is waiting for you. Read the diff (/diff), "
+              "then approve the commit or send the task back.",
+    "push": "{task} is ready to push and is waiting for you. Approve the push, or leave "
+            "the branch where it is.",
+    "merge": "{task} cannot be merged into {trunk}: you have not approved its commit. "
+             "Read the diff (/diff) and approve it first.",
+    "plan": "{task} tried to change code before you approved its plan, so nothing outside "
+            ".agentry/ can be written yet. Once the plan is written, read it and approve "
+            "or reject it.",
+    "unattended": "An unattended session stopped at {step}, which only you may do. Read the "
+                  "finished work and take that step yourself.",
+}
+
+# The sentence of the first deny of this run, awaiting emit_human(); "" when that
+# deny asks nobody. Module state rather than a print in deny(): handle_bash()
+# evaluates its checks eagerly, so two denies can be computed for one call and the
+# person must hear only the one whose reason is returned, which is the first.
+PENDING_HUMAN: list = []
+
+
+def human_notice(kind: str, **fields) -> str:
+    """The sentence for the CEO, or "" when it cannot be built.
+
+    NEVER raises. A message that fails to build is dropped and the deny it rides
+    on stands: a formatting error must not turn a commit, push or plan deny into
+    an allow (supervisor decision on task-0114, over the NFR-4 wording)."""
+    try:
+        return str(HUMAN_NOTICES[kind]).format(**fields)
+    except Exception:
+        return ""
+
+
+def deny(reason: str, human: str = "") -> int:
     sys.stderr.write(reason + "\n")
+    try:
+        if not PENDING_HUMAN:
+            PENDING_HUMAN.append(str(human or ""))
+    except Exception:
+        pass
     return 2
+
+
+def emit_human() -> None:
+    """Print the pending sentence as the hook's stdout JSON, once, then forget it.
+    Called only on the way out with exit code 2. Every failure is swallowed: the
+    deny has already been written to stderr and is not conditional on this."""
+    try:
+        if PENDING_HUMAN and PENDING_HUMAN[0]:
+            sys.stdout.write(json.dumps({"systemMessage": PENDING_HUMAN[0]}) + "\n")
+            sys.stdout.flush()
+    except Exception:
+        pass
+    finally:
+        del PENDING_HUMAN[:]
 
 
 def allow() -> int:
@@ -1471,6 +1576,107 @@ def task_from_branch(branch: str) -> str:
     return ""
 
 
+# A commit's task tag: `[task-NNNN]` leading a line of the message, the form
+# git-workflow.md asks for. Line-anchored so a body sentence that merely cites
+# another task ("depends on [task-0010]") cannot re-point the commit.
+COMMIT_TAG_RE = re.compile(r"^[ \t]*\[(task-[a-z0-9]+)\]", re.MULTILINE | re.IGNORECASE)
+MESSAGE_FILE_MAX_BYTES = 65536
+
+
+def read_message_file(path: str, cwd: str) -> str:
+    """Text of a `git commit -F <path>` message file, '' when it cannot be read
+    (stdin, a missing file, a directory). Unreadable means untagged, which falls
+    back to the branch's task - the stricter reading, never a looser one."""
+    if not path or path == "-":
+        return ""
+    candidate = Path(path)
+    if candidate.is_absolute():
+        bases = [candidate]
+    else:
+        bases = ([Path(cwd) / path] if cwd else []) + [state.ROOT / path]
+    for base in bases:
+        try:
+            if base.is_file():
+                with base.open("rb") as handle:
+                    return handle.read(MESSAGE_FILE_MAX_BYTES).decode("utf-8", errors="replace")
+        except OSError:
+            continue
+    return ""
+
+
+def commit_message_texts(args: list, cwd: str) -> list:
+    """Every message the arguments of ONE `git commit` supply: -m / --message
+    (separate, glued or =), and -F / --file read from disk. Clusters such as -am
+    are walked char by char, because the message belongs to the `m` inside."""
+    texts = []
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        i += 1
+        if tok == "--":
+            break
+        if tok.startswith("--"):
+            name, eq, value = tok.partition("=")
+            if name in ("--message", "--file"):
+                if not eq and i < len(args):
+                    value = args[i]
+                    i += 1
+                texts.append(value if name == "--message" else read_message_file(value, cwd))
+            continue
+        if tok.startswith("-") and len(tok) > 1:
+            for pos, ch in enumerate(tok[1:], start=1):
+                if ch in "mFcCt":
+                    value = tok[pos + 1:]
+                    if not value and i < len(args):
+                        value = args[i]
+                        i += 1
+                    if ch == "m":
+                        texts.append(value)
+                    elif ch == "F":
+                        texts.append(read_message_file(value, cwd))
+                    break
+    return texts
+
+
+def _commit_task_entries(command: str, fallback: str, cwd: str, _depth: int = 0) -> list:
+    """One entry per `git commit` in `command`, nested `sh -c` / `bash -c` / eval
+    bodies and substitutions included: argv walking sees a nested body as one
+    token, so a commit hidden there was never counted, and the commit was judged
+    as the branch's task while its message tagged another. Past the depth ceiling
+    the body is unread and the commit falls back to the branch (the stricter
+    outcome, as for a heredoc message)."""
+    judged = []
+    for sub, args in git_invocations(command):
+        if sub != "commit":
+            continue
+        tag = ""
+        for text in commit_message_texts(args, cwd):
+            found = COMMIT_TAG_RE.search(text)
+            if found:
+                tag = found.group(1).lower()
+                break
+        judged.append(tag or fallback)
+    if unscannable_depth(command, _depth):
+        return [*judged, fallback]
+    for body in nested_command_bodies(command):
+        judged.extend(_commit_task_entries(body, fallback, cwd, _depth + 1))
+    return judged
+
+
+def commit_tasks(command: str, branch: str, cwd: str = "") -> list:
+    """The task each `git commit` in `command` is judged as, one entry per commit.
+
+    The `[task-NNNN]` tag of its message when it has one, else the checked-out
+    branch's task. The branch alone was the old rule, and with two tasks worked
+    on one branch (what a preemption creates) it answered about the wrong one: an
+    approved task could not commit because an unfinished sibling shared its
+    branch. A heredoc fed to `-F -` is not read, so that commit falls back to the
+    branch, the stricter outcome. A commit inside a nested shell body is counted
+    like any other (_commit_task_entries)."""
+    fallback = task_from_branch(branch)
+    return _commit_task_entries(command, fallback, cwd) or [fallback]
+
+
 def valid_work_branch(name: str) -> bool:
     """A work branch must be <type>/...task-<id>... ; protected branches pass
     (checkout/switch to them is not new work)."""
@@ -1681,7 +1887,8 @@ def check_merge_source(source: str, trunk: str) -> int:
             f"Merge into protected branch '{trunk}' refused - condition 3 of 3 failed "
             f"(commit approval): the commit checkpoint for {task} was never approved. "
             f"After the CEO approves: python .claude/tools/pipeline/approve.py --task "
-            f"{task} --gate commit.")
+            f"{task} --gate commit.",
+            human=human_notice("merge", task=task, trunk=trunk))
     return allow()
 
 
@@ -1754,7 +1961,8 @@ def check_unattended(command: str) -> int:
         f"{step} is refused - whatever the approvals level and workflow mode allow, there "
         f"is no human here to approve it. Finish the stage work, run advance.py, and stop: "
         f"the CEO reads the diff and takes this step himself. See "
-        f".claude/rules/orchestration.md and .claude/tools/pipeline/supervisor.py.")
+        f".claude/rules/orchestration.md and .claude/tools/pipeline/supervisor.py.",
+        human=human_notice("unattended", step=step))
 
 
 def push_trunk_names() -> set:
@@ -2344,7 +2552,8 @@ def active_review_run(conn) -> dict | None:
     """The 'review' stage is read-only: the reviewer analyzes the tree, so a code
     edit underneath it would invalidate the findings it is producing."""
     for r in state.all_runs(conn):
-        if r["stage"] == "review" and r["stage_status"] != state.ST_BLOCKED:
+        if (r["stage"] == "review" and r["stage_status"] != state.ST_BLOCKED
+                and not state.is_paused(r)):
             return r
     return None
 
@@ -2352,9 +2561,13 @@ def active_review_run(conn) -> dict | None:
 def is_bookkeeping(path: str) -> bool:
     # .agentry/ carries the work product since FR-13 (tasks, plans, specs,
     # state); it is bookkeeping for the same reason .claude/ is.
-    p = path.replace("\\", "/").lower()
+    # Same question as orch_allowed_path(), so the same answers: README files and
+    # the root CLAUDE.md are the documents the docs profile owns, and `..` is
+    # resolved first so `docs/../src/a.py` cannot ride the docs/ prefix.
+    p = normalize(path)
     return ("/.claude/" in p or "/.agentry/" in p or "/docs/" in p
-            or p.startswith((".claude/", ".agentry/", "docs/")))
+            or p.startswith((".claude/", ".agentry/", "docs/"))
+            or bool(README_RE.search(p)) or is_root_claude_md(path))
 
 
 def handoff_freeze_task() -> str:
@@ -2367,10 +2580,12 @@ def handoff_freeze_task() -> str:
         import handoff
         if not handoff.cfg().get("hard_edit_gate"):
             return ""
+        pipeline = state.load_pipeline()
         conn = state.connect()
         try:
-            editing = any(r["stage"] in state.EDITING_STAGES
+            editing = any(r["stage"] in state.editing_stages(pipeline, state.run_pipeline(r))
                           and r["stage_status"] != state.ST_BLOCKED
+                          and not state.is_paused(r)
                           for r in state.all_runs(conn))
         finally:
             conn.close()
@@ -2380,6 +2595,188 @@ def handoff_freeze_task() -> str:
         return debt[0]["task"] if debt else ""
     except Exception:
         return ""
+
+
+# --- per-task plan approval (task-0045) ---------------------------------------
+# The build flow's first steps are `plan` (the owning agent writes what it intends
+# to change and why) and `plan-approval` (the CEO's checkpoint). Until the plan
+# approval is recorded in run.db, nothing outside .agentry/ may be written for
+# that task: the commit gate cannot stand in for it, because by the time a commit
+# is attempted every stage has already run. Edit and Write are denied here, the
+# way a commit is denied without its approval, and so are the shell spellings of
+# a file write the gate can read. Interpreter-written files (`python -c
+# "open(...).write(...)"`) are not seen - the stated limit shared with every
+# other command check in this file.
+#
+# Read from config, never from a stage name: a flow with no stage that declares
+# the `plan` checkpoint has nothing pending, so a pipeline.json written before
+# this step existed behaves exactly as it did. Fail-open on any error (NFR-4).
+PLAN_CHECKPOINT = "plan"
+PLAN_WRITE_PREFIX = ".agentry/"
+PLAN_GIT_WRITERS = frozenset({"restore", "reset", "clean", "rebase"})
+PLAN_GIT_STASH_ARGS = ("pop", "apply", "drop")
+PLAN_PATH_COMMANDS = frozenset({"rm", "mv", "cp", "mkdir", "ln", "chmod", "truncate"})
+
+
+def plan_checkpoint_index(pipeline: dict, which: str = state.BUILD) -> int | None:
+    """Position of the first stage of `which` that declares the plan checkpoint."""
+    for i, stage in enumerate(state.stages(pipeline, which)):
+        declared = stage.get("checkpoints")
+        if isinstance(declared, list) and PLAN_CHECKPOINT in {str(c).lower() for c in declared}:
+            return i
+    return None
+
+
+def plan_pending(run: dict | None, pipeline: dict) -> bool:
+    """True for a build-flow run that has not yet passed its plan checkpoint: it
+    stands at or before the stage declaring it and the approval is not recorded.
+    A run past the stage, a run on another flow, and a config without the stage
+    are all False. The plan flow keeps its own `approval` stage and its own
+    parking in advance.py."""
+    if not run or run.get("plan_approved") or state.run_pipeline(run) != state.BUILD:
+        return False
+    gate = plan_checkpoint_index(pipeline, state.BUILD)
+    names = state.stage_names(pipeline, state.BUILD)
+    stage = run.get("stage")
+    return gate is not None and stage in names and names.index(stage) <= gate
+
+
+def plan_pending_tasks() -> list[str]:
+    """Every task whose plan approval is still owed. [] when the config has no plan
+    step (answered before the run store is opened) and on any error."""
+    try:
+        pipeline = state.load_pipeline()
+        if plan_checkpoint_index(pipeline) is None:
+            return []
+        conn = state.connect()
+        try:
+            runs = state.all_runs(conn)
+        finally:
+            conn.close()
+        return [r["task"] for r in runs if plan_pending(r, pipeline)]
+    except Exception:
+        return []
+
+
+def plan_pending_task(branch: str, pending: list[str] | None = None) -> str:
+    """The task `branch` belongs to when its plan approval is owed, else ''."""
+    task = task_from_branch(branch)
+    owed = plan_pending_tasks() if pending is None else pending
+    return task if task and task in owed else ""
+
+
+def plan_write_allowed(path: str) -> bool:
+    """Whether a file may be written while a plan is unapproved: only under the
+    project's .agentry/ (plans, task files, specs) and the harness plan scratch
+    ~/.claude/plans/. `.claude/` and docs/ are NOT on the list - in this
+    repository the code itself lives under .claude/tools."""
+    try:
+        p = Path(path)
+        if not p.is_absolute():
+            p = state.ROOT / p
+        p = p.resolve()
+        try:
+            rel = p.relative_to(state.ROOT.resolve()).as_posix().lower()
+        except ValueError:
+            home_plans = (Path.home() / ".claude" / "plans").resolve()
+            return p == home_plans or home_plans in p.parents
+        return rel.startswith(PLAN_WRITE_PREFIX)
+    except (OSError, ValueError):
+        return True  # fail-open
+
+
+def plan_blocked_task(path: str = "", command: str = "", cwd: str = "") -> str:
+    """The task whose unapproved plan forbids a write on the checked-out branch,
+    else ''. A file edit is placed by the repository holding the file (its nearest
+    existing parent), a shell command by the usual cwd / -C / cd resolution."""
+    try:
+        pending = plan_pending_tasks()
+        if not pending:
+            return ""
+        if path:
+            here = Path(path) if Path(path).is_absolute() else state.ROOT / path
+            while not here.is_dir() and here != here.parent:
+                here = here.parent
+            cwd = str(here)
+        return plan_pending_task(current_branch(command, cwd), pending)
+    except Exception:
+        return ""
+
+
+def plan_operands_allowed(segment: list, hit: str) -> bool:
+    """Whether a path-operand command (`hit` is its name) writes only where the
+    plan phase allows: it has at least one operand and every operand passes
+    plan_write_allowed(). `rm` of the bare Windows device names `nul` / `NUL` in
+    any case is always allowed, because the session start and end cleanup runs
+    it. An operand the shell would expand (`$`, backtick) is not judged by its
+    text, and a command with no operand (`xargs rm`) takes its paths from stdin."""
+    if hit not in PLAN_PATH_COMMANDS:
+        return False
+    i = argv0_index(segment)
+    operands = [t for t in segment[i + 1:] if not t.startswith("-")] if i is not None else []
+    if not operands or any("$" in t or "`" in t for t in operands):
+        return False
+    if hit == "rm" and all(t.lower() == "nul" for t in operands):
+        return True
+    return all(plan_write_allowed(t) for t in operands)
+
+
+def plan_mutating_command(command: str, _depth: int = 0) -> str:
+    """A file-mutating simple command (rm, mv, cp, mkdir, ln, chmod, truncate,
+    installers, and git commands that rewrite tracked files), nested shell
+    bodies included, else ''. `tee` and `sed -i` are judged by the caller, which
+    knows their targets. The command list is agent_gate's, imported lazily
+    because agent_gate imports this module."""
+    try:
+        import agent_gate
+    except Exception:
+        return ""
+    for segment in command_segments(command) or []:
+        hit = agent_gate.mutating_command(segment)
+        if hit and hit not in ("tee", "sed -i") and not plan_operands_allowed(segment, hit):
+            return hit
+    for sub, args in git_invocations(command):
+        if sub in PLAN_GIT_WRITERS or (sub == "checkout" and "--" in args):
+            return f"git {sub}"
+        if sub == "stash" and args and args[0].lower() in PLAN_GIT_STASH_ARGS:
+            return f"git stash {args[0].lower()}"
+    if unscannable_depth(command, _depth):
+        return DEPTH_EXCEEDED
+    for body in nested_command_bodies(command):
+        hit = plan_mutating_command(body, _depth + 1)
+        if hit:
+            return hit
+    return ""
+
+
+def plan_bash_write(command: str) -> str:
+    """The fragment of a Bash command that writes a file outside the plan-phase
+    allowance, else ''. Answered before anything is parsed or imported when the
+    config has no plan step: nothing is pending then (plan_pending_tasks)."""
+    try:
+        if plan_checkpoint_index(state.load_pipeline()) is None:
+            return ""
+    except Exception:
+        return ""  # fail-open, like plan_pending_tasks
+    for frag in redirect_write_fragments(command):
+        if frag == DEPTH_EXCEEDED or not plan_write_allowed(redirect_target(frag).strip("'\"")):
+            return frag
+    m = ORCH_TEE_RE.search(command)
+    if m and not plan_write_allowed(m.group("t")):
+        return m.group(0)
+    if ORCH_SED_RE.search(command):
+        return "sed -i"
+    if ORCH_PATCH_RE.search(command):
+        return "patch / git apply"
+    return plan_mutating_command(command)
+
+
+def plan_deny(task: str, what: str) -> int:
+    return deny(f"{task} is at its plan step and the CEO has not approved the plan, so nothing "
+                f"outside .agentry/ may be written yet ({what}). Write the plan to "
+                f".agentry/plans/<date>-<slug>-{task}.md, run advance.py, and wait for the "
+                f"approval (approve.py --task {task} --gate plan). Rejecting the plan costs "
+                f"nothing but the plan.", human=human_notice("plan", task=task))
 
 
 def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
@@ -2402,6 +2799,13 @@ def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
     ):
         if check != 0:
             return check
+
+    # A write while the plan is unapproved. Text first (cheap), run store second.
+    written = plan_bash_write(command)
+    if written:
+        blocked = plan_blocked_task(command=command, cwd=cwd)
+        if blocked:
+            return plan_deny(blocked, written)
 
     is_commit = git_invokes(command, "commit")
     is_push = git_invokes(command, "push")
@@ -2460,7 +2864,10 @@ def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
             return allow()
         return deny("Not on a feature branch (no task-XXXX). Create the task branch first "
                     "per .claude/rules/git-workflow.md.")
-    commit_task = head_task if is_commit else ""
+    # A commit is judged as the task its message tags (task-0059), the branch's
+    # task only when it carries no tag. A tag naming another task is a request to
+    # borrow that task's approval, so it is checked below (R3).
+    commit_ts = [t for t in commit_tasks(command, branch, cwd) if t] if is_commit else []
     push_tasks = pushed_tasks(command, branch, local) if is_push else []
     if push_tasks is None:
         return deny(
@@ -2468,7 +2875,9 @@ def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
             "branch) to a protected branch, so there is no task approval to check it "
             "against. Push the task branch by name, merge it first, or publish the "
             "trunk itself: git push origin main.")
-    for task in dict.fromkeys([t for t in [commit_task, *push_tasks] if t]):
+    borrowed = []
+    for task in dict.fromkeys([t for t in [*commit_ts, *push_tasks] if t]):
+        tagged_elsewhere = task in commit_ts and task != head_task
         # The commit and push checks fail CLOSED, following check_merge_source()
         # rather than inventing a second style for the same question. Both failure
         # modes below were silent exit 0 before, and a lane mismatch (the session
@@ -2487,6 +2896,27 @@ def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
                 f"closed on purpose. Check PIPELINE_LANE"
                 f"{f'={state.LANE!r}' if state.LANE else ' (unset)'} and that the state "
                 f"directory is writable.")
+        if tagged_elsewhere:
+            # R3: the tag must not let a commit pick another task's approval. The
+            # branch and the tag disagree, so say so, and accept the tag only for a
+            # task that is registered, unfinished, and declares (`branch:` in its
+            # frontmatter, the field merge detection already resolves) that it
+            # rides on THIS branch.
+            clash = (f"This commit is tagged [{task}] but the checked-out branch "
+                     f"'{branch}' belongs to {head_task}.")
+            if run is None:
+                return deny(f"{clash} {task} has no run row in {state.DB_PATH}, so there is no "
+                            f"approval to judge the commit by. Tag the commit with {head_task}, "
+                            f"or register {task} first.")
+            if run["stage"] == "done":
+                return deny(f"{clash} {task} is already done, so it cannot approve a new "
+                            f"commit. Tag it with {head_task}.")
+            if state.task_branch(task) != branch:
+                return deny(f"{clash} {task} does not declare that it rides on '{branch}', so "
+                            f"its approval cannot cover work on this branch. Either tag the "
+                            f"commit {head_task}, or - if {task} really shares this branch - "
+                            f"add 'branch: {branch}' to {task}'s task-file frontmatter.")
+            borrowed.append(f"{task} (branch is {head_task}'s)")
         if run is None:
             return deny(
                 f"{task} has no row in the run store ({state.DB_PATH}), so the "
@@ -2496,13 +2926,20 @@ def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
                 f"it IS registered, this session is in the wrong lane: PIPELINE_LANE"
                 f"{f'={state.LANE!r}' if state.LANE else ' is unset'} selects the store "
                 f"above, and a lane holds its own runs.")
-        if task == commit_task and not run["commit_approved"]:
-            return deny(f"Commit for {task} is not approved yet. Surface the diff and wait for CEO "
-                        f"approval, then: python .claude/tools/pipeline/approve.py "
-                        f"--task {task} --gate commit.")
+        if task in commit_ts and not run["commit_approved"]:
+            via = (f" (the commit is tagged [{task}]; the branch '{branch}' belongs to "
+                   f"{head_task})" if tagged_elsewhere else "")
+            return deny(f"Commit for {task} is not approved yet{via}. Surface the diff and wait "
+                        f"for CEO approval, then: python .claude/tools/pipeline/approve.py "
+                        f"--task {task} --gate commit.",
+                        human=human_notice("commit", task=task))
         if task in push_tasks and push_needs_approval() and not run["push_approved"]:
             return deny(f"Push for {task} is not approved yet. Wait for CEO approval, then: "
-                        f"python .claude/tools/pipeline/approve.py --task {task} --gate push.")
+                        f"python .claude/tools/pipeline/approve.py --task {task} --gate push.",
+                        human=human_notice("push", task=task))
+    for note in borrowed:
+        print(f"commit gate: judged as {note} by its [task-NNNN] tag, not by the branch name.",
+              file=sys.stderr)
     return finish()
 
 
@@ -2523,6 +2960,11 @@ def handle_edit(file_path: str, content: str = "", orch: bool = False) -> int:
         code = orch_check_edit(file_path)
         if code != 0:
             return code
+
+    if not plan_write_allowed(file_path):
+        blocked = plan_blocked_task(path=file_path)
+        if blocked:
+            return plan_deny(blocked, file_path)
 
     if is_bookkeeping(file_path):
         return allow()
@@ -2560,6 +3002,14 @@ def read_payload() -> dict:
 
 
 def main() -> int:
+    del PENDING_HUMAN[:]
+    code = evaluate()
+    if code == 2:
+        emit_human()
+    return code
+
+
+def evaluate() -> int:
     try:
         payload = read_payload()
     except (ValueError, OSError, UnicodeDecodeError):
@@ -2581,9 +3031,9 @@ def main() -> int:
         orch = not is_subagent
         if tool == "Bash":
             return handle_bash(str(ti.get("command", "")), str(payload.get("cwd", "")), orch=orch)
-        if tool in ("Edit", "Write"):
-            content = str(ti.get("new_string", "") or ti.get("content", ""))
-            return handle_edit(str(ti.get("file_path", "")), content, orch=orch)
+        if tool in EDIT_TOOLS:
+            path, content = edit_target(tool, ti)
+            return handle_edit(path, content, orch=orch)
         return allow()
     except Exception:
         return allow()

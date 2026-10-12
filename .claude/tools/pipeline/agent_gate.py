@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PreToolUse gate for dispatched subagents - obedience enforced, not prompted.
 
-Wired into agent frontmatter (`hooks.PreToolUse`, matcher Bash|Edit|Write, plus
+Wired into agent frontmatter (`hooks.PreToolUse`, matcher Bash|Edit|Write|MultiEdit|NotebookEdit, plus
 WebSearch|WebFetch on the agents that carry web tools) so the SAME deterministic
 rules that govern the orchestrator also fire INSIDE every subagent. Three
 profiles:
@@ -38,12 +38,10 @@ bug here must never brick an agent.
 from __future__ import annotations
 
 import argparse
-import posixpath
 import re
 import shlex
 import sys
 from collections import Counter
-from pathlib import Path
 
 import pretool_gate
 
@@ -140,11 +138,29 @@ runs_approve_script = pretool_gate.runs_approve_script
 #
 # Matching is by FILE NAME only, as it is for approve.py: an unrelated
 # `app/mode.py` invoked with an argument is denied the same way.
-STATE_SETTER_RE = re.compile(r"(?:^|[\\/])(?:approvals|mode|swarm)\.py[. )]*$", re.IGNORECASE)
+#
+# repo_scan.py joins the list for its `--write`, which edits the protected
+# .agentry/pipeline.json: it writes repos{} (and lanes{}), and the `stages` command
+# lists inside repos{} are what stack_gate.py later runs with shell=True. Its
+# other forms only print a scan, so they stay allowed; see is_setting_call().
+STATE_SETTER_RE = re.compile(
+    r"(?:^|[\\/])(?:approvals|mode|swarm|repo_scan)\.py[. )]*$", re.IGNORECASE)
 STATE_SETTER_MSG = ("{script} is orchestrator-only when it SETS the approvals level, the "
-                    "workflow mode or the swarm flag - that decides what clears without "
-                    "the CEO and which procedure is in force. Ask the orchestrator to "
-                    "change it; --show (or no argument) still reads it.")
+                    "workflow mode or the swarm flag, or WRITES the pipeline config "
+                    "(repo_scan.py --write) - that decides what clears without "
+                    "the CEO, which procedure is in force and which commands the gates "
+                    "run. Ask the orchestrator to change it; --show (or no argument) "
+                    "still reads the first three, and repo_scan.py without --write "
+                    "only prints a scan.")
+REPO_SCAN_SCRIPT = "repo_scan.py"
+# argparse accepts any unambiguous prefix of a long option, and every prefix of
+# `--write` from `--w` up is unambiguous in repo_scan.py (--root, --json, --table
+# do not start with w): `--w`, `--wr`, `--write`, `--write=F` all write.
+REPO_SCAN_WRITE_PREFIX_RE = re.compile(r"^--w", re.IGNORECASE)
+# Inline code handed to an interpreter (`python -c "import repo_scan;
+# repo_scan.write(...)"`): argv walking sees one token, so it is read as text. A
+# net, not a proof - repo_scan.write() itself refuses a live config as well.
+INLINE_REPO_SCAN_WRITE_RE = re.compile(r"\brepo_scan\b[\s\S]*\bwrite\s*\(", re.IGNORECASE)
 
 # A redirect operator opens with an optional descriptor: `>`, `>>`, `2>`, `<`, and
 # the `&` forms `&>`, `>&`, `2>&1`. Alone (`>`, `2>>`, `>&`) its target is the NEXT
@@ -202,6 +218,17 @@ def script_label(name: str) -> str:
     return pretool_gate.basename_no_ext(name).rstrip(". )")
 
 
+def is_setting_call(script: str, args: list) -> bool:
+    """True when one call of a state-setter script changes state. approvals.py /
+    mode.py / swarm.py set with anything but no argument or `--show` / `show` as
+    the first argument; repo_scan.py writes only with a `--w...` option (any
+    argparse abbreviation of `--write`), and a script run from stdin cannot be
+    judged, so it counts as writing."""
+    if script == REPO_SCAN_SCRIPT:
+        return "<stdin>" in args or any(REPO_SCAN_WRITE_PREFIX_RE.match(a) for a in args)
+    return bool(args) and args[0] not in ("--show", "show")
+
+
 def piped_setter(command: str, segments: list) -> str:
     """The setter script a PIPE hands to an interpreter (`cat x/approvals.py |
     python - auto`), else ''. executed_names() already counts what the previous
@@ -236,8 +263,11 @@ def sets_pipeline_state(command: str, _depth: int = 0) -> str:
         return "approvals.py and mode.py"
     for seg in segments:
         call = state_setter_call(seg)
-        if call and call[1] and call[1][0] not in ("--show", "show"):
+        if call and is_setting_call(*call):
             return call[0]
+        if (pretool_gate.runs_interpreter(pretool_gate.exec_names_of(seg))
+                and any(INLINE_REPO_SCAN_WRITE_RE.search(tok) for tok in seg)):
+            return REPO_SCAN_SCRIPT
     piped = piped_setter(command, segments)
     if piped:
         return piped
@@ -292,7 +322,12 @@ def is_force_push(command: str, _depth: int = 0) -> bool:
 # Redirect detection is shared with the main-thread gate - single source of truth.
 redirect_write_target = pretool_gate.redirect_write_target
 
-README_RE = re.compile(r"(^|[\\/])readme[^\\/]*\.(md|rst)$", re.IGNORECASE)
+# One definition of the path questions both gates ask (task-0096): pretool_gate owns
+# them, this module re-exports them so a docs agent and the review freeze can never
+# answer the same path differently.
+README_RE = pretool_gate.README_RE
+normalize = pretool_gate.normalize
+is_root_claude_md = pretool_gate.is_root_claude_md
 
 # The whole .agentry/state/ tree is the orchestrator's: the approvals level and mode,
 # the run.db commit/push/plan approval flags, the solo trunk_push approval and the
@@ -354,28 +389,8 @@ def handle_web(profile: str, tool: str, ti: dict) -> int:
     return allow()
 
 
-def normalize(path: str) -> str:
-    """Lowercase posix spelling with `..` resolved, so `docs/../src/a.py` is judged
-    as the `src/a.py` it names and not as the `docs/` prefix it starts with."""
-    return posixpath.normpath(path.replace("\\", "/").lower())
-
-
 def is_protected_state(path: str) -> bool:
     return bool(PROTECTED_STATE_RE.search(normalize(path)))
-
-
-def is_root_claude_md(path: str) -> bool:
-    """The repository-root CLAUDE.md, resolved against the project root the way
-    pretool_gate.orch_allowed_path() resolves it. Root only: a CLAUDE.md inside an
-    application tree is not the document the technical-writer owns."""
-    p = Path(path)
-    root = pretool_gate.state.ROOT
-    if not p.is_absolute():
-        p = root / p
-    try:
-        return p.resolve().relative_to(root.resolve()).as_posix().lower() == "claude.md"
-    except (OSError, ValueError):
-        return False
 
 
 def is_docs_path(path: str) -> bool:
@@ -618,13 +633,12 @@ def handle_dev(tool: str, ti: dict, cwd: str = "") -> int:
                         f"runs the whole suite once after you finish. "
                         f"(see .claude testing rules).")
         return pretool_gate.handle_bash(command, cwd)
-    if tool in ("Edit", "Write"):
-        path = str(ti.get("file_path", ""))
+    if tool in pretool_gate.EDIT_TOOLS:
+        path, content = pretool_gate.edit_target(tool, ti)
         # handle_edit allows anything under .agentry/ as bookkeeping, which would
         # let a dev agent write the approvals level or the mode directly.
         if is_protected_state(path):
             return deny(PROTECTED_STATE_MSG.format(who="Dev agent", path=path))
-        content = str(ti.get("new_string", "") or ti.get("content", ""))
         return pretool_gate.handle_edit(path, content)
     return allow()
 
@@ -705,7 +719,7 @@ def unnarrowed_test_cmd(command: str) -> str:
 
 
 def handle_readonly(tool: str, ti: dict, cwd: str = "") -> int:
-    if tool in ("Edit", "Write"):
+    if tool in pretool_gate.EDIT_TOOLS:
         return deny("This agent is read-only - it audits and reports, it does not modify files. "
                     "Return findings to the orchestrator.")
     if tool == "Bash":
@@ -734,8 +748,8 @@ def handle_readonly(tool: str, ti: dict, cwd: str = "") -> int:
 
 
 def handle_docs(tool: str, ti: dict, cwd: str = "") -> int:
-    if tool in ("Edit", "Write"):
-        path = str(ti.get("file_path", ""))
+    if tool in pretool_gate.EDIT_TOOLS:
+        path, _ = pretool_gate.edit_target(tool, ti)
         if not is_docs_path(path):
             if is_protected_state(path):
                 return deny(PROTECTED_STATE_MSG.format(who="Docs agent", path=path))
@@ -775,6 +789,14 @@ HANDLERS = {
 
 
 def main() -> int:
+    del pretool_gate.PENDING_HUMAN[:]
+    code = evaluate()
+    if code == 2:
+        pretool_gate.emit_human()  # a dev agent's commit/push deny is pretool_gate's
+    return code
+
+
+def evaluate() -> int:
     parser = argparse.ArgumentParser(description="Per-agent PreToolUse gate")
     parser.add_argument("--profile", choices=sorted(HANDLERS), required=True)
     try:

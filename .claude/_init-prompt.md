@@ -17,6 +17,11 @@ and folder structure. Determine: primary language + version, framework,
 backend/frontend stacks, test framework, formatter, container tool, CI tool,
 default DB, auth method, main branch, and the canonical commands (test, format,
 lint, build, dev). Read `.agentry/project/stack.md` for the placeholder table.
+In a workspace with more than one git repository, apply this per repo. The
+manifest-to-stack table for that lives in `.claude/tools/setup/repo_scan.py`
+(`python .claude/tools/setup/repo_scan.py --root . --json`); it is the same
+inspection, run once per `.git` directory, and step B0 turns its result into
+`repos{}` and `lanes{}`. Do not keep a second detector.
 
 **A2. Fill `project/stack.md`.** Write every detected value in. This file is the
 source of truth for all placeholders.
@@ -81,6 +86,24 @@ time** (offer the default in brackets; accept it on a bare "yes"). Then write th
 answers into `.agentry/pipeline.json`, replacing its `{{PLACEHOLDERS}}` with the
 concrete values. Do not guess - this is the user's chance to shape autonomy.
 
+**B0. Repositories and lanes.** Run `python .claude/tools/setup/repo_scan.py
+--root .` and show the table it prints (key, path, stack, manifests) to the user
+through `AskUserQuestion` as a proposal, never as a fact: options "Looks right
+[recommended]" and "Correct it". A directory with a `.git` and no recognised
+manifest shows as stack `unknown` - ask what it is. A single-repo workspace is a
+one-row table, not an error. Whatever the user corrects (key, path, stack, lane
+name, or a row to drop) is the input: save the corrected rows as a JSON list in
+`tmp/repos.json` (a row may also carry `stages` and `lane`), then run
+`AGENTRY_MAIN_THREAD=1 python .claude/tools/setup/repo_scan.py --root . --table
+tmp/repos.json --write .agentry/pipeline.json` (main thread only; subagents are
+denied this write) (no `--table` writes the scan unchanged). It rewrites only
+`repos` and `lanes`, keeps the file's layout, reads the result back through the
+pipeline's own readers and leaves the file untouched if they drop an entry. The
+first repo gets lane `default`, every other one a lane named after its key. If
+the hook denies the write to `pipeline.json`, hand the command to the user to run
+instead. The gate commands per repo are step B2's job and land in
+`repos.<key>.stages`.
+
 **B1. Pipeline stages.** "Which execution stages, in order? [implement, test,
 review, ready, done]" - confirm or edit the list. The CEO reads the diff at the
 `ready` stage's commit checkpoint using Claude Code's built-in `/diff`, so no
@@ -92,7 +115,10 @@ from `project/stack.md`):
 - test -> test suite [`{{TEST_CMD}}`]
 - review -> lint/format check [`{{LINT_CMD}}`]
 Ask for the working directory if commands run from a subfolder (e.g. `backend/`)
--> write it as `cwd` in `pipeline.json`.
+-> write it as `cwd` in `pipeline.json`. For each repo in `repos{}` confirm the
+commands that repo runs at implement, test and review and write them into
+`repos.<key>.stages`; an empty list is an explicit pass, so a repo of YAML and
+markdown gets `[]` rather than a borrowed command.
 
 **B3. Stage owners (agent bindings).** For each stage, confirm the owning agent
 from `.claude/agents/` (defaults: implement -> `senior-backend-dev` /

@@ -73,11 +73,11 @@ CEO's instruction and the model's next tool call:
   the hooks enforce, and the agent roster the orchestrator dispatches
   against.
 
-The suite has 269 tests, in six modules under `.claude/tools`.
+The unittest suite lives in `.claude/tools/tests`, one module per concern. It
+holds 1711 tests (all passing on 2026-10-12).
 
-A fuller, component-by-component layout is meant to live in
-`project/architecture.md`; that file is still the unfilled template and is
-out of scope for this task (FR-12 names only this file).
+The component-by-component layout is in `project/architecture.md`, the stack
+and commands in `project/stack.md`.
 
 ## Domain terminology
 

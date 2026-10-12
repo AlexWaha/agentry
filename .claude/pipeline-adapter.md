@@ -8,10 +8,10 @@ Project values for the keys in `.claude/skills/swarm/SKILL.md` (adapter contract
 | `set_mode` | `python .claude/tools/pipeline/mode.py build\|plan\|talk` |
 | `set_approvals` | `python .claude/tools/pipeline/approvals.py manual\|assisted\|auto` |
 | `set_swarm` | `python .claude/tools/pipeline/swarm.py on\|off` |
-| `start_epic` | `python .claude/tools/pipeline/advance.py --task task-<epic> --type feature` (the umbrella task file must already sit in `backlog/` with non-empty acceptance criteria, and its spec must be `approved`) |
+| `start_epic` | `python .claude/tools/pipeline/advance.py --task task-<epic> --type feature` (the umbrella task file must already sit in `backlog/` with non-empty acceptance criteria, and its spec must be `approved`). A `feature` run starts at the `plan` stage, not at `implement` (see Notes) |
 | `advance` | `python .claude/tools/pipeline/advance.py --task task-<epic>` |
 | `approve_push` | `python .claude/tools/pipeline/approve.py --task task-<epic> --gate push` (only after the CEO approves in chat). In `solo` mode there is no push checkpoint: the CEO approves the commit with `--gate commit`, and publishing the trunk is the separate one-shot `approve.py --task task-<epic> --trunk-push` |
-| `reject` | `python .claude/tools/pipeline/approve.py --task task-<epic> --reject` |
+| `reject` | `python .claude/tools/pipeline/approve.py --task task-<epic> --reject` (back to `plan` while the plan is unapproved; back to `implement` from the commit checkpoint, plan approval kept) |
 | `backlog_dir` | `.agentry/tasks/backlog/` |
 | `done_dir` | `.agentry/tasks/done/` |
 | `state_dir` | `.agentry/tasks/swarm/task-<epic>/` (NOT `.agentry/state/`: the dev profile is denied every write there, so board posts and QA reports would fail silently. `agent_gate.py` allows `.agentry/tasks/`; `test_a_dev_agent_may_write_the_swarm_board` pins it) |
@@ -29,3 +29,4 @@ Project values for the keys in `.claude/skills/swarm/SKILL.md` (adapter contract
 - Dev, QA and fixer agents cannot set the dials: `agent_gate.py` denies `mode.py`, `approvals.py` and `swarm.py` with an argument other than `--show` for every profile.
 - Agent definition changes (`SendMessage` in `tools:`, `maxTurns`) load only after a session restart; set per gate profile in `.claude/tools/setup/apply_optimization.py` (`MAX_TURNS`: dev 150, readonly 100, docs 30).
 - `workflow.mode` `solo` means a swarm ends at the commit checkpoint: the CEO reads the diff (`/diff`), approves, and the local merge follows. There is no pull request and no push step to wait for.
+- The build flow starts with a plan step (`plan` then `plan-approval`, task-0045). A swarm umbrella registered as `feature` starts there: write the swarm plan to `.agentry/plans/<date>-<slug>-task-<epic>.md` (the `plan` exit gate is `artifact_gate.py --kind plan`, which needs the task id in the file name and 400 characters), run `advance.py` until it parks at `plan-approval`, and dispatch no wave-1 agent before the CEO approves (`approve.py --task task-<epic> --gate plan`). Until then `pretool_gate.py` denies every write outside `.agentry/`, agents included. `bugfix` and `techdebt` runs skip the step (`skip_for_types` in `pipeline.json`); no approvals level grants the plan.

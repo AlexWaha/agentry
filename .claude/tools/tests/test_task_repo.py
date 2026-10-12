@@ -2,13 +2,16 @@
 
   state.task_repo()          the single reader of the `repo:` field.
   repos_for_task()           a colliding task id in an unrelated repo is not this
-                             task's unmerged branch.
+                             task's unmerged branch; a declared `repo:` that names
+                             no known repo is UNKNOWN (task-0031, FR-46), never
+                             "every repo".
 """
 
 # ruff: noqa: E402  (sys.path is extended before the sibling imports resolve)
 
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 import unittest.mock
@@ -101,11 +104,107 @@ class ReposForTaskTest(unittest.TestCase):
             self.assertEqual([self.backend, self.frontend],
                              git_state.repos_for_task("task-1236"))
 
-    def test_a_value_matching_nothing_fails_open_to_every_repo(self):
-        # Fail-open: a stale or misspelled value must not make a task unclosable.
+    def test_a_value_matching_nothing_is_unknown_not_every_repo(self):
+        # Fail closed (FR-46): merge detection moves the task file to done/, so a
+        # stale or misspelled value that widened to every repo let a stranger's
+        # merge close the task.
         with self._declares("no-such-repo"):
-            self.assertEqual([self.backend, self.frontend],
-                             git_state.repos_for_task("task-1236"))
+            self.assertEqual([], git_state.repos_for_task("task-1236"))
+
+    def test_a_value_pointing_outside_the_workspace_is_unknown(self):
+        with self._declares("../elsewhere"):
+            self.assertEqual([], git_state.repos_for_task("task-1236"))
+
+
+class EmptyRepoFieldTest(unittest.TestCase):
+    """An EMPTY `repo:` keeps the behaviour from before the field existed: every
+    repo. Read through the real task-file reader, not a mock of it."""
+
+    def setUp(self):
+        self.root = tmproot.sandbox(self, "repo_empty_").resolve()
+        self.active = self.root / "active"
+        self.active.mkdir()
+        for name, value in (("ROOT", self.root), ("TASK_DIRS", {"active": self.active})):
+            p = unittest.mock.patch.object(state, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        self.backend, self.frontend = self.root / "backend", self.root / "frontend"
+        p = unittest.mock.patch.object(git_state, "repos",
+                                       return_value=[self.backend, self.frontend])
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _task(self, repo_line):
+        (self.active / "task-0500.md").write_text(
+            f"---\nid: 500\n{repo_line}\n---\n", encoding="utf-8")
+
+    def test_a_blank_repo_field_means_every_repo(self):
+        self._task("repo:")
+        self.assertEqual([self.backend, self.frontend], git_state.repos_for_task("task-0500"))
+
+    def test_a_quoted_empty_repo_field_means_every_repo(self):
+        self._task('repo: ""')
+        self.assertEqual([self.backend, self.frontend], git_state.repos_for_task("task-0500"))
+
+    def test_no_repo_field_at_all_means_every_repo(self):
+        (self.active / "task-0500.md").write_text("---\nid: 500\n---\n", encoding="utf-8")
+        self.assertEqual([self.backend, self.frontend], git_state.repos_for_task("task-0500"))
+
+    def test_a_task_file_that_does_not_exist_means_every_repo(self):
+        self.assertEqual([self.backend, self.frontend], git_state.repos_for_task("task-0999"))
+
+
+class RepoKeyResolutionTest(unittest.TestCase):
+    """With a `repos{}` object configured, a `repo:` value is a KEY of it first
+    (contract C-3), so a key that differs from its directory name resolves."""
+
+    def setUp(self):
+        self.root = tmproot.sandbox(self, "repo_keys_").resolve()
+        (self.root / ".agentry").mkdir()
+        config = self.root / ".agentry" / "pipeline.json"
+        config.write_text(json.dumps({"repos": {
+            "agentry": {"path": "src"},
+            "docs-site": {"path": "sites/docs"},
+        }}), encoding="utf-8")
+        for name, value in (("ROOT", self.root), ("PIPELINE_PATH", config)):
+            p = unittest.mock.patch.object(state, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _declares(self, value):
+        return unittest.mock.patch.object(state, "task_repo", return_value=value)
+
+    def test_a_key_resolves_to_its_entry_path(self):
+        with self._declares("agentry"):
+            self.assertEqual([self.root / "src"], git_state.repos_for_task("task-0001"))
+
+    def test_a_key_that_differs_from_its_directory_name_resolves(self):
+        with self._declares("docs-site"):
+            self.assertEqual([self.root / "sites" / "docs"],
+                             git_state.repos_for_task("task-0001"))
+
+    def test_a_key_with_a_subpath_resolves_by_its_first_segment(self):
+        with self._declares("agentry/.claude"):
+            self.assertEqual([self.root / "src"], git_state.repos_for_task("task-0001"))
+
+    def test_an_entry_path_still_resolves_like_a_key(self):
+        with self._declares("src"):
+            self.assertEqual([self.root / "src"], git_state.repos_for_task("task-0001"))
+
+    def test_a_subdirectory_of_an_entry_path_resolves_by_the_loose_match(self):
+        with self._declares("src/.claude/tools"):
+            self.assertEqual([self.root / "src"], git_state.repos_for_task("task-0001"))
+
+    def test_an_unconfigured_name_is_unknown(self):
+        with self._declares("backend"):
+            self.assertEqual([], git_state.repos_for_task("task-0001"))
+
+    def test_resolve_key_is_the_one_rule_stack_gate_uses(self):
+        import stack_gate
+        entries = git_state.repo_entries()
+        for value in ("agentry", "agentry/x", "src", "docs-site", "sites/docs", "nope", ""):
+            self.assertEqual(stack_gate.resolve_key(entries, value),
+                             git_state.resolve_key(entries, value), value)
 
 
 if __name__ == "__main__":

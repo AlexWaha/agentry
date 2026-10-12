@@ -9,7 +9,9 @@ than quoted.
 The payload is what a dispatched agent's context already holds before it reads
 anything of its own. Per spec-0001 that is: the root CLAUDE.md, .claude/CLAUDE.md
 with its @import set, the agent definition file, and all SubagentStart hook
-output. Skills are measured too - an agent's `skills:` files are preloaded the
+output from the project settings layer only (see Harness.layers_read: user,
+local, managed and plugin hooks are not read, so every total is a FLOOR and is
+printed as one). Skills are measured too - an agent's `skills:` files are preloaded the
 same way and the spec's list simply predates noticing them - but they are broken
 out on their own line so a spec-conformant subtotal is still readable.
 
@@ -62,12 +64,22 @@ LIST_KEY_RE = re.compile(r"^(skills|rules):[ \t]*(.*)$", re.MULTILINE)
 BLOCK_ITEM_RE = re.compile(r"^[ \t]+-[ \t]*(.+?)[ \t]*$")
 ENV_RE = re.compile(r"\$\{?CLAUDE_PROJECT_DIR\}?")
 
+LAYER_PROJECT = ".claude/settings.json"
+LAYERS_NOT_READ = ("user (~/.claude/settings.json)", ".claude/settings.local.json",
+                   "managed policy", "plugin-provided hooks")
+
 MEASURED = "measured"
 COMPUTED = "computed"
 
 
+def chars_to_tokens(chars: int) -> int:
+    """The one conversion. Every token figure this script prints, per row,
+    per total and in the JSON, goes through here, and the tests pin it."""
+    return chars // TOKEN_CHARS
+
+
 def tokens(text: str) -> int:
-    return len(text) // TOKEN_CHARS
+    return chars_to_tokens(len(text))
 
 
 def read(path: Path) -> str:
@@ -120,7 +132,7 @@ class Row:
 
     @property
     def tokens(self) -> int:
-        return self.chars // TOKEN_CHARS
+        return chars_to_tokens(self.chars)
 
     def as_dict(self) -> dict:
         return {"path": self.label, "chars": self.chars, "tokens": self.tokens,
@@ -141,6 +153,31 @@ class Harness:
             return json.loads(read(self.root / ".claude" / "settings.json") or "{}")
         except ValueError:
             return {}
+
+    def layers_read(self) -> list[str]:
+        """The settings layers actually read. Only the project layer is, and
+        only when the file exists.
+
+        Claude Code merges more than that: user (~/.claude/settings.json),
+        project-local (.claude/settings.local.json), managed policy, and the
+        hooks.json of every enabled plugin. Enumerating that merged set was
+        looked at and is not done here, for two reasons that should not be
+        re-derived. The user, local and managed layers are properties of the
+        machine running the measurement, not of the checkout, so folding them in
+        would make the figure differ between two people measuring the same
+        commit and break the reproducibility this script exists for. Plugin
+        hooks live under the plugin cache keyed by an installed version, with
+        enablement spread over those same layers, and Claude Code publishes no
+        resolver, so a re-implementation would be a guess that looks like a
+        measurement. The figures are therefore a floor and are labelled one.
+        """
+        return [LAYER_PROJECT] if (self.root / LAYER_PROJECT).is_file() else []
+
+    def layers_warning(self) -> str:
+        read_layers = ", ".join(self.layers_read()) or "none (no project settings file)"
+        return (f"settings layers read: {read_layers}. NOT read: {', '.join(LAYERS_NOT_READ)}. "
+                "Hooks from those layers are missing, so every figure below is a FLOOR, "
+                "not a total.")
 
     def agent_names(self) -> list[str]:
         try:
@@ -310,7 +347,7 @@ def print_breakdown(harness: Harness, agent: str, rows: list[Row], out) -> None:
         note = f"   [{row.note}]" if row.note else ""
         print(f"  {row.label:<46}{row.chars:>9}{row.tokens:>9}  {row.how}{note}", file=out)
     chars = total_chars(rows)
-    print(f"  {'TOTAL':<46}{chars:>9}{chars // TOKEN_CHARS:>9}", file=out)
+    print(f"  {'FLOOR (sum of rows above)':<46}{chars:>9}{chars_to_tokens(chars):>9}", file=out)
     print("  dispatch prompt                               "
           "  unknown   unknown  not on disk, written per dispatch", file=out)
 
@@ -343,17 +380,21 @@ def main(argv=None) -> int:
             "root": str(harness.root),
             "token_chars": TOKEN_CHARS,
             "warning": warning,
+            "is_floor": True,
+            "layers_read": harness.layers_read(),
+            "layers_not_read": list(LAYERS_NOT_READ),
             "agents": {
                 name: {
                     "profile": harness.profile(name),
                     "paths": [r.as_dict() for r in rows],
                     "total_chars": total_chars(rows),
-                    "total_tokens": total_chars(rows) // TOKEN_CHARS,
+                    "total_tokens": chars_to_tokens(total_chars(rows)),
                 } for name, rows in measured.items()},
         }, indent=2))
         return 0
 
     print(f"dispatch payload, root {harness.root}, TOKEN_CHARS = {TOKEN_CHARS}")
+    print(harness.layers_warning())
     if warning:
         print(warning)
 
@@ -372,10 +413,10 @@ def main(argv=None) -> int:
                   f"largest is {worst} ===")
             print_breakdown(harness, worst, measured[worst], sys.stdout)
 
-    print(f"\n{'agent':<30}{'profile':<10}{'chars':>9}{'tokens':>9}")
+    print(f"\n{'agent':<30}{'profile':<10}{'chars (floor)':>14}{'tokens (floor)':>16}")
     for name in sorted(names, key=lambda n: -total_chars(measured[n])):
         chars = total_chars(measured[name])
-        print(f"{name:<30}{harness.profile(name):<10}{chars:>9}{chars // TOKEN_CHARS:>9}")
+        print(f"{name:<30}{harness.profile(name):<10}{chars:>14}{chars_to_tokens(chars):>16}")
     return 0
 
 

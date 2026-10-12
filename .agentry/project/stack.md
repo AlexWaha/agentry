@@ -1,92 +1,151 @@
 # Stack
 
-> **[PROJECT-SPECIFIC - REPLACE ME]**
-> Concrete stack, commands, and tooling for the current project. Replace every
-> value below when adapting the template to a new project. The example rows show
-> the expected shape - swap them for your real stack.
+**Date:** 2026-10-09
+**Author:** technical-writer (task-0052, swarm task-0118)
+**Status:** Draft
+**Version:** 2.0
+
+Agentry is a Python harness for Claude Code. It has no application server, no
+database server, no frontend and no HTTP API. This file records the stack and
+the commands every rule defers to. Gate commands are copied from
+`.agentry/pipeline.json`; if the two ever differ, `pipeline.json` is what the
+gates run and this file is the one that is wrong.
+
+## Table of contents
+
+- [Tech stack](#tech-stack)
+- [Token values](#token-values)
+- [Commands](#commands)
+- [Environment variables](#environment-variables)
+- [API routes](#api-routes)
+- [Project structure](#project-structure)
+- [Version history](#version-history)
 
 ## Tech stack
 
-> Replace with the actual layers your project uses.
-
 | Layer | Technology | Status |
 |-------|-----------|--------|
-| Backend | `{{BACKEND_STACK}}` | ACTIVE |
-| Database | `{{DEFAULT_DB}}` | ACTIVE |
-| Cache/Queue | [PROJECT-SPECIFIC - REPLACE ME] | ACTIVE |
-| Auth | `{{AUTH_METHOD}}` | ACTIVE |
-| Testing | `{{TEST_FRAMEWORK}}` | ACTIVE |
-| Code Style | `{{FORMATTER}}` | ACTIVE |
-| Frontend Web | [PROJECT-SPECIFIC - REPLACE ME] | ACTIVE |
-| Frontend Mobile | [PROJECT-SPECIFIC - REPLACE ME] | PLANNED |
-| Infrastructure | `{{CONTAINER_TOOL}}`, CI/CD (`{{CI_TOOL}}`) | ACTIVE |
+| Language | Python 3.12 or newer (the scripts parse on 3.9; the README sets 3.12 as the supported floor) | ACTIVE |
+| Runtime dependencies | None. Every script under `.claude/tools/` uses the standard library only (`json`, `sqlite3`, `subprocess`, `argparse`) | ACTIVE |
+| Framework | None | n/a |
+| State store | SQLite via stdlib `sqlite3`: `.agentry/state/run.db` (pipeline runs, one extra file per lane) | ACTIVE |
+| Memory store | SQLite with an FTS5 index: `.agentry/memory/memory.db` | ACTIVE |
+| Host | Claude Code (hooks: PreToolUse, PostToolUse, SessionStart, SubagentStart, SubagentStop, Stop; measured against build 2.1.295) | ACTIVE |
+| Cache or queue | None | n/a |
+| Auth | None. Authority is the recorded approval in `run.db`, not a user identity | n/a |
+| Testing | `unittest` (stdlib), suite in `.claude/tools/tests/` | ACTIVE |
+| Lint | `ruff` (dev dependency only, version recorded in `pyproject.toml` as 0.16.1), rule set in `pyproject.toml` | ACTIVE |
+| Formatter | None configured. `pyproject.toml` has no `[tool.ruff.format]` section and no gate runs a formatter | n/a |
+| Frontend | None | n/a |
+| Containers and CI | None. There is no `Dockerfile`, compose file or `.github/` directory | n/a |
 
-## Placeholder values for CLAUDE.md
+## Token values
 
-Fill in every row with the detected/decided value for this project, then copy
-these into the `{{...}}` placeholders across `.claude/` (including
-`.claude/CLAUDE.md`). This table is the canonical source of truth for all tokens.
+Rules and agent files refer to these values by token name (written in double
+braces in those files). The token set is copied from the onboarding template;
+this table is where each one resolves for Agentry.
 
-| Placeholder | Value |
-|-------------|-------|
-| `{{PROJECT_NAME}}` | [PROJECT-SPECIFIC - REPLACE ME] |
-| `{{PRODUCT_DESCRIPTION}}` | [PROJECT-SPECIFIC - REPLACE ME] |
-| `{{STACK}}` | [PROJECT-SPECIFIC - REPLACE ME] (e.g. Laravel 12 + React 19) |
-| `{{LANG}}` | [PROJECT-SPECIFIC - REPLACE ME] (e.g. PHP 8.4 / TypeScript) |
-| `{{FRAMEWORK}}` | [PROJECT-SPECIFIC - REPLACE ME] (e.g. Laravel 12) |
-| `{{TEST_CMD}}` | [PROJECT-SPECIFIC - REPLACE ME] (e.g. `composer test`, `npm test`, `pytest`) |
-| `{{FORMAT_CMD}}` | [PROJECT-SPECIFIC - REPLACE ME] (e.g. `composer format`, `npm run format`) |
-| `{{LINT_CMD}}` | [PROJECT-SPECIFIC - REPLACE ME] (e.g. `composer format-lint`, `npm run lint`) |
-| `{{BUILD_CMD}}` | [PROJECT-SPECIFIC - REPLACE ME] (e.g. `npm run build`) |
-| `{{DEV_CMD}}` | [PROJECT-SPECIFIC - REPLACE ME] (e.g. `npm run dev`, `php artisan serve`) |
-| `{{MAIN_BRANCH}}` | [PROJECT-SPECIFIC - REPLACE ME] (e.g. `main`) |
-| `{{DEFAULT_DB}}` | [PROJECT-SPECIFIC - REPLACE ME] (e.g. PostgreSQL 16, MySQL 8) |
-| `{{AUTH_METHOD}}` | [PROJECT-SPECIFIC - REPLACE ME] (e.g. Laravel Sanctum, JWT, OAuth2) |
-| `{{BACKEND_STACK}}` | [PROJECT-SPECIFIC - REPLACE ME] |
-| `{{TEST_FRAMEWORK}}` | [PROJECT-SPECIFIC - REPLACE ME] (e.g. Pest 4, Jest, pytest) |
-| `{{FORMATTER}}` | [PROJECT-SPECIFIC - REPLACE ME] (e.g. Laravel Pint, Prettier, Black) |
-| `{{CONTAINER_TOOL}}` | [PROJECT-SPECIFIC - REPLACE ME] (e.g. Docker Compose) |
-| `{{CI_TOOL}}` | [PROJECT-SPECIFIC - REPLACE ME] (e.g. GitHub Actions) |
+| Token | Value |
+|-------|-------|
+| `PROJECT_NAME` | Agentry |
+| `PRODUCT_DESCRIPTION` | A deterministic orchestration harness for Claude Code: a gated stage machine whose transitions are recorded by hook scripts, not by the model |
+| `STACK` | Python 3.12+, standard library only, SQLite |
+| `LANG` | Python 3.12+ |
+| `FRAMEWORK` | none |
+| `BACKEND_STACK` | Python scripts run as Claude Code hooks and CLIs |
+| `DEFAULT_DB` | SQLite (`run.db`, `memory.db`) |
+| `AUTH_METHOD` | none |
+| `TEST_FRAMEWORK` | unittest |
+| `FORMATTER` | none configured (ruff is used as a linter only) |
+| `CONTAINER_TOOL` | none |
+| `CI_TOOL` | none |
+| `MAIN_BRANCH` | `main` |
+| `BUILD_CMD` | `python -m compileall -q .claude/tools` |
+| `TEST_CMD` | `python -m unittest discover -s .claude/tools` |
+| `LINT_CMD` | `ruff check .claude/tools` |
+| `FORMAT_CMD` | none (see Commands) |
+| `DEV_CMD` | none (see Commands) |
 
 ## Commands
 
-> Replace these example rows with the real commands for this project. Keep the
-> canonical four (test/format/lint/build) plus any project-specific scripts.
+Run every command from the repository root, the directory that holds `.claude/`
+and `.agentry/`. In the Agentry workspace that is `src/`; the workspace-level
+`pipeline.json` sets `"cwd": "src"` and the `agentry` repo entry has `path: "src"`.
 
-| Command | Description |
-|---|---|
-| `{{TEST_CMD}}` | Run the test suite |
-| `{{FORMAT_CMD}}` | Auto-fix code style |
-| `{{LINT_CMD}}` | Check code style without modifying files |
-| `{{BUILD_CMD}}` | Build the project |
-| `{{DEV_CMD}}` | Start the dev server |
-| [PROJECT-SPECIFIC - REPLACE ME] | Any project-specific CLI command (data import, codegen, etc.) |
+"Exit status" is the real status of the command on the tree this file
+describes, measured on 2026-10-12. "not run" marks a command that needs a
+task or changes state, so it was deliberately left unexecuted.
 
-## API routes
-
-> [PROJECT-SPECIFIC - REPLACE ME] - list the real endpoints once they exist.
-
-| Method | URI | Auth | Description |
+| Command | What it does | Source | Exit status |
 |---|---|---|---|
-| GET | `/api/health` | No | Health check |
-| GET | `/api/v1/{{RESOURCE}}` | `{{AUTH_METHOD}}` | [PROJECT-SPECIFIC - REPLACE ME] |
+| `python -m compileall -q .claude/tools` | Build: byte-compiles every script, fails on a syntax error. The `implement` exit gate | `pipelines.build` stage `implement`, `repos.agentry.stages.implement` | 0 |
+| `python -m unittest discover -s .claude/tools && python .claude/tools/pipeline/ui_evidence.py --task {task}` | Test: full suite, then the UI-evidence check for the task. The `test` exit gate; `{task}` is filled in by the gate | `pipelines.build` stage `test` | 0 (1711 tests OK, 2026-10-12) |
+| `python -m unittest discover -s .claude/tools` | The suite alone, for the orchestrator or CI. Dev agents are barred from running it (`gates.dev_forbidden_commands`); they run named modules from `.claude/tools/tests`, for example `python -m unittest test_lanes test_lane_routing`, or let the `test` exit gate run the whole suite | derived from the row above | 0 (1711 OK) |
+| `ruff check .claude/tools` | Lint. The `review` exit gate | `pipelines.build` stage `review`, `repos.agentry.stages.review` | 0 |
+| `ruff check --fix .claude/tools` | Applies the safe lint fixes. This is the nearest thing to a formatter; no gate runs it | `pyproject.toml` rule set | not run (mutating) |
+| `python .claude/tools/pipeline/advance.py --task task-XXXX --type <type>` | Registers a task and advances it one stage by running the real exit gate | `rules/orchestration.md` | not run (needs a task) |
+| `python .claude/tools/pipeline/state.py --show` | Dumps every run in `run.db` as JSON | `state.py` docstring | 0 |
+| `python .claude/tools/pipeline/approve.py --task task-XXXX --gate commit` | Records a checkpoint approval. Orchestrator only, and only after the CEO approves | `rules/orchestration.md` | not run (changes state) |
+| `python .claude/tools/pipeline/stack_gate.py --task task-XXXX --stage implement\|test\|review [--repo KEY]` | Runs the per-repo gate commands from `repos{}` in `pipeline.json` | `stack_gate.py` | 0 (`--stage review --repo agentry`) |
+| `python .claude/tools/pipeline/supervisor.py --stop` | Stops the detached supervisor daemon | `pipeline.json` `supervisor._comment` | not run (changes state) |
+| `python .claude/tools/memory/memory.py --query "<topic>"` | Queries the memory store (`--record`, `--export`, `--stats` also exist) | `rules/self-learning.md` | 0 |
+| `python .claude/tools/setup/repo_scan.py --root DIR [--json]` | Lists the repos found under a root, for onboarding | `repo_scan.py` | 0 |
 
-## Environment Variables
+Gate agreement: the build, test and lint commands in the table match
+`.agentry/pipeline.json` character for character, in both the workspace copy
+and `src/.agentry/pipeline.json`. One difference is deliberate and is reported
+here rather than resolved: `repos.agentry.stages.test` is an empty list (an
+explicit pass for `stack_gate.py`), while the `test` stage's `exit_gate` runs
+the full suite. The `pipeline.json` `_comment` on `repos` gives the reason:
+the suite is the pipeline's own `test` exit gate and agents may not run it
+directly.
 
-> [PROJECT-SPECIFIC - REPLACE ME] - list the real env vars this project needs.
-> Keep secrets out of git; document the variable name and value shape only.
+Commands that do not exist here: a formatter command, a dev server and a
+production build. `FORMAT_CMD` and `DEV_CMD` therefore resolve to "none", and a
+rule that says "run the formatter after a code change" means "run
+`ruff check .claude/tools` and fix what it reports".
+
+## Environment variables
 
 | Variable | Description | Default |
 |---|---|---|
-| [PROJECT-SPECIFIC - REPLACE ME] | Purpose of the variable | - |
+| `PIPELINE_LANE` | Names the lane (an independent conveyor) of a session. A lane gets its own `run.<lane>.db`, mode and approvals files. Letters, digits, underscore and hyphen, 32 characters at most; an invalid value warns on stderr and falls back to the default lane. Read in `pipeline/state.py` | unset (the `default` lane) |
+| `AGENTRY_UNATTENDED` | Set by the supervisor on a session it relaunches. While set, `pretool_gate.py` refuses `git merge`, `git pull`, `git push` and `approve.py` | unset |
+| `AGENTRY_NO_CONSOLE_INJECT` | Any non-empty value stops `diff_checkpoint.py` from typing `/diff` into the console. The test suite sets it | unset |
+| `CLAUDE_PROJECT_DIR` | Set by Claude Code for hook commands; the wired hook commands in `.claude/settings.json` and `setup/apply_optimization.py` resolve scripts against it | set by Claude Code |
+
+No variable holds a secret. The harness reads no API key.
+
+## API routes
+
+None. Agentry exposes no HTTP, RPC or socket interface. Its interfaces are
+command-line scripts under `.claude/tools/` and the Claude Code hook protocol
+(JSON on stdin, exit status and JSON on stdout). See `api-conventions.md` for
+why that file is a stub.
 
 ## Project structure
 
-> [PROJECT-SPECIFIC - REPLACE ME] - sketch the real top-level layout. Example:
-
 ```
-src/                # or app/, Modules/, packages/ - whatever this project uses
-  ...               # [PROJECT-SPECIFIC - REPLACE ME]
+src/                         # the git repository (the workspace root holds a second copy of the harness)
+├── .claude/                 # the harness: rules, agents, skills, tools, settings.json
+│   └── tools/               # all executable code, Python stdlib only
+│       ├── pipeline/        # stage machine, gates, state, supervisor
+│       ├── hooks/           # session, rule-injection and notice hooks
+│       ├── memory/          # memory store CLI and injection
+│       ├── setup/           # onboarding and fleet scripts
+│       ├── tests/           # unittest suite
+│       └── payload.py       # dispatch-payload measurement
+├── .agentry/                # project work product: pipeline.json, tasks, specs, plans, project overlay
+├── docs/                    # memory notes and technical documents
+├── pyproject.toml           # ruff configuration
+└── README.md
 ```
 
-Detailed file/module layout lives in `project/architecture.md`.
+The module-by-module layout, the dependency rules and the data flow are in
+`architecture.md`.
+
+## Version history
+
+| Version | Date | Change |
+|---|---|---|
+| 2.0 | 2026-10-09 | Replaced the onboarding template with Agentry's real stack, commands and variables (task-0052). |
