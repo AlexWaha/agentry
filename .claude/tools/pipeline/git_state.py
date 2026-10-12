@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import state
@@ -46,13 +47,80 @@ def _git(repo: Path, *args: str, timeout: int = GIT_TIMEOUT) -> tuple[int, str]:
         return 1, ""
 
 
+def _warn(message: str) -> None:
+    print(f"git_state: repos{{}} {message}", file=sys.stderr)
+
+
+def _valid_entry(key: str, raw: object) -> dict | None:
+    """One repos{} entry in contract C-3 shape, normalised, or None with the
+    reason on stderr. A bad entry is dropped on its own, so one typo does not
+    take the other repos down with it."""
+    if not isinstance(raw, dict):
+        _warn(f"entry '{key}' is not an object")
+        return None
+    path = raw.get("path")
+    if not isinstance(path, str) or not path.strip():
+        _warn(f"entry '{key}' needs a non-empty string path")
+        return None
+    # Workspace-relative and inside the workspace: a rooted or drive-qualified
+    # value would make `ROOT / path` ignore ROOT, and `..` leaves it.
+    if Path(path).anchor or ".." in Path(path).parts:
+        _warn(f"entry '{key}' path '{path}' must stay inside the workspace")
+        return None
+    stack = raw.get("stack", "")
+    stages = raw.get("stages", {})
+    if not isinstance(stack, str) or not isinstance(stages, dict):
+        _warn(f"entry '{key}' needs a string stack and an object stages")
+        return None
+    for stage, cmds in stages.items():
+        if not isinstance(cmds, list) or not all(isinstance(c, str) for c in cmds):
+            _warn(f"entry '{key}' stage '{stage}' must be a list of command strings")
+            return None
+    return {"path": path, "stack": stack, "stages": {s: list(c) for s, c in stages.items()}}
+
+
+def repo_entries() -> dict[str, dict]:
+    """The `repos{}` object of pipeline.json (contract C-3), validated.
+
+    Maps repo key -> {"path", "stack", "stages"}; `stages` maps a stage name to
+    its command list, and a stage that is absent or empty means "no gate here".
+    Fails open to {}: an absent key and the legacy list form are silent (both
+    are supported ways to have no object config), a malformed object or entry
+    is reported on stderr. Keys starting with `_` are comments, as everywhere
+    else in pipeline.json."""
+    configured = state.load_pipeline().get("repos")
+    if configured is None or isinstance(configured, list):
+        return {}
+    if not isinstance(configured, dict):
+        _warn("must be an object")
+        return {}
+    out: dict[str, dict] = {}
+    for key, raw in configured.items():
+        if key.startswith("_"):
+            continue
+        entry = _valid_entry(key, raw)
+        if entry:
+            out[key] = entry
+    return out
+
+
+def repo_path(key: str) -> Path | None:
+    """The working directory of a configured repo, or None for an unknown key."""
+    entry = repo_entries().get(key)
+    return state.ROOT / entry["path"] if entry else None
+
+
 def repos() -> list[Path]:
-    """Every git repo the pipeline works in. A workspace root that is not itself
-    a repo holds them as subdirectories, so look one level down too."""
-    pipeline = state.load_pipeline()
-    configured = pipeline.get("repos")
-    if configured:
-        return [state.ROOT / str(r) for r in configured]
+    """Every git repo the pipeline works in: the `repos{}` entries when the
+    config has them, the legacy list of workspace-relative paths otherwise.
+    Without either, auto-detect: a workspace root that is not itself a repo
+    holds them as subdirectories, so look one level down too."""
+    entries = repo_entries()
+    if entries:
+        return [state.ROOT / e["path"] for e in entries.values()]
+    legacy = state.load_pipeline().get("repos")
+    if isinstance(legacy, list) and legacy:
+        return [state.ROOT / str(r) for r in legacy]
 
     found: list[Path] = []
     if (state.ROOT / ".git").exists():
@@ -243,6 +311,49 @@ def base_is_current(repo: Path, ref: str = "HEAD") -> bool | None:
     return _is_ancestor(repo, trunk(repo), ref)
 
 
+def resolve_key(entries: dict[str, dict], repo: str) -> str:
+    """The repos{} key for a `repo:` value, or "". Loose on purpose, because task
+    files carry both `backend` and `backend/src` for the same repo: the exact
+    key wins, then the first path segment, then an entry whose path is the
+    value."""
+    value = repo.replace("\\", "/").strip("/")
+    if not value:
+        return ""
+    for candidate in (value, value.split("/")[0]):
+        if candidate in entries:
+            return candidate
+    for key, entry in entries.items():
+        if entry["path"].replace("\\", "/").strip("/") == value:
+            return key
+    return ""
+
+
+def repos_named(declared: str) -> list[Path]:
+    """The repos a non-empty `repo:` value names: a repos{} entry first (by key,
+    then by path, see resolve_key), then a loose path match against the known
+    repos, because a single-repo workspace names a repo that is the root itself
+    and a value may point at a directory inside a repo. [] when it matches
+    nothing - an unresolved name is UNKNOWN, never "every repo"."""
+    parts = [p for p in declared.replace("\\", "/").split("/") if p]
+    if ".." in parts:
+        return []  # leaves the workspace; resolve_key would match `backend/..` as `backend`
+    key = resolve_key(repo_entries(), declared)
+    if key:
+        return [repo_path(key)]
+    # The loose path match below widens: `.` resolves to the workspace root, an
+    # ancestor of every repo, so the ancestor test would name them all. Only a
+    # repos{} entry may name it; here it fails closed.
+    if all(p == "." for p in parts):
+        return []
+    target = (state.ROOT / declared).resolve()
+    out = []
+    for repo in repos():
+        here = repo.resolve()
+        if here == target or target in here.parents or here in target.parents:
+            out.append(repo)
+    return out
+
+
 def repos_for_task(task: str) -> list[Path]:
     """The repos a task may legitimately live in.
 
@@ -253,19 +364,40 @@ def repos_for_task(task: str) -> list[Path]:
     "not merged yet" and parked the backend task forever. A task declaring
     `repo:` is only ever asked about that repo.
 
-    The declared value is matched loosely on purpose: task files carry both
-    `backend` and `backend/src` for the same repo, and a single-repo workspace
-    names a repo that is the root itself. Fails open - an unknown or absent
-    value, or a value matching nothing, means every repo, which is the
-    behaviour before this existed."""
+    Two cases, and they fail in opposite directions on purpose:
+
+      - No `repo:` (absent or empty): every repo, the behaviour before the
+        field existed.
+      - A `repo:` that names no known repo: NOTHING. This is the one place
+        where failing open is wrong. Merge detection decides when a task file
+        moves to done/, so a misspelled or stale value that widened to every
+        repo let a stranger's `[task-id]` commit close the task: data loss, not
+        a blocked action. An empty list is UNKNOWN, and every caller already
+        treats it as "cannot tell" and parks."""
     declared = state.task_repo(task)
     if not declared:
         return repos()
+    return repos_named(declared)
 
-    target = (state.ROOT / declared).resolve()
-    scoped = [r for r in repos()
-              if r == target or target in r.parents or r in target.parents]
-    return scoped or repos()
+
+def task_tagged_in_main(task: str) -> bool:
+    """True only when EVERY repo that knows the task carries a commit on its
+    trunk naming it (task_in_main), and at least one does.
+
+    The one question the Stop hook's reconciler may act on. task_report() also
+    reads a `branch:` the task file declares and any local branch whose name
+    holds the id, and both are writable by the agent being judged: a forged
+    carrier or a branch cut at an old merged tip reads as merged. A commit on
+    main is not. Branches still count as AGAINST: a repo holding an unmerged
+    branch for the task blocks the answer, which only ever fails closed.
+    Unresolvable `repo:` -> no repos -> False."""
+    known = []
+    for repo in repos_for_task(task):
+        if task_in_main(repo, task) is True:
+            known.append(True)
+        elif branch_for(repo, task):
+            known.append(False)
+    return bool(known) and all(known)
 
 
 def task_report(task: str, do_fetch: bool = True, branch: str = "") -> list[dict]:

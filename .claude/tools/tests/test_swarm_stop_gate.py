@@ -271,8 +271,8 @@ class UmbrellaDoneMovesSubtasksTest(unittest.TestCase):
         self.write("backlog", "task-0028", f"id: 28\nepic: {EPIC}")
         self.write("backlog", "task-0030", f"id: 30\nepic: {EPIC}")
         with unittest.mock.patch.object(stop_gate, "ACTIVE_DIR", self.dirs["active"]), \
-                unittest.mock.patch.object(stop_gate, "_main_commit_subjects",
-                                           return_value="feat: swarm [task-0100]"), \
+                unittest.mock.patch.object(
+                    stop_gate.git_state, "task_tagged_in_main", return_value=True), \
                 unittest.mock.patch.object(state, "all_runs", return_value=[]), \
                 unittest.mock.patch.object(state, "set_fields"):
             moved, _ = stop_gate.reconcile_status_drift(object())

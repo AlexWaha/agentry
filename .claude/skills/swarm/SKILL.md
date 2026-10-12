@@ -31,7 +31,7 @@ A table with these keys, each a concrete command or path in this project:
 | `set_approvals` | set `manual` / `assisted` / `auto` |
 | `set_swarm` | set swarm `on` / `off`, persisted like mode and approvals |
 | `start_epic` | register the umbrella task `task-<epic>` |
-| `advance`, `approve_push`, `reject` | stage transition, CEO push approval, back to implement |
+| `advance`, `approve_push`, `reject` | stage transition, CEO push approval, back to implement (stays at plan before the plan approval) |
 | `backlog_dir`, `done_dir`, `state_dir` | subtask files and swarm state (`state_dir` must be writable by dev and QA agents under the hooks) |
 | `branch` | epic branch pattern |
 | `suite` | the test-stage exit gate (full suite), run once by the orchestrator through `advance`, with the green reference count; agents run narrowed runs only |
@@ -45,7 +45,7 @@ A table with these keys, each a concrete command or path in this project:
 ## Steps
 
 1. **Pre-flight.** Plan, spec (explicit API contracts: endpoints, payloads, class and route names) and subtask files approved; backend and frontend never share a subtask. Main-branch log and `done_dir` show nothing already shipped.
-2. **Branch + umbrella task.** One branch per epic from fresh main, `start_epic` once. Subtask files stay in `backlog_dir` as the work list. The umbrella task file carries frontmatter `umbrella: true`, `epic: epic-XXXX` and `subtasks: [task-A, task-B]`; the Stop hook and `advance.py` recognise the umbrella by those keys.
+2. **Branch + umbrella task.** One branch per epic from fresh main, `start_epic` once. Subtask files stay in `backlog_dir` as the work list. The umbrella task file carries frontmatter `umbrella: true`, `epic: epic-XXXX` and `subtasks: [task-A, task-B]`; the Stop hook and `advance.py` recognise the umbrella by those keys. Registered as `feature`, the umbrella starts at `plan`: the plan goes to `.agentry/plans/`, and the orchestrator must get the CEO's plan approval (`approve.py --gate plan`, then `advance`) BEFORE launching any wave, because writes outside `.agentry/` are denied to the branch until it is recorded.
 3. **Board before launch.** `<state_dir>/board.md` from `references/templates.md`. Ownership table: every shared file (route files, observers, config, translations, env example, shared UI components, build and typecheck configs) has exactly one owner subtask. Then one append-only `## <subtask>` section per agent. Fill the dev template into `<state_dir>/dev-prompt.txt`.
 4. **Waves.** Wave 1: hard prerequisites (schema, models) plus everything independent (frontend codes against the spec contract). Wave 2: the rest, as soon as the prerequisites report. A whole wave goes out in ONE message, every agent in the background. Append `<subtask> <agent-id>` to `<state_dir>/agents.txt`.
 5. **Supervise.** Agents `SendMessage` to `main` with contract changes, blockers and spec gaps. Decide, write the decision on the board, relay by agent id to every affected agent; never agent to agent. Accepted deviations, items for QA, deploy actions and cleanup: one line each in `<state_dir>/qa-notes.md`.

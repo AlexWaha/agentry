@@ -63,19 +63,16 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import sys
 import traceback
 
 import approvals
 import busy
+import git_state
 import mode
 import pretool_gate
 import state
 import swarm
-
-_SKIP_DIRS = {".git", "node_modules", "vendor", ".claude", "storage",
-              "dist", "build", "data", "logs"}
 
 DEPENDS_RE = re.compile(r"^depends_on:\s*\[(.*?)\]", re.MULTILINE)
 TASK_ID_RE = re.compile(r"(task-\d+)")
@@ -89,6 +86,9 @@ SUPERSEDED_RE = re.compile(r"^superseded_by:[ \t]*(task-\d+)", re.MULTILINE)
 # unattended run never settles. The negative lookahead is what keeps the blank
 # `blocked_on:` the template ships on every task from meaning "blocked".
 BLOCKED_RE = re.compile(r"^blocked_on:[ \t]*(?!\s*$)\S", re.MULTILINE)
+# The `repo:` a task is bound to, read the way state.task_repo() reads it: the
+# rest of the line, quotes stripped. Empty means the default lane (FR-45).
+REPO_RE = re.compile(r"^repo:[ \t]*(.*?)[ \t]*$", re.MULTILINE)
 # An umbrella task (skills/swarm/SKILL.md) is one task file carrying
 # `umbrella: true` and the `epic:` whose subtasks the swarm runs together.
 EPIC_RE = re.compile(r"^epic:[ \t]*(epic-[\w-]+)", re.MULTILINE)
@@ -365,7 +365,7 @@ def park_looping_run(reason: str) -> str | None:
             return None
         task = m.group(1)
         r = next((x for x in _CTX["runs"] if x["task"] == task), None)
-        if r is None or r["stage"] == "done":
+        if r is None or r["stage"] == "done" or state.is_paused(r):
             return None
         state.set_fields(_CTX["conn"], task, stage_status=state.ST_BLOCKED)
         # Forget the count now the park has replaced the loop. Without this, a
@@ -460,7 +460,7 @@ def frontmatter(text: str) -> str:
 
 
 def read_backlog() -> list[dict]:
-    """Queued task files: [{id, deps}]. Empty on any error.
+    """Queued task files: [{id, deps, epic, repo, umbrella}]. Empty on any error.
 
     The queue is a folder, not a field. A file in backlog/ is waiting to be
     picked; there is no `status:` to read, and therefore nothing that can
@@ -469,10 +469,29 @@ def read_backlog() -> list[dict]:
     Two frontmatter fields do take a task OUT of the ready set without making it
     done: `superseded_by:` (the work was folded into another task) and a
     non-empty `blocked_on:` (waiting on a human or an outside party). Both mean
-    skip, never finish."""
+    skip, never finish.
+
+    LANES (FR-45). With `lanes{}` configured, a lane is offered only the tasks
+    bound to its repo, so two lanes sharing one backlog cannot both take the
+    same task: a task whose `repo:` equals the lane's repo is offered, one with
+    an empty `repo:` is offered to the lane named `default`, anything else
+    belongs to another lane. A lane `lanes{}` does not declare is offered
+    nothing. A `repo:` that is not a key of `repos{}` is offered to NO lane and
+    comes back flagged `unknown_repo`, because dropping it here would be the
+    silent fall-through; decide() raises it through unknown_repo_block(). An
+    absent or unreadable `lanes{}` offers the whole backlog and flags nothing
+    (NFR-4), which is also the behaviour before this existed."""
     out: list[dict] = []
     if not BACKLOG_DIR.is_dir():
         return out
+    routes = state.lanes()
+    lane = state.lane_name()
+    lane_repo = routes.get(lane)
+    if routes and lane_repo is None:
+        print(f"lane {lane!r} is not declared in pipeline.json lanes{{}}; "
+              f"offering it no backlog task", file=sys.stderr)
+        return out
+    entries = git_state.repo_entries()
     for path in sorted(BACKLOG_DIR.glob("task-*.md")):
         m = TASK_ID_RE.search(path.name)
         if not m:
@@ -486,9 +505,26 @@ def read_backlog() -> list[dict]:
         deps_raw = DEPENDS_RE.search(text)
         deps = [d.strip() for d in (deps_raw.group(1).split(",") if deps_raw else []) if d.strip()]
         epic = EPIC_RE.search(text)
-        out.append({"id": m.group(1), "deps": deps,
-                    "epic": epic.group(1) if epic else "",
-                    "umbrella": bool(UMBRELLA_RE.search(text))})
+        repo_raw = REPO_RE.search(text)
+        repo = repo_raw.group(1).strip().strip("'\"") if repo_raw else ""
+        entry = {"id": m.group(1), "deps": deps,
+                 "epic": epic.group(1) if epic else "", "repo": repo,
+                 "umbrella": bool(UMBRELLA_RE.search(text))}
+        if routes:
+            if not repo:
+                offered = lane == state.DEFAULT_LANE
+            elif entries:
+                key = git_state.resolve_key(entries, repo)
+                if not key:
+                    entry["unknown_repo"] = True
+                    offered = True  # returned flagged so decide() can name it
+                else:
+                    offered = key == lane_repo
+            else:
+                offered = repo == lane_repo
+            if not offered:
+                continue
+        out.append(entry)
     return out
 
 
@@ -759,7 +795,16 @@ def charge(conn, r: dict, ceiling: int) -> bool:
     return True
 
 
-def bounded_block(key: str, subject: str, reason: str) -> int:
+# The ways out of a spent bound, worded for the model and for the human. Debt is
+# the default; a caller whose demand is not documentation passes its own pair.
+DEBT_OPTIONS = (
+    ("pay it, waive it (handoff.py --waive / update.py --stamp --none), "
+     "or change the baseline in pipeline.json"),
+    "pay it, waive it, or change the baseline in pipeline.json")
+
+
+def bounded_block(key: str, subject: str, reason: str,
+                  options: tuple[str, str] = DEBT_OPTIONS) -> int:
     """Block with `reason`, but not forever.
 
     The run-less counterpart of charge(): same contract, different counter,
@@ -777,15 +822,35 @@ def bounded_block(key: str, subject: str, reason: str) -> int:
         return block(
             f"{subject} has survived {n - 1} stops and is not being cleared. Stop "
             f"re-attempting it and raise it with the CEO now (AskUserQuestion): the "
-            f"situation, the options - pay it, waive it (handoff.py --waive / update.py "
-            f"--stamp --none), or change the baseline in pipeline.json - and your "
+            f"situation, the options - {options[0]} - and your "
             f"recommendation. This hook will not raise it again, so if you drop it now "
             f"nothing else will catch it. The instruction that is not working: {reason}",
             f"{subject} has survived {n - 1} stops and is not being cleared. Decision "
-            f"owed by you: pay it, waive it, or change the baseline in pipeline.json.",
+            f"owed by you: {options[1]}.",
             "blocked")
     return block(reason, f"{subject}. The agent has been told to clear it; nothing is "
                          f"owed by you unless it keeps failing.")
+
+
+def unknown_repo_block(t: dict) -> int:
+    """Name a backlog task whose `repo:` is no key of `repos{}` (FR-45).
+
+    read_backlog() offers such a task to no lane, so without this it would sit
+    in backlog/ for ever and nothing would say why. It has no run row to
+    charge(), so it spends the run-less counter, bounded_block(), keyed by the
+    task: that is the FR-37 invariant (no blocking branch bypasses a counter)
+    kept for a demand with nothing to park. It lives in a helper so the block
+    sites counted in decide() stay what test_conveyor_gaps pins."""
+    keys = ", ".join(sorted(git_state.repo_entries())) or "none"
+    fix = "fix the task's repo:, or add the repo to repos{} in pipeline.json"
+    return bounded_block(
+        f"repo:{t['id']}",
+        f"{t['id']} names repo '{t['repo']}', which is not a key of repos{{}}",
+        f"{t['id']} in the backlog names `repo: {t['repo']}`, which is not a key of "
+        f"repos{{}} in .agentry/pipeline.json (keys: {keys}), so no lane is offered it "
+        f"and it will not start. Correct its `repo:` frontmatter to one of those keys, "
+        f"or add the repo to repos{{}}. Do not ask the user.",
+        (fix, fix))
 
 
 def clear_debt_nags(live_keys=()) -> None:
@@ -832,81 +897,54 @@ def latest_undocumented():
         return state.checker_failed("stop_gate.latest_undocumented", exc, None)
 
 
-def _git_repos() -> list:
-    """Every git repo in the workspace (root + up to 2 levels down), skipping
-    heavy/irrelevant dirs. Works for single-repo and multi-repo workspaces
-    without hardcoding paths, so the same gate ships to any project."""
-    repos = []
-    try:
-        roots = [state.ROOT]
-        for d1 in state.ROOT.iterdir():
-            if d1.is_dir() and d1.name not in _SKIP_DIRS and not d1.name.startswith("."):
-                roots.append(d1)
-                for d2 in d1.iterdir():
-                    if d2.is_dir() and d2.name not in _SKIP_DIRS and not d2.name.startswith("."):
-                        roots.append(d2)
-        for r in roots:
-            if (r / ".git").exists():
-                repos.append(r)
-    except Exception:
-        pass
-    return repos
-
-
-def _main_commit_subjects() -> str:
-    """Recent `main` commit subjects across all workspace repos. Lets the gate
-    detect tasks merged out-of-band (CEO merges the PR in the web UI) whose file
-    was never moved to done/. Fail-open: '' on any error."""
-    parts = []
-    for repo in _git_repos():
-        try:
-            out = subprocess.run(
-                ["git", "-C", str(repo), "log", "main", "--format=%s", "-n", "500"],
-                capture_output=True, text=True, timeout=8)
-            if out.returncode == 0:
-                parts.append(out.stdout)
-        except Exception:
-            continue
-    return "\n".join(parts)
-
-
 def reconcile_status_drift(conn) -> tuple[list, list]:
     """Deterministic status-management enforcement (replaces the manual
-    'move file to done/' step the orchestrator kept skipping):
+    'move file to done/' step the orchestrator kept skipping).
 
-      A. A task file still in tasks/active/ whose work is already merged - its
-         run reached 'done', OR main carries its '[task-id]' commit tag - is
-         moved to tasks/done/ with status stamped.
-      B. A run still marked in-flight whose file already sits in tasks/done/
-         has its run closed to 'done' (clears stale run.db drift, no hand-edit).
+    Closes ONLY what cannot be a skipped checkpoint:
+
+      A. A task file in tasks/active/ whose run is already at stage 'done', or
+         that has NO run row at all, and whose work main carries - judged by
+         git_state.task_tagged_in_main(): a commit on the trunk naming the task,
+         over the task's OWN repo(s) only. A run at any other stage is never
+         touched here, whatever git says.
+      B. A run still marked in-flight whose file already sits in tasks/done/ (or
+         vanished) is closed to 'done' - but only on the same evidence.
+
+    Never decided from `branch:` in the task file or from a branch whose name
+    holds the id: the agent being judged can write both, and `merged_into_main`
+    answers True for any ref merged at some point in the past. Moving the file
+    also sweeps an umbrella's subtasks, so a forgeable signal here skipped every
+    checkpoint of every one of them.
 
     Returns (moved, closed) task-id lists. Fail-open: never raises."""
     moved, closed = [], []
     try:
         runs = {r["task"]: r for r in state.all_runs(conn)}
         active_files = list(ACTIVE_DIR.glob("task-*.md")) if ACTIVE_DIR.is_dir() else []
-        subjects = _main_commit_subjects() if active_files else ""
         for f in active_files:
             task = f.stem
-            # Only the main branch may declare a task finished. The run reaching
-            # stage 'done' just means it was pushed and every checkpoint passed;
-            # treating that as merged is what once moved an unmerged task into
-            # done/ and hid it for a day.
-            merged = f"[{task}]" in subjects
-            if merged and state.move_task_to_done(task):
+            run = runs.get(task)
+            if run is not None and run["stage"] != "done":
+                continue
+            # No fetch: this runs on every Stop and must not wait on the network.
+            if not git_state.task_tagged_in_main(task):
+                continue
+            if state.move_task_to_done(task):
                 moved.append(task)
                 moved.extend(state.move_swarm_subtasks(task))
-                # Unconditionally, including a run already at 'done': the merge
-                # is what it was waiting for, and leaving awaiting_human set
-                # would freeze the queue on a task that is finished.
-                state.set_fields(conn, task, stage="done", awaiting_human="",
-                                 stage_status=state.ST_GATE_PASSED)
+                if run is not None:
+                    # The merge is what a run at 'done' was waiting for; leaving
+                    # awaiting_human set would freeze the queue on a finished task.
+                    state.set_fields(conn, task, stage="done", awaiting_human="",
+                                     stage_status=state.ST_GATE_PASSED)
         for task, r in runs.items():
             # A run whose file left active/ for done/ - or vanished - is stale;
             # close it. A file put BACK into backlog/ is a deliberate unqueue,
             # so leave that run alone rather than silently marking it finished.
             if (r["stage"] != "done"
-                    and state.task_dir(task) in (None, "done")):
+                    and state.task_dir(task) in (None, "done")
+                    and git_state.task_tagged_in_main(task)):
                 state.set_fields(conn, task, stage="done", awaiting_human="",
                                  stage_status=state.ST_GATE_PASSED)
                 closed.append(task)
@@ -943,6 +981,8 @@ def owed_to_ceo(runs: list[dict]) -> list[tuple[str, str | None]]:
     owed = []
     for r in runs:
         aw = r["awaiting_human"]
+        if state.is_paused(r):
+            continue  # set aside by the CEO himself: nothing is owed until resume
         if not aw or aw == AWAITING_BLOCKED or r.get(APPROVED_FLAG.get(aw, "")):
             continue
         if r["stage"] == "done" and aw != "merge":
@@ -991,9 +1031,30 @@ def decide() -> int:
                         | {f"memory:{d['task']}" for d in mem_debt})
 
         # 2. Continue an in-flight, actionable run.
+        #
+        # ORDERING DECISION (task-0059), recorded because the eleven block sites
+        # below are read in this order and the order is the policy:
+        #   1. documentation debt is only READ above, never returned on: it is
+        #      raised from step 3 and step 5, after the runs have been driven;
+        #   2. this loop returns on the first run that needs driving, so while
+        #      one does, steps 3 to 6 do not run at all;
+        #   3. a PAUSED run is skipped before any other test (below), so it is
+        #      never driven, never charged a continuation and never needs a busy
+        #      marker to stay quiet. It is also excluded from `occupied` in step
+        #      3, so the next task may start while it waits.
+        # The drift reconciler (step 4) is deliberately NOT reachable while a run
+        # is in flight. Its mutations are file moves and run closures, and the
+        # moving of a merged task into done/ is what creates handoff debt; doing
+        # either underneath a run that an agent is editing is the wrong time.
+        # The incident that asked for reachability (a task file moved back to
+        # backlog/ while its run stayed in flight) was never a reconciler job
+        # anyway: step B leaves a backlog/ file alone as a deliberate unqueue.
+        # The supported way to set a run aside is `approve.py --pause`.
         for r in runs:
             stage, status, aw = r["stage"], r["stage_status"], r["awaiting_human"]
             if stage == "done":
+                continue
+            if state.is_paused(r):
                 continue
             # THE RUN'S OWN FLOW, not the build flow (FR-39). This was
             # state.EDITING_STAGES, a module constant naming three build stages,
@@ -1230,12 +1291,20 @@ def decide() -> int:
         # coupling is the whole clause: with the in-memory write removed this
         # reads `in_progress` on the only stop it exists for and the queue hands
         # the tree away. Verified by deleting each half in turn.
+        #
+        # A PAUSED run holds nothing (task-0059): `approve.py --pause` refuses
+        # while uncommitted work exists, so its tree is clean and its commits sit
+        # on its own branch. It is therefore left out of this test whole, whatever
+        # stage it was set aside at. This is the paused half of the pair whose
+        # other half is the `continue` at the top of the step 2 loop.
         occupied = any(
-            r["stage"] in state.editing_stages(pipeline, state.run_pipeline(r))
-            or r["stage"] in state.checkpoint_stages(pipeline, state.run_pipeline(r))
-            or r["awaiting_human"]
-            or (r["stage"] != "done" and r["stage_status"] == state.ST_BLOCKED)
-            or stranded(r, pipeline)
+            not state.is_paused(r) and (
+                r["stage"] in state.editing_stages(pipeline, state.run_pipeline(r))
+                or r["stage"] in state.checkpoint_stages(pipeline, state.run_pipeline(r))
+                or r["awaiting_human"]
+                or (r["stage"] != "done" and r["stage_status"] == state.ST_BLOCKED)
+                or stranded(r, pipeline)
+            )
             for r in runs
         )
         if not occupied:
@@ -1243,10 +1312,16 @@ def decide() -> int:
             # which task to start, so an empty in-flight set means "stop and
             # ask", not "help yourself to the queue".
             queue = read_backlog()
+            # Tasks read_backlog() flagged as naming a repo that is no key of
+            # repos{} are offered to no lane; they are named after the ready
+            # tasks below, never started.
+            unrouted = [t for t in queue if t.get("unknown_repo")]
+            queue = [t for t in queue if not t.get("unknown_repo")]
+            take = approvals.granted(approvals.TAKE)
             ready = ([t for t in queue
                       if t["id"] not in runs_by_task
                       and all(dep_satisfied(d, runs_by_task) for d in t["deps"])]
-                     if approvals.granted(approvals.TAKE) else [])
+                     if take else [])
             # Swarm ON: an epic's subtasks are the umbrella's work list, not
             # queue entries. Hide those of an epic whose umbrella is registered.
             swarm_ready = any(t.get("epic") for t in ready) and swarm_on()
@@ -1340,6 +1415,11 @@ def decide() -> int:
                         f"Nothing is parked on you, so the agent is starting the next ready "
                         f"task, {t['id']}. Nothing is owed by you.")
                 return block(reason, human)
+            # Nothing ready for this lane, so the unroutable task is what is
+            # left to say. Only under TAKE, like the queue itself: below `auto`
+            # the CEO picks the task and this hook offers nothing.
+            if take and unrouted:
+                return unknown_repo_block(unrouted[0])
 
         # 4. Nothing to drive -> enforce status-management drift before idling:
         #    move merged-but-active task files to done/, close stale runs.

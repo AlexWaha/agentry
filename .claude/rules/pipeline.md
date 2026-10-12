@@ -34,8 +34,11 @@ refused until that spec is approved.
 
 - **Plan pipeline** (per epic / milestone): see above. Owner: `architect`
   (spec: `spec-developer`; breakdown: `product-manager`).
-- **Build pipeline** (per task, autonomous): `implement -> test -> review ->
-  ready -> done`. Driven by `advance.py`; see `orchestration.md`. The stage
+- **Build pipeline** (per task, autonomous): `plan -> plan-approval ->
+  implement -> test -> review -> ready -> done`. `advance.py --type` accepts any
+  type, and every type except those in `skip_for_types` (`pipeline.json`:
+  `bugfix`, `techdebt`) plans; those two start at `implement`. Driven by
+  `advance.py`; see `orchestration.md`. The stage
   table below is the per-task flow: one task in an editing stage at a time, QA
   at its own `test` stage. With the swarm dial on (`swarm.py on`), an epic with
   two or more subtasks registers as ONE umbrella task and runs in swarm mode
@@ -47,6 +50,8 @@ refused until that spec is approved.
 
 | Stage | Owner agent | Exit gate (deterministic) | Human checkpoint |
 |-------|-------------|---------------------------|------------------|
+| plan | `senior-backend-dev` / `senior-frontend-dev` (the task's assignee) | `artifact_gate.py --kind plan`: `.agentry/plans/*<task>*.md` exists, names the task, at least 400 characters | - |
+| plan-approval | Orchestrator | the `plan` checkpoint: `approve.py --task X --gate plan` recorded in `run.db`; no approvals level and no `auto_approve` list grants it | **CEO approves the plan before any code is written**; rejecting sends the task back to `plan` and costs nothing but the plan |
 | implement | `senior-backend-dev` / `senior-frontend-dev` | `{{BUILD_CMD}}` succeeds; code in task scope | - |
 | test | `qa-engineer` | `{{TEST_CMD}}` green; required cases per `testing.md` | - |
 | review | `reviewer` (+ `security-engineer`) | `{{LINT_CMD}}` clean; all Critical/High findings resolved; read-only (no code edits) | - |
@@ -90,6 +95,16 @@ passes.
   spec for multi-task work) - `advance.py` refuses registration otherwise.
   Missing data is a planning failure - send the task back, do not improvise
   mid-stage.
+- **Plan before code.** Until the plan approval is recorded, `pretool_gate.py`
+  denies Edit, Write and file-writing shell commands for that task's branch
+  everywhere outside `.agentry/` - agents and the main thread alike - the way
+  it denies a commit without its approval. It reads the stage from
+  `pipelines.build` (the stage declaring the `plan` checkpoint), keeps the
+  approval in `run.db` (so it survives a session restart), and fails open on an
+  unreadable state file. Files written by an interpreter (`python -c
+  "open(...)"`) are outside what it can read. `approve.py --reject` at the plan
+  step stays at `plan`; from the commit checkpoint it returns to `implement`
+  and keeps the plan approval.
 - **Spec drift is a defect.** During `implement`, any change that does not
   trace to a task acceptance criterion (or a spec FR when linked) is out of
   scope: park it and propose a follow-up task, never sneak it in. The reviewer

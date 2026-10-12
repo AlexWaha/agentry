@@ -91,6 +91,10 @@ ST_IN_PROGRESS = "in_progress"
 ST_GATE_PASSED = "gate_passed"
 ST_GATE_FAILED = "gate_failed"
 ST_BLOCKED = "blocked"
+# Deliberately set aside by the CEO's force-majeure call (task-0059): registered,
+# not driven, not holding the working tree. `stage` is left where it was and the
+# prior stage_status is kept in `paused_status`, so resume restores it exactly.
+ST_PAUSED = "paused"
 
 EDITING_STAGES = ("implement", "test", "review")
 
@@ -159,6 +163,51 @@ def load_pipeline() -> dict:
     except (OSError, ValueError, RecursionError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+# --- lanes{} (contract C-4, FR-45) ---------------------------------------------
+
+DEFAULT_LANE = "default"
+
+
+def lane_name() -> str:
+    """This session's lane: PIPELINE_LANE, or `default` when it is unset."""
+    return LANE or DEFAULT_LANE
+
+
+def lanes() -> dict[str, str]:
+    """lane -> the one repo key it is bound to, from `lanes{}` in pipeline.json.
+
+    `{}` means "no lane routing": the key is absent (a supported form, so silent)
+    or it is not an object (one stderr line). Both fail open per NFR-4, and the
+    caller treats them alike - offer the whole backlog. An entry without a
+    non-empty string `repo` is dropped with one stderr line and the others
+    survive, so one bad lane cannot switch the rest off. Keys starting with `_`
+    are comments."""
+    raw = load_pipeline().get("lanes")
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        print("pipeline.json: lanes must be an object of lane -> {repo}; "
+              "ignoring it and offering the whole backlog", file=sys.stderr)
+        return {}
+    out: dict[str, str] = {}
+    for name, entry in raw.items():
+        if str(name).startswith("_"):
+            continue
+        repo = entry.get("repo") if isinstance(entry, dict) else None
+        if isinstance(repo, str) and repo.strip():
+            out[str(name)] = repo.strip()
+        else:
+            print(f"pipeline.json: lane {name!r} needs a non-empty string "
+                  f"\"repo\" (one repos{{}} key); lane dropped", file=sys.stderr)
+    return out
+
+
+def lane_repo(lane: str | None = None) -> str | None:
+    """The repo key `lane` (default: this session's) is bound to, or None when
+    lanes{} does not declare it."""
+    return lanes().get(lane or lane_name())
 
 
 def stages(pipeline: dict, which: str = BUILD) -> list[dict]:
@@ -285,6 +334,12 @@ def init_db(conn: sqlite3.Connection) -> None:
     # the column take the default 0: an old run is never pre-approved.
     if "plan_approved" not in cols:
         conn.execute("ALTER TABLE runs ADD COLUMN plan_approved INTEGER DEFAULT 0")
+    # Pause record (task-0059): the status the run had when it was paused, the
+    # CEO's reason, and whether the tree was clean or already committed. All three
+    # are empty on a run that was never paused.
+    for col in ("paused_status", "pause_reason", "pause_kind"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT DEFAULT ''")
     conn.commit()
 
 
@@ -307,6 +362,29 @@ def create_run(conn: sqlite3.Connection, task: str, task_type: str, stage: str,
     )
     conn.commit()
     return get_run(conn, task)  # type: ignore[return-value]
+
+
+def is_paused(run: dict | None) -> bool:
+    """True for a run set aside by the pause command. A paused run is not driven
+    and does not hold the working tree."""
+    return (run or {}).get("stage_status") == ST_PAUSED
+
+
+def is_parked(run: dict | None) -> bool:
+    """True when no agent is being asked to do work on this run right now: it is
+    paused, blocked, waiting on a human, or done. The one definition the Stop hook,
+    advance.py and the supervisor share, so "is anything being driven" cannot be
+    answered three ways.
+
+    This is NOT the test for "holds the working tree": a blocked editing run still
+    owns its dirty tree (stop_gate.decide()), so edit-serialization asks
+    is_paused(), never this."""
+    r = run or {}
+    return bool(
+        r.get("stage_status") in (ST_PAUSED, ST_BLOCKED)
+        or r.get("awaiting_human")
+        or r.get("stage") == "done"
+    )
 
 
 def run_pipeline(run: dict | None) -> str:
@@ -348,6 +426,24 @@ def task_repo(task: str) -> str | None:
             if line.startswith("repo:"):
                 return line.split(":", 1)[1].strip().strip("'\"") or None
     return None
+
+
+def task_branch(task: str) -> str:
+    """The `branch:` frontmatter value of a task file ('' when absent): the
+    branch a task declares it rides on when it is not its own `<type>/task-NNNN`.
+    Merge detection already resolves a carrier branch from it; the commit gate
+    reads the same field to decide whether a commit tagged with this task may be
+    made on the checked-out branch. Head of the file only, like task_repo."""
+    for folder in TASK_DIRS.values():
+        path = folder / f"{task}.md"
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[:40]
+        except OSError:
+            continue
+        for line in lines:
+            if line.startswith("branch:"):
+                return line.split(":", 1)[1].strip().strip("'\"")
+    return ""
 
 
 def move_task(task: str, to: str) -> bool:
@@ -462,6 +558,14 @@ def _resume_text(conn: sqlite3.Connection) -> str:
                      f"advance.py will not move a blocked run - raise it with the CEO "
                      f"(AskUserQuestion), then either fix the blocker or run approve.py "
                      f"--reject to send the task back.")
+    # Same shape for a paused run: the line above would send the orchestrator to
+    # advance a task the CEO deliberately set aside, and advance.py refuses it.
+    paused = [r for r in live if is_paused(r)]
+    if paused:
+        who = "; ".join(f"{r['task']} ({r.get('pause_kind') or '?'}: "
+                        f"{r.get('pause_reason') or 'no reason recorded'})" for r in paused)
+        lines.append(f"PAUSED by the CEO, do not drive: {who}. Resume only when the CEO says: "
+                     f"python .claude/tools/pipeline/approve.py --task <task> --resume.")
     return "\n".join(lines)
 
 

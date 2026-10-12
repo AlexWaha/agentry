@@ -70,7 +70,11 @@ state and gate checks live in deterministic hooks (`.claude/tools/pipeline/` +
   so a push that does happen in solo mode, including the one-shot trunk push,
   still needs its recorded approval. The commit checkpoint is where the CEO
   reads the diff (Claude Code's built-in `/diff`); rejecting there sends the task
-  back to `implement`. The `PreToolUse` hook blocks `git commit`/`git push`
+  back to `implement`. Before that, every task type except those in
+  `skip_for_types` (`bugfix`, `techdebt`) has its own checkpoint: the CEO
+  approves the task's plan (`approve.py --gate plan`) before any code is
+  written, and no approvals level grants it; rejecting there keeps the task at
+  `plan`. The `PreToolUse` hook blocks `git commit`/`git push`
   until you record the approval via `tools/pipeline/approve.py` (run it only
   after the CEO approves). The commit checkpoint, when listed in the `ready`
   stage's `auto_approve` (pipeline.json), is approved automatically - human
@@ -86,7 +90,8 @@ state and gate checks live in deterministic hooks (`.claude/tools/pipeline/` +
 - **Pipelined but edit-serialized (per-task flow):** one task in an editing
   stage at a time; parked tasks wait for the CEO while the next ready task runs.
   A multi-subtask epic registered as one umbrella task runs in parallel inside
-  its `implement` stage instead - see "Swarm mode" in `rules/orchestration.md`.
+  its `implement` stage instead (after the plan approval, since the umbrella is a
+  `feature`) - see "Swarm mode" in `rules/orchestration.md`.
 - **Handoff chain:** before a new task registers, the previous completed task's
   handoff doc must exist and validate in `.agentry/tasks/handoffs/`. The NEXT
   task's assignee is to write it in its own words; that is an instruction, and

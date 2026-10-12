@@ -3717,7 +3717,10 @@ class SuiteHoldsNoChildOverAPipeTest(unittest.TestCase):
     fork bomb, not the deadlock this test exists to catch)."""
 
     ROOT = Path(__file__).resolve().parents[3]
-    BOUND_SECONDS = 180
+    # The child suite needed ~206s on 2026-10-09 (1771 tests); keep headroom, but
+    # stay far under advance.py's GATE_TIMEOUT of 900s, which the outer run
+    # (this test plus the rest of the suite, ~2x the inner run) must fit in.
+    BOUND_SECONDS = 420
     NESTED_MARKER = "AGENTRY_SUITE_PIPE_PROBE_NESTED"
 
     @unittest.skipIf(os.environ.get(NESTED_MARKER), "nested run - see class docstring")
@@ -3946,10 +3949,64 @@ class DaemonLifecycleTest(Sandbox):
         code, poll = self.run_daemon(
             [], conf=cfg(idle_exit_polls=2, poll_seconds=0), sleeper=sleeper,
             poll_result={"events": [{"task": "task-0001", "classification": "HEALTHY"}],
-                         "stop": ""})
+                         "stop": "", "in_flight": True})
         self.assertEqual(0, code)
         self.assertEqual(5, poll.call_count,
                          "a supervisor with work to watch must not exit on the idle timer")
+
+    def test_a_lane_holding_only_parked_runs_idles_out_and_releases_its_lock(self):
+        # task-0064: a parked run still yields an event every poll, and counting
+        # events kept the counter at zero for ever. The event is there; the run is
+        # not in flight.
+        parked = {"task": "task-0010", "stage": "implement", "classification": "HEALTHY",
+                  "why": "already parked blocked for the CEO", "action": "", "stop": ""}
+        slept = []
+
+        def sleeper(_seconds):
+            # A cap, so that a regression fails this test instead of looping.
+            slept.append(1)
+            if len(slept) == 10:
+                raise KeyboardInterrupt
+        code, poll = self.run_daemon(
+            [], conf=cfg(idle_exit_polls=3, poll_seconds=0), sleeper=sleeper,
+            poll_result={"events": [parked], "stop": "", "in_flight": False})
+        self.assertEqual(0, code)
+        self.assertEqual(3, poll.call_count)
+        self.assertFalse(supervisor.lock_path().exists())
+        self.assertTrue(any("nothing in flight for 3" in n for n in self.notices))
+
+    def test_an_in_flight_run_never_idles_out_however_quiet_the_poll_is(self):
+        # The direction that breaks the feature if the fix overshoots: no events
+        # and no action, but a run is still moving, so the counter must stay at 0.
+        slept = []
+
+        def sleeper(_seconds):
+            slept.append(1)
+            if len(slept) == 6:
+                raise KeyboardInterrupt
+        code, poll = self.run_daemon(
+            [], conf=cfg(idle_exit_polls=2, poll_seconds=0), sleeper=sleeper,
+            poll_result={"events": [], "stop": "", "in_flight": True})
+        self.assertEqual(0, code)
+        self.assertEqual(6, poll.call_count)
+        self.assertFalse(any("nothing in flight" in n for n in self.notices))
+
+    def test_a_parked_lane_that_gains_an_in_flight_run_restarts_the_countdown(self):
+        results = iter([{"events": [], "stop": "", "in_flight": flag}
+                        for flag in (False, False, True, False, False, False)])
+
+        def next_result(_cfg, act=True):
+            return next(results)
+        with unittest.mock.patch.object(supervisor.mode, "conveyor_runs", return_value=True), \
+                unittest.mock.patch.object(supervisor, "config",
+                                           return_value=cfg(idle_exit_polls=3, poll_seconds=0)), \
+                unittest.mock.patch.object(supervisor, "poll_once",
+                                           side_effect=next_result) as poll, \
+                unittest.mock.patch.object(supervisor.time, "sleep", lambda _s: None), \
+                unittest.mock.patch.object(sys, "argv", ["supervisor.py"]):
+            code = supervisor.main()
+        self.assertEqual(0, code)
+        self.assertEqual(6, poll.call_count, "two idle polls, a reset, then three idle polls")
 
     def test_idle_exit_can_be_turned_off(self):
         slept = []
@@ -3962,6 +4019,37 @@ class DaemonLifecycleTest(Sandbox):
                                      sleeper=sleeper)
         self.assertEqual(0, code)
         self.assertEqual(4, poll.call_count)
+
+
+class PollOnceInFlightTest(Sandbox):
+    """poll_once reports whether any run is still moving. state.is_parked is
+    patched: task-0059 owns its definition, this file owns only what the
+    supervisor does with the answer."""
+
+    def poll(self, runs, parked_tasks):
+        def is_parked(run):
+            return run["task"] in parked_tasks
+        with unittest.mock.patch.object(state, "all_runs", return_value=runs), \
+                unittest.mock.patch.object(state, "is_parked", create=True,
+                                           side_effect=is_parked):
+            return supervisor.poll_once(cfg(), act=False)
+
+    def test_blocked_and_awaiting_human_runs_are_not_in_flight(self):
+        runs = [row("task-0001", status=state.ST_BLOCKED),
+                row("task-0002", stage="ready", awaiting_human="commit")]
+        result = self.poll(runs, {"task-0001", "task-0002"})
+        self.assertEqual(2, len(result["events"]), "parked runs are still reported")
+        self.assertFalse(result["in_flight"])
+
+    def test_one_run_that_is_not_parked_keeps_the_lane_in_flight(self):
+        runs = [row("task-0001", status=state.ST_BLOCKED), row("task-0002")]
+        result = self.poll(runs, {"task-0001"})
+        self.assertTrue(result["in_flight"])
+
+    def test_a_finished_run_is_not_in_flight_and_an_empty_lane_is_idle(self):
+        done = self.poll([row("task-0001", stage="done")], set())
+        self.assertFalse(done["in_flight"])
+        self.assertFalse(self.poll([], set())["in_flight"])
 
 
 class DashTest(unittest.TestCase):

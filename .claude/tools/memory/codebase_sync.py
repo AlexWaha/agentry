@@ -45,8 +45,8 @@ _SKIP_DIRS = {".git", "node_modules", "vendor", ".claude", "storage",
 
 
 def _git_repos() -> list:
-    """Workspace git repos (root + up to 2 levels down) - same walk as
-    stop_gate._git_repos so both tools agree on what 'the workspace' is."""
+    """Workspace git repos (root + up to 2 levels down) - the same depth as the
+    auto-detect in git_state.repos(), plus the _SKIP_DIRS exclusions."""
     repos = []
     try:
         roots = [ROOT]

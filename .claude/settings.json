@@ -38,6 +38,10 @@
     "pr": "",
     "sessionUrl": false
   },
+  "statusLine": {
+    "type": "command",
+    "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/status_line.py\""
+  },
   "claudeMdExcludes": [
     "**/.claude/rules/business-standards.md",
     "**/.claude/rules/mobile.md",
@@ -141,7 +145,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash|Edit|Write",
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
           {
             "type": "command",
@@ -376,6 +380,11 @@
             "command": "rm -f nul NUL",
             "timeout": 5,
             "statusMessage": "Cleaning up NUL files..."
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/refusal_notice.py\"",
+            "timeout": 10
           }
         ]
       }

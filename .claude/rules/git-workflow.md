@@ -155,7 +155,9 @@ commit and push approvals are enforced by the `PreToolUse` hook, not by goodwill
 
 Run `approve.py` **only after the CEO explicitly approves in chat**. To send a task
 back for rework instead of approving, use `approve.py --task task-XXXX --reject`
-(returns it to `implement`). These approvals are the only points where the CEO
+(returns it to `implement`; before the plan approval it stays at `plan`). The
+plan approval (`--gate plan`) is a third checkpoint, ahead of any code, for
+every task type except those in `skip_for_types` (`bugfix`, `techdebt`). These approvals are the only points where the CEO
 re-engages during execution, and in `solo` mode the push one does not arise
 except for the one-shot trunk publication (`approve.py --trunk-push`).
 
