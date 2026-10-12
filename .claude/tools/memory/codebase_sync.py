@@ -30,7 +30,8 @@ ROOT = HERE.parents[3]
 sys.path.insert(0, str(CLAUDE_DIR / "tools" / "pipeline"))
 sys.path.insert(0, str(HERE.parent))
 
-# Sibling module; the dir is not on sys.path by default, hence the insert above.
+# Sibling modules; their dirs are not on sys.path by default, hence the inserts above.
+import git_state
 import memory
 
 MEMORY_DIR = ROOT / ".agentry" / "memory"
@@ -39,29 +40,6 @@ DIFF_LINES_CAP = 30
 RECORD_HINT = ("python .claude/tools/memory/memory.py --record --kind module "
                "--path <dir> --responsibility <one line> [--symbols <entry points>] "
                "[--notes <dependency notes>]")
-
-_SKIP_DIRS = {".git", "node_modules", "vendor", ".claude", "storage",
-              "dist", "build", "data", "logs"}
-
-
-def _git_repos() -> list:
-    """Workspace git repos (root + up to 2 levels down) - the same depth as the
-    auto-detect in git_state.repos(), plus the _SKIP_DIRS exclusions."""
-    repos = []
-    try:
-        roots = [ROOT]
-        for d1 in ROOT.iterdir():
-            if d1.is_dir() and d1.name not in _SKIP_DIRS and not d1.name.startswith("."):
-                roots.append(d1)
-                for d2 in d1.iterdir():
-                    if d2.is_dir() and d2.name not in _SKIP_DIRS and not d2.name.startswith("."):
-                        roots.append(d2)
-        for r in roots:
-            if (r / ".git").exists():
-                repos.append(r)
-    except Exception:
-        pass
-    return repos
 
 
 def _rel(p: Path) -> str:
@@ -82,7 +60,11 @@ def _head(repo: Path) -> str:
 
 def current_heads() -> dict:
     heads = {}
-    for repo in _git_repos():
+    try:
+        repos = git_state.repos()
+    except Exception:
+        return heads
+    for repo in repos:
         sha = _head(repo)
         if sha:
             heads[_rel(repo)] = sha

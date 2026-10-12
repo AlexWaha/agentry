@@ -31,6 +31,7 @@ sys.path.insert(0, str(TESTS_DIR))
 import agent_gate
 import pretool_gate
 import tmproot  # noqa: F401  (arms the in-project temp redirect)
+from gate_allow import assert_not_denied
 
 PROFILES = ("handle_dev", "handle_readonly", "handle_docs")
 PIPE = ".claude/tools/pipeline"
@@ -283,7 +284,7 @@ class ReadsAndNamesStayAllowedTest(unittest.TestCase):
                         # Readonly and docs also deny a file write, so the one
                         # redirect-to-a-file read (`> tmp/..`) is not in this list.
                         code, err = run_profile(name, command)
-                        self.assertEqual(0, code, err)
+                        assert_not_denied(self, name, code, err)
 
     def test_naming_a_script_without_running_it_stays_allowed(self):
         for script in SCRIPTS:
@@ -292,7 +293,7 @@ class ReadsAndNamesStayAllowedTest(unittest.TestCase):
                 for name in PROFILES:
                     with self.subTest(script=script, profile=name, command=command):
                         code, err = run_profile(name, command)
-                        self.assertEqual(0, code, err)
+                        assert_not_denied(self, name, code, err)
 
     def test_a_named_script_behind_a_file_redirect_is_not_run_by_the_script_checks(self):
         for script in SCRIPTS:

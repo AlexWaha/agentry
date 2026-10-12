@@ -57,6 +57,10 @@ python $M --record --kind pattern --name <kebab-name> --use-when <situation> [--
 python $M --record --kind module  --path <dir> --responsibility <one line> \
           [--symbols <entry points>] [--notes <dependency notes>]
 
+python $M --refine --signature <kebab-tag> [--agent <name>] \
+          [--trigger|--what|--why|--fix|--area|--task <corrected text>]   # correct in place
+python $M --retire --signature <kebab-tag> [--agent <name>] --reason <why it is withdrawn>
+
 python $M --query "text to match" [--limit 8] [--kinds lesson,pattern,module]
 python $M --export [--out .agentry/memory/export.md]    # markdown, for human reading
 python $M --stats
@@ -66,8 +70,34 @@ python $M --migrate                                    # legacy markdown -> stor
 Every field is single-line and bounded; free-form prose is refused, and so is an
 em or en dash. A signature must be a kebab-case tag naming the SITUATION, so a
 future query hits it. Re-recording the same `(signature, agent)` is a no-op -
-refine the existing row instead of adding a near-duplicate. Re-recording a known
-module `path` updates that row, because the map tracks the tree.
+the refusal prints the exact `--refine` and `--retire` commands for that row.
+Re-recording a known module `path` updates that row, because the map tracks the
+tree.
+
+## Correcting and retiring a lesson
+
+- **`--refine`** rewrites the fields you pass (`trigger`, `what`, `why`, `fix`,
+  `area`, `task`) on the row addressed by `(signature, agent)`. Same validation
+  as `--record`; the row keeps its id and signature; the FTS entry is rebuilt so
+  retrieval ranks the corrected text. Output says `REFINED lesson ...`, never
+  `recorded`. Lessons only: a pattern or module has no refine, and a module
+  already updates on re-record.
+- **`--retire`** withdraws a row proven wrong: `--reason` is required. Output
+  says `RETIRED lesson ...`. A retired row is refused by `--refine` (record the
+  corrected claim under a new signature) and by a second `--retire`.
+
+**Why a flag and not a delete.** A retired row is removed from the FTS index and
+kept in the `lessons` table with `retired` (date) and `retired_reason`. Retrieval
+reads only the index (`query()` and `inject.py` both), so a retired row is never
+injected and no retrieval code needed to learn about the flag. A delete would also
+stop injection, but it would erase the fact that the claim was once believed and
+why it was withdrawn - which is what stops the same wrong claim being recorded
+again. `--export` lists retired rows in their own section. There is no history or
+audit trail beyond that; add one only when a second use case appears.
+
+A store created before this existed is upgraded in place (two `ALTER TABLE ADD
+COLUMN`) the first time any write command opens it. The read-only retrieval path
+does not need the columns.
 
 ## Freshness contract (enforced, not hoped for)
 
@@ -94,4 +124,4 @@ module `path` updates that row, because the map tracks the tree.
 - Record the METHOD, never a secret, credential or PII value.
 - There is no curation rule any more. A queried store does not overflow an
   injection window, so rows accumulate; only duplicates and rows proven wrong
-  get removed.
+  are withdrawn (`--retire`) or corrected (`--refine`).

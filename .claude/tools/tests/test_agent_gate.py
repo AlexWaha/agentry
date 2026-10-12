@@ -115,8 +115,7 @@ READS = (
     f"python {PIPE}/mode.py show",
     "cd .claude/tools/pipeline && python approvals.py --show",
     "cd .claude/tools/pipeline && python mode.py --show",
-    f"bash -c 'python {PIPE}/approvals.py --show'",
-    f"py -3 E:/Personal/Agenty/{PIPE}/mode.py --show",
+    f"py -3 {state.ROOT.as_posix()}/{PIPE}/mode.py --show",
     # Stream redirects and a substitution's closing `)` / backtick are not arguments.
     f"python {PIPE}/approvals.py 2>&1",
     f"python {PIPE}/approvals.py --show 2>&1",
@@ -128,8 +127,14 @@ READS = (
     f"mode=$(python {PIPE}/mode.py --show)",
     f"mode=`python {PIPE}/mode.py --show`",
     f"mode=$(python {PIPE}/mode.py)",
-    # A read piped into an interpreter: the interpreter runs its OWN script or
-    # module, not the producing command's script.
+)
+
+# Reads the dev profile may make that the readonly and docs profiles may not
+# (task-0116): they are default-deny on Bash, so a nested shell and an interpreter
+# running its OWN code (`-c`, a module that is not a harness script) are refused
+# there whatever the producing command was. Never refused as a setter, though.
+DEV_ONLY_READS = (
+    f"bash -c 'python {PIPE}/approvals.py --show'",
     f"python {PIPE}/approvals.py --show | python -c 'import sys'",
     f"python {PIPE}/approvals.py --show | python -m json.tool",
     f"python {PIPE}/mode.py --show | python -c 'import sys'",
@@ -202,6 +207,18 @@ class SettingStateIsOrchestratorOnlyTest(unittest.TestCase):
                 with self.subTest(profile=name, command=command):
                     code, err = run_profile(name, command)
                     self.assertEqual(0, code, err)
+
+    def test_reads_that_hand_the_output_to_other_code_are_dev_only(self):
+        for command in DEV_ONLY_READS:
+            with self.subTest(profile="handle_dev", command=command):
+                code, err = run_profile("handle_dev", command)
+                self.assertEqual(0, code, err)
+            for name in ("handle_readonly", "handle_docs"):
+                with self.subTest(profile=name, command=command):
+                    code, err = run_profile(name, command)
+                    self.assertEqual(2, code)
+                    self.assertIn(agent_gate.ALLOWLIST_PHRASE, err)
+                    self.assertNotIn("orchestrator-only", err)
 
     def test_naming_a_setter_script_without_running_it_stays_allowed(self):
         for name in PROFILES:
@@ -300,9 +317,11 @@ class DocsProfileWritePathsTest(unittest.TestCase):
 
     def test_the_harness_tree_is_still_writable(self):
         # The regression the fix could introduce: .agentry/ ADDED, not substituted.
-        for path in (".claude/rules/git-workflow.md",
-                     ".claude/skills/new-task/SKILL.md",
-                     ".claude/agents/reviewer.md",
+        # SEC-A M3: the live workspace's own rules/skills/commands are the orchestrator's
+        # (see LiveInstructionsTest in test_sec_a_fixes.py); the checkout under src/ is not.
+        for path in ("src/.claude/rules/git-workflow.md",
+                     "src/.claude/skills/new-task/SKILL.md",
+                     "src/.claude/agents/reviewer.md",
                      "docs/technical/architecture.md",
                      "README.md"):
             with self.subTest(path=path):
@@ -421,7 +440,7 @@ class DocsProfileRootClaudeMdTest(unittest.TestCase):
     def test_every_earlier_documentation_path_is_still_allowed(self):
         # The trap this function is known for: one allowance added, another lost.
         for path in (".claude/CLAUDE.md", "README.md", "README.rst", "docs/technical/a.md",
-                     ".claude/rules/testing.md", ".agentry/tasks/handoffs/task-0075.md",
+                     "src/.claude/rules/testing.md", ".agentry/tasks/handoffs/task-0075.md",
                      str(state.ROOT / ".claude" / "CLAUDE.md"),
                      str(state.ROOT / "README.rst")):
             with self.subTest(path=path):

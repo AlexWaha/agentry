@@ -41,8 +41,9 @@ python $M --record --kind lesson \
 1. SIGNATURE describes the situation, not the symptom, so a future query hits it.
 2. Every field is one line. The store refuses paragraphs, missing fields,
    oversized fields and em/en dashes - record structured fields or nothing.
-3. Re-recording the same signature is a no-op: refine the existing row instead
-   of adding a near-duplicate (`$M --query "<topic>"` first).
+3. Re-recording the same signature is a no-op: correct the existing row with
+   `$M --refine` instead of adding a near-duplicate (`$M --query "<topic>"`
+   first). The refusal prints the exact command.
 4. PII/secret guardrail: record the METHOD, never a sensitive value.
 
 ## Mode: distill (after every completed task - gate-enforced)
@@ -53,6 +54,16 @@ The stop gate blocks the next task until the finished task is distilled:
 2. Gotchas and lessons -> `--kind lesson`; code used more than once ->
    `--kind pattern`; touched modules -> `--kind module` (recording a known path
    updates that row).
+   If distilling shows an existing row is wrong or overstated, fix it instead
+   of recording a contradicting second row (two rows that disagree both rank,
+   and whichever a dispatch sees first wins):
+   - `$M --refine --signature <tag> [--agent <name>] --what|--why|--fix|--trigger <corrected text>`
+     rewrites the row in place;
+   - `$M --retire --signature <tag> [--agent <name>] --reason <why>` withdraws a
+     row proven wrong so it stops being injected (the row stays, marked retired).
+   A retired row cannot be refined; record the corrected claim under a new
+   signature. A refined or retired row is a correction, not a new lesson: it
+   does not count toward the stamp's "gained a row" check.
 3. Stamp: `python .claude/tools/memory/update.py --stamp --task task-XXXX`. The
    stamp counts rows in the store and is REFUSED unless it gained at least one
    row since the previous stamp - or `--none`, which is legal: a reviewed task

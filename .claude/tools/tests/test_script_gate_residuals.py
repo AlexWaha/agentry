@@ -20,6 +20,8 @@ denies everything is not a fix.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 import unittest
 from pathlib import Path
@@ -31,6 +33,7 @@ sys.path.insert(0, str(TESTS_DIR))
 
 import agent_gate
 import pretool_gate
+from gate_allow import assert_not_denied
 from test_pretool_gate_git import TempRepo, denial_reason, gate_state
 from test_script_gate_evasions import PROFILES, SCRIPTS, render, run_profile
 
@@ -57,7 +60,7 @@ def assert_script_allowed(case: unittest.TestCase, templates: tuple, scripts: tu
             for name in PROFILES:
                 with case.subTest(script=script, profile=name, command=command):
                     code, err = run_profile(name, command)
-                    case.assertEqual(0, code, err)
+                    assert_not_denied(case, name, code, err)
 
 
 READ_SCRIPTS = ("approvals.py", "mode.py")  # approve.py has no read form
@@ -191,10 +194,36 @@ class MultiCommandGroupPipeSourceTest(unittest.TestCase):
         self.assertEqual([(0, 1)], pairs.groups)
 
     def test_a_single_command_group_records_no_span(self):
-        for command in ("{ cat x; } | python -", "(cat x) | python -", "if true; then cat x; fi"):
+        for command in ("{ cat x; } | python -", "(cat x) | python -", "{ { cat x; }; } | python -",
+                        "( ( cat x ) ) | python -"):
             with self.subTest(command=command):
-                spans = pretool_gate.segments_with_separators(command).groups
-                self.assertTrue(all(first < last for first, last in spans), spans)
+                self.assertEqual([], pretool_gate.segments_with_separators(command).groups)
+
+    def test_a_multi_command_group_records_exactly_its_span(self):
+        # `if` and `for` count their condition / header as a command of the group.
+        for command, want in (("{ cat x; echo; } | python -", [(0, 1)]),
+                              ("( cat x; echo ) | python -", [(0, 1)]),
+                              ("if true; then cat x; fi | python -", [(0, 1)]),
+                              ("for i in 1; do cat x; done | python -", [(0, 1)]),
+                              ("for i in 1; do cat x; echo; done | python -", [(0, 2)]),
+                              ("echo a; { cat x; echo; } | python -", [(1, 2)]),
+                              ("{ cat x; echo; echo; } | python -", [(0, 2)]),
+                              ("{ { cat x; echo; }; echo; } | python -", [(0, 1), (0, 2)])):
+            with self.subTest(command=command):
+                self.assertEqual(want, sorted(pretool_gate.segments_with_separators(command).groups))
+
+    def test_a_group_around_a_pipe_into_a_filter_is_still_a_piped_test_suite(self):
+        # A group's closer carries the redirect: the pipe behind it still ends in `tail`.
+        command = "{ python -m unittest discover; } 2>&1 | tail -3"
+        for name in ("handle_dev", "handle_readonly", "handle_docs"):
+            with self.subTest(profile=name):
+                code, err = run_profile(name, command)
+                self.assertEqual(2, code, err)
+        self.assertEqual("tail", pretool_gate.piped_test_suite_sink(command))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(2, pretool_gate.check_piped_test_suite(command))
+        self.assertIn("Piping a test-suite run", err.getvalue())
 
 
 class CopyTargetAbbreviationTest(unittest.TestCase):
@@ -537,6 +566,20 @@ class ControlCharacterTest(unittest.TestCase):
                          pretool_gate.git_invocations("git\tpush\torigin\tmain"))
         self.assertEqual([("status", []), ("push", ["origin", "main"])],
                          pretool_gate.git_invocations("git status\ngit push origin main"))
+
+    def test_a_carriage_return_behind_a_heredoc_opener_leaves_no_stray_argument(self):
+        # The strip removes `<<EOF` and leaves `cat <CR>`: the CR followed a blank, so it
+        # read as a word of its own (task-0112, cosmetic but it showed up as `?`).
+        for command, want in (("cat <<EOF\r\nbody\r\nEOF\r\n", ["cat", ";"]),
+                              ("cat <<EOF \r\nbody\r\nEOF\r\necho hi", ["cat", ";", "echo", "hi"]),
+                              ("git commit -F - <<EOF\r\nmsg\r\nEOF\r\n", ["git", "commit", "-F", "-", ";"]),
+                              ("cat <<'EOF' > f\r\nbody\r\nEOF\r\n", ["cat", ">", "f", ";"])):
+            with self.subTest(command=command):
+                self.assertEqual(want, pretool_gate.gate_tokens(command))
+
+    def test_a_carriage_return_standing_alone_in_the_middle_is_still_a_word(self):
+        self.assertEqual(["echo", "a", "?", "b"], pretool_gate.gate_tokens("echo a \r b"))
+        self.assertEqual(["python", "-X", "?", "x"], pretool_gate.gate_tokens("python -X \r x"))
 
     def test_a_plain_command_is_not_rewritten(self):
         for command in ("git push origin main", "python x/approve.py auto", "echo 'a b' | cat"):

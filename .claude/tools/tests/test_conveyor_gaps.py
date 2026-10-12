@@ -1425,7 +1425,7 @@ class StrandedStageTest(unittest.TestCase):
         self._seed("task-0500", "ghost-stage")
         self._cli(advance, "--task", "task-0500")
 
-        out = self._cli(approve, "--task", "task-0500", "--reject")
+        out = self._cli(approve, "--task", "task-0500", "--reject", "--reason", "stranded")
 
         self.assertTrue(out["ok"])
         row = self._row("task-0500")

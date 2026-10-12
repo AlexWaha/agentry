@@ -22,9 +22,11 @@ from pathlib import Path
 
 TESTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS_DIR.parent / "pipeline"))
+sys.path.insert(0, str(TESTS_DIR))
 
 import agent_gate  # noqa: E402 - path set above
 import pretool_gate  # noqa: E402
+from gate_allow import assert_not_denied  # noqa: E402
 
 FOUR_OPERATORS = (">&", "1>&", ">|", "<>")
 DUPLICATIONS = ("make 2>&1", "echo x >&2", "echo x 1>&2", "ls >&-", "ls 2>&-",
@@ -88,7 +90,7 @@ class TrueDescriptorDuplicationIsNotAWriteTest(unittest.TestCase):
     def test_a_readonly_agent_is_not_denied_them(self):
         for command in DUPLICATIONS:
             with self.subTest(command=command):
-                self.assertEqual(0, run(agent_gate.handle_readonly, command)[0])
+                assert_not_denied(self, "handle_readonly", *run(agent_gate.handle_readonly, command))
 
 
 class DescriptorLookingTargetOnAPlainRedirectIsAWriteTest(unittest.TestCase):
@@ -198,7 +200,7 @@ class GluedNulRedirectIsDeniedInEveryProfileTest(unittest.TestCase):
 
     GLUED = ("ls>NUL", "x>nul", "cmd>NUL 2>&1", "ls>&NUL", "ls>|NUL", "ls 2>&1>NUL",
              "ls&>NUL", "ls>>NUL", "ls>\"NUL\"", "bash -c 'ls>NUL'", "echo $(ls>NUL)",
-             "ls 2>&1 && ls>NUL")
+             "ls 2>&1 && ls>NUL", "ls -> nul", "ls ->NUL", "ls-->NUL")
 
     def assert_denied_as_a_real_file(self, run_it, command: str) -> None:
         code, msg = run_it(command)
@@ -220,7 +222,7 @@ class GluedNulRedirectIsDeniedInEveryProfileTest(unittest.TestCase):
 
     def test_names_that_only_contain_nul_are_not_a_redirect_to_it(self):
         for command in ("echo x>nullable.py", "cat null>x", "echo x>NULL", "echo x>nul.txt",
-                        "echo x>./NUL", "echo x>NUL.bak", "echo x>annul", "ls -> nul"):
+                        "echo x>./NUL", "echo x>NUL.bak", "echo x>annul", "ls -> nulx"):
             with self.subTest(command=command):
                 self.assertFalse(pretool_gate.redirects_to_bare_nul(command))
 

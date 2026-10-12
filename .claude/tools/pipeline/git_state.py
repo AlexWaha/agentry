@@ -224,15 +224,23 @@ def task_in_main(repo: Path, task: str) -> bool | None:
 
     Three spellings count, because three of them occur in practice:
 
-      [task-0004]                  the convention rules/git-workflow.md asks for
+      [task-0004]                  the convention rules/git-workflow.md asks for,
+                                   leading a line of the message (leading blanks
+                                   allowed): the grammar of the commit tag the
+                                   commit gate reads (pretool_gate.COMMIT_TAG_RE)
       task-0004:                   a conventional-commit subject
-      Merge branch 'x/task-0004'   git's own default merge message
+      ^Merge branch 'x/task-0004'  git's own default merge message (line start)
 
     The third is the one that carries most merges in `solo` mode, where the
     pipeline merges locally: a task whose commits carry no tag at all still
     leaves its id in the merge commit. Matching only the bracketed form made
     every other spelling read as unmerged, so a genuinely merged task parked
     forever.
+
+    The bracketed arm is anchored to the start of a line too. Unanchored, any
+    commit that merely MENTIONED `[task-0004]` mid-sentence ("revert the fix from
+    [task-0004]") read as that task's own merge, which closed a run that had
+    skipped its commit checkpoint.
 
     Both non-bracketed arms need a TERMINATOR, or the id is only a prefix and
     the wrong task closes:
@@ -252,8 +260,8 @@ def task_in_main(repo: Path, task: str) -> bool | None:
     a CEO decision and did NOT port - an arm matching a convention this template
     does not have would be dead on arrival."""
     code, out = _git(repo, "log", trunk(repo), "--oneline", "-E",
-                     f"--grep=(\\[{task}\\]|^{task}:"
-                     f"|Merge branch '[^']*{task}[^0-9a-z])", "-1")
+                     f"--grep=(^[[:space:]]*\\[{task}\\]|^{task}:"
+                     f"|^Merge branch '[^']*{task}[^0-9a-z])", "-1")
     if code != 0:
         return None
     return bool(out)

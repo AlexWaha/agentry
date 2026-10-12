@@ -81,7 +81,7 @@ class TwoRepoMergeTest(unittest.TestCase):
         """The task's branch in `name`, tagged and merged into that repo's main."""
         repo = self.repos[name]
         self.git(repo, "checkout", "-b", BRANCH)
-        self.commit(repo, f"feat: work [{TASK}]")
+        self.commit(repo, f"[{TASK}] feat: work")
         self.git(repo, "checkout", "main")
         self.git(repo, "merge", "--no-ff", "-m", f"merge {BRANCH}", BRANCH)
 
@@ -89,7 +89,7 @@ class TwoRepoMergeTest(unittest.TestCase):
         """The task's branch in `name` with one tagged commit, never merged."""
         repo = self.repos[name]
         self.git(repo, "checkout", "-b", BRANCH)
-        self.commit(repo, f"wip [{TASK}]")
+        self.commit(repo, f"[{TASK}] wip")
         self.git(repo, "checkout", "main")
 
     def declare(self, repo_line: str) -> None:

@@ -30,6 +30,7 @@ sys.path.insert(0, str(TESTS_DIR))
 
 import agent_gate
 import pretool_gate
+from gate_allow import assert_not_denied
 from test_pretool_gate_git import TempRepo, denial_reason, gate_state
 
 WORK_BRANCH = "bugfix/task-9109"
@@ -245,10 +246,27 @@ class GroupedGitUnderAgentProfilesTest(unittest.TestCase):
         for git in READ_ONLY:
             for template in GROUPING:
                 command = render(template, git)
+                if "FOO=1" in template:
+                    continue  # a NAME=value prefix is refused for these profiles, see below
                 for name in ("handle_readonly", "handle_docs"):
                     with self.subTest(profile=name, command=command):
                         code, err = run_profile(name, command)
                         self.assertEqual(0, code, err)
+
+    def test_readonly_and_docs_refuse_a_name_value_prefix_even_on_read_only_git(self):
+        # SEC-A H1 of task-0120: the environment reaches the program's own configuration
+        # (RIPGREP_CONFIG_PATH, GIT_PAGER, PATH), so no prefix is allowed in front of an
+        # allowlisted program. The dev profile has no allowlist and keeps allowing it.
+        for git in READ_ONLY:
+            for template in GROUPING:
+                command = render(template, git)
+                if "FOO=1" not in template:
+                    continue
+                for name in ("handle_readonly", "handle_docs"):
+                    with self.subTest(profile=name, command=command):
+                        code, err = run_profile(name, command)
+                        self.assertEqual(2, code, err)
+                        self.assertIn("FOO= prefix", err)
 
     def test_a_grouped_force_push_is_still_a_force_push(self):
         self.assertTrue(agent_gate.is_force_push("(git push --force origin x)"))
@@ -299,7 +317,8 @@ class GroupParenthesesAreNotRewrittenElsewhereTest(unittest.TestCase):
                          pretool_gate.git_invocations("(git push origin 'a b')"))
 
     def test_an_unmatched_closer_such_as_a_case_pattern_is_padded(self):
-        close = pretool_gate.GROUP_CLOSE
+        # padded with a marker of its own: only a group's closer ends a group (task-0112)
+        close = pretool_gate.PATTERN_CLOSE
         padded = [t for t in pretool_gate.pad_separators("a) b").split(" ") if t]
         self.assertEqual(["a", close, "b"], padded)
         self.assertIn(("push", ["origin", "main"]),
@@ -460,7 +479,7 @@ class SyntaxThatIsNoGitStaysAllowedTest(unittest.TestCase):
             for name in ("handle_readonly", "handle_docs", "handle_dev"):
                 with self.subTest(profile=name, command=command):
                     code, err = run_profile(name, command)
-                    self.assertEqual(0, code, err)
+                    assert_not_denied(self, name, code, err)
 
     def test_the_main_thread_gate_allows_them(self):
         with TempRepo() as repo, gate_state(runs={TASK: {}}):

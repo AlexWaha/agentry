@@ -4,7 +4,9 @@
 The orchestrator runs this only after the CEO explicitly approves in chat. It
 flips the deterministic flag that pretool_gate.py checks before allowing
 `git commit` / `git push`. `--reject` sends the task back: to `implement` from
-the commit checkpoint, to the plan step while the plan is still unapproved.
+the commit checkpoint, to the plan step while the plan is still unapproved. It
+needs `--reason`: the reason is what the event journal records against the
+rejection, and a rejection nobody explained cannot be learned from.
 
 Trust note: nothing binds this to a real user message; it prevents accidental
 skips and out-of-order commits, not a model that deliberately self-approves. The
@@ -14,10 +16,10 @@ CLI:
     python approve.py --task task-0007 --gate commit
     python approve.py --task task-0007 --gate push
     python approve.py --task task-0007 --gate plan
-    python approve.py --task task-0007 --reject
+    python approve.py --task task-0007 --reject --reason "diff touches an unrelated file"
     python approve.py --task task-0007 --pause "CEO force majeure: task-0058 first"
     python approve.py --task task-0007 --resume
-    python approve.py --trunk-push
+    python approve.py --trunk-push [--remote NAME]
 """
 
 from __future__ import annotations
@@ -48,8 +50,11 @@ def trunk_name() -> str:
     return "main" if name.startswith("{{") else name
 
 
-def record_trunk_push() -> int:
-    """Record the CEO's approval to publish the trunk once.
+def record_trunk_push(remote: str = pretool_gate.TRUNK_PUSH_DEFAULT_REMOTE) -> int:
+    """Record the CEO's approval to publish the trunk once, to `remote`.
+
+    The remote is part of the approval: a push of the trunk to any other remote
+    name or URL is a different push and does not spend or use it.
 
     Solo mode only. In `pr` mode the trunk is reached by a pull request, so a
     marker there would be an approval for a step that has no legitimate
@@ -68,16 +73,23 @@ def record_trunk_push() -> int:
             f"{' / '.join(pretool_gate.PUSH_PROTECTED_ALWAYS)} only. Writing the marker "
             f"would record an approval no push can ever use.")}))
         return 2
+    if not remote.strip() or remote != remote.strip() or remote.startswith("-"):
+        print(json.dumps({"error": f"'{remote}' is not a remote name the gate can match: give "
+                                   f"the remote exactly as the push command will name it."}))
+        return 2
     path = pretool_gate.trunk_push_marker_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({
         "trunk": trunk,
+        "remote": remote,
         "lane": state.LANE,
         "approved": datetime.now(timezone.utc).isoformat(),
     }), encoding="utf-8")
+    state.emit("approved", "", outcome="trunk_push", detail={"trunk": trunk, "remote": remote})
     print(json.dumps({"ok": True, "message": (
-        f"trunk push approved - ONE push to '{trunk}' is now permitted in lane "
-        f"'{state.LANE or 'default'}'; that push consumes the approval."), "marker": str(path)},
+        f"trunk push approved - ONE push to '{trunk}' on remote '{remote}' is now permitted "
+        f"in lane '{state.LANE or 'default'}'; that push consumes the approval."),
+        "marker": str(path)},
         indent=2))
     return 0
 
@@ -220,6 +232,9 @@ def main() -> int:
     parser.add_argument("--reject", action="store_true",
                         help="send the task back (implement, or plan while the plan is "
                              "unapproved), clearing approvals")
+    parser.add_argument("--reason", metavar="TEXT",
+                        help="with --reject: why the CEO sent the task back (required); "
+                             "recorded in the event journal")
     parser.add_argument("--pause", metavar="REASON",
                         help="set the task aside (CEO force majeure): refused while it has "
                              "uncommitted work; records REASON and whether it had commits")
@@ -227,10 +242,13 @@ def main() -> int:
                         help="bring a paused task back at the stage it was paused at")
     parser.add_argument("--trunk-push", action="store_true",
                         help="solo mode only: allow ONE push of the trunk to the remote")
+    parser.add_argument("--remote", default=pretool_gate.TRUNK_PUSH_DEFAULT_REMOTE,
+                        help="with --trunk-push: the remote name the push will use "
+                             "(default origin); a push naming another remote or a URL is refused")
     args = parser.parse_args()
 
     if args.trunk_push:
-        return record_trunk_push()
+        return record_trunk_push(args.remote)
     if not args.task:
         print(json.dumps({"error": "need --task task-XXXX (or --trunk-push)"}))
         return 2
@@ -260,6 +278,13 @@ def main() -> int:
         return 0
 
     if args.reject:
+        reason = (args.reason or "").strip()
+        if not reason:
+            conn.close()
+            print(json.dumps({"error": "--reject needs --reason \"<why>\": the reason is "
+                                       "recorded against the rejection, and a task sent back "
+                                       "without one cannot be learned from"}))
+            return 2
         # The run's own flow: a rejected plan goes back to its first planning
         # stage, not to the build flow's `implement`.
         first, clear_plan = reject_target(state.load_pipeline(), run)
@@ -267,7 +292,8 @@ def main() -> int:
         state.set_fields(conn, args.task, stage=first, stage_status=state.ST_IN_PROGRESS,
                          awaiting_human="", commit_approved=0, push_approved=0, **plan_reset,
                          retries=0, continuations=0,
-                         paused_status="", pause_reason="", pause_kind="")
+                         paused_status="", pause_reason="", pause_kind="",
+                         event="rejected", reason=reason)
         msg = f"rejected - {args.task} sent back to '{first}'."
     elif args.gate in approvals.APPROVAL_FIELD and run[approvals.APPROVAL_FIELD[args.gate]]:
         # Recorded once, durably. A second call changes nothing, so a repeated

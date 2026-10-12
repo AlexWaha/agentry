@@ -1,9 +1,9 @@
 # Stack
 
-**Date:** 2026-10-09
-**Author:** technical-writer (task-0052, swarm task-0118)
+**Date:** 2026-10-12
+**Author:** technical-writer (task-0052, swarm tasks 0118 and 0120)
 **Status:** Draft
-**Version:** 2.0
+**Version:** 2.1
 
 Agentry is a Python harness for Claude Code. It has no application server, no
 database server, no frontend and no HTTP API. This file records the stack and
@@ -28,7 +28,7 @@ gates run and this file is the one that is wrong.
 | Language | Python 3.12 or newer (the scripts parse on 3.9; the README sets 3.12 as the supported floor) | ACTIVE |
 | Runtime dependencies | None. Every script under `.claude/tools/` uses the standard library only (`json`, `sqlite3`, `subprocess`, `argparse`) | ACTIVE |
 | Framework | None | n/a |
-| State store | SQLite via stdlib `sqlite3`: `.agentry/state/run.db` (pipeline runs, one extra file per lane) | ACTIVE |
+| State store | SQLite via stdlib `sqlite3`: `.agentry/state/run.db` (pipeline runs, one extra file per lane) and `.agentry/state/events.db` (append-only event journal, WAL mode, a report: only `supervisor.progress_at` reads it, and only to veto a relaunch (recent gate evidence keeps a run HEALTHY); no gate reads it; replaces the retired `gate_log` table) | ACTIVE |
 | Memory store | SQLite with an FTS5 index: `.agentry/memory/memory.db` | ACTIVE |
 | Host | Claude Code (hooks: PreToolUse, PostToolUse, SessionStart, SubagentStart, SubagentStop, Stop; measured against build 2.1.295) | ACTIVE |
 | Cache or queue | None | n/a |
@@ -89,6 +89,11 @@ task or changes state, so it was deliberately left unexecuted.
 | `python .claude/tools/pipeline/stack_gate.py --task task-XXXX --stage implement\|test\|review [--repo KEY]` | Runs the per-repo gate commands from `repos{}` in `pipeline.json` | `stack_gate.py` | 0 (`--stage review --repo agentry`) |
 | `python .claude/tools/pipeline/supervisor.py --stop` | Stops the detached supervisor daemon | `pipeline.json` `supervisor._comment` | not run (changes state) |
 | `python .claude/tools/memory/memory.py --query "<topic>"` | Queries the memory store (`--record`, `--export`, `--stats` also exist) | `rules/self-learning.md` | 0 |
+| `python .claude/tools/memory/memory.py --refine --signature S [--agent A] [--trigger\|--what\|--why\|--fix\|--area\|--task ...]` | Corrects a recorded row in place instead of adding a near-duplicate. `--retire --signature S [--agent A] --reason TEXT` withdraws a wrong row from retrieval (flag plus removal from the FTS index). A duplicate `--record` is refused with these two commands printed | `skills/self-learning` | not run (changes state) |
+| `python .claude/tools/pipeline/events.py --task task-XXXX` / `--summary [--since DATE]` | Prints the event journal (`.agentry/state/events.db`) for one task or for all tasks, as JSON. `approve.py --reject` now requires `--reason "<why>"` | `rules/orchestration.md` "Event journal" | 0 |
+| `python .claude/tools/pipeline/zones.py --prove --task task-XXXX` / `--show` | Freezes the board's `## Zones` map for a swarm task (exit 1 names overlaps), or prints the frozen map (`--show` needs no task) | `skills/swarm/SKILL.md` | not run (needs a swarm task) |
+| `python .claude/tools/pipeline/leak_guard.py --ref REF` | Refuses a ref that adds a path under `.agentry/` that `origin/main` lacks (exit 0 clean, 1 leaked, 2 error). Also run by every `git push` and by `.githooks/pre-push`; enable the hook once per clone with `git config core.hooksPath .githooks` | `rules/git-workflow.md` | not run (needs `origin/main`) |
+| `python .claude/tools/pipeline/approve.py --task task-XXXX --trunk-push [--remote NAME]` | Records the one-shot CEO approval for pushing the trunk to the named remote (default `origin`). Orchestrator only, `solo` mode | `rules/git-workflow.md` | not run (changes state) |
 | `python .claude/tools/setup/repo_scan.py --root DIR [--json]` | Lists the repos found under a root, for onboarding | `repo_scan.py` | 0 |
 
 Gate agreement: the build, test and lint commands in the table match
@@ -149,3 +154,4 @@ The module-by-module layout, the dependency rules and the data flow are in
 | Version | Date | Change |
 |---|---|---|
 | 2.0 | 2026-10-09 | Replaced the onboarding template with Agentry's real stack, commands and variables (task-0052). |
+| 2.1 | 2026-10-12 | Added the event journal, memory refine/retire, swarm zones, leak guard and trunk-push remote commands (task-0120 subtasks 0046, 0086, 0060, 0041, 0113). |

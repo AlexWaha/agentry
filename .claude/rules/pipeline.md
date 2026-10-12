@@ -102,7 +102,8 @@ passes.
   `pipelines.build` (the stage declaring the `plan` checkpoint), keeps the
   approval in `run.db` (so it survives a session restart), and fails open on an
   unreadable state file. Files written by an interpreter (`python -c
-  "open(...)"`) are outside what it can read. `approve.py --reject` at the plan
+  "open(...)"`) are outside what it can read. `approve.py --reject --reason
+  "<why>"` (the reason is required) at the plan
   step stays at `plan`; from the commit checkpoint it returns to `implement`
   and keeps the plan approval.
 - **Spec drift is a defect.** During `implement`, any change that does not
@@ -137,6 +138,14 @@ passes.
   does not suppress it; and the Stop hook reports the debt only after it has
   declined to drive an in-flight run, then repeats up to three stops before
   handing it to the CEO and going quiet.
+- **Subagent limits.** What the hooks hold subagents to, and what they do not, is
+  stated in `orchestration.md`, "Subagent enforcement". Read its NOT COVERED list
+  before relying on a hook as a boundary.
+- **History.** Stage transitions, gate results, approvals, rejections (with their
+  reasons) and merges are journaled in `.agentry/state/events.db`; `gate_log` in
+  `run.db` is retired. Read it with `python .claude/tools/pipeline/events.py
+  --task T` or `--summary [--since D]`. No gate reads the journal; only
+  `supervisor.progress_at` reads it, and only to veto a relaunch.
 - **Gate failure.** The owning agent fixes and re-runs; after the retry budget
   (`pipeline.json`), the task is parked `blocked` and surfaced to the CEO.
 - **Self-learning.** At each stage/session end, capture lessons per

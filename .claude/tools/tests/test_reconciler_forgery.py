@@ -86,8 +86,9 @@ class ReconcilerForgeryTest(unittest.TestCase):
         (self.dirs[folder] / f"{task}.md").write_text(
             f"---\nid: 1\nrepo: app\n{body}\ncompleted:\n---\n", encoding="utf-8")
 
-    def run_row(self, stage: str, awaiting: str = "") -> None:
-        self.runs.append({"task": TASK, "stage": stage, "awaiting_human": awaiting})
+    def run_row(self, stage: str, awaiting: str = "", commit_approved: int = 0) -> None:
+        self.runs.append({"task": TASK, "stage": stage, "awaiting_human": awaiting,
+                          "commit_approved": commit_approved})
 
     def reconcile(self) -> tuple[list, list]:
         return stop_gate.reconcile_status_drift(object())
@@ -135,7 +136,7 @@ class ReconcilerForgeryTest(unittest.TestCase):
         self.assertEqual("backlog", self.where("task-9201"))
 
     def test_a_run_at_a_non_done_stage_is_never_moved_even_when_main_carries_the_task(self):
-        self.merge_branch(f"feature/{TASK}", f"work [{TASK}]")
+        self.merge_branch(f"feature/{TASK}", f"[{TASK}] work")
         self.write("active", TASK)
         for stage in ("plan", "implement", "test", "review", "ready"):
             with self.subTest(stage=stage):
@@ -153,10 +154,93 @@ class ReconcilerForgeryTest(unittest.TestCase):
         self.assertEqual(([], []), self.reconcile())
         self.set_fields.assert_not_called()
 
+    def test_a_mention_of_the_tag_inside_a_sentence_closes_nothing(self):
+        # A trunk commit ABOUT the task, not the task's own: the tag does not lead
+        # a line. Both reconcile loops read it as unmerged.
+        self.commit(f"docs: revert the retry fix from [{TASK}] for now")
+        self.write("done", TASK)
+        self.run_row("implement", commit_approved=1)
+        self.write("active", "task-9300")
+
+        self.assertEqual(([], []), self.reconcile())
+        self.set_fields.assert_not_called()
+
+    def test_a_forged_mention_does_not_close_a_file_that_has_no_run(self):
+        self.commit(f"chore: see also [{TASK}] and its follow-ups")
+        self.write("active", TASK)
+
+        self.assertEqual(([], []), self.reconcile())
+        self.assertEqual("active", self.where(TASK))
+
+    def test_a_stale_run_that_never_had_its_commit_approved_is_not_closed(self):
+        self.merge_branch(f"feature/{TASK}", f"[{TASK}] work")
+        self.write("done", TASK)
+        self.run_row("implement", commit_approved=0)
+
+        self.assertEqual(([], []), self.reconcile())
+        self.set_fields.assert_not_called()
+
+    def test_an_umbrella_whose_commit_was_never_approved_sweeps_no_subtask(self):
+        self.merge_branch(f"feature/{TASK}", f"[{TASK}] work")
+        self.write("active", TASK, f"epic: {EPIC}\numbrella: true\nsubtasks: [task-9201]")
+        self.write("backlog", "task-9201", f"epic: {EPIC}")
+        self.run_row("done", commit_approved=0)
+
+        self.assertEqual(([TASK], []), self.reconcile())
+        self.assertEqual("backlog", self.where("task-9201"))
+
+    def test_an_umbrella_file_with_no_run_row_sweeps_no_subtask(self):
+        self.merge_branch(f"feature/{TASK}", f"[{TASK}] work")
+        self.write("active", TASK, f"epic: {EPIC}\numbrella: true\nsubtasks: [task-9201]")
+        self.write("backlog", "task-9201", f"epic: {EPIC}")
+
+        self.assertEqual(([TASK], []), self.reconcile())
+        self.assertEqual("backlog", self.where("task-9201"))
+
+    def test_a_forged_orphan_in_done_is_not_overwritten_by_the_sweep(self):
+        # done/task-9201.md already exists (forged or stale); a copy of the same
+        # id sits in backlog/. The sweep must leave the done/ record untouched.
+        self.merge_branch(f"feature/{TASK}", f"[{TASK}] work")
+        self.write("active", TASK, f"epic: {EPIC}\numbrella: true\nsubtasks: [task-9201]")
+        self.write("backlog", "task-9201", f"epic: {EPIC}\nmarker: backlog-copy")
+        self.write("done", "task-9201", f"epic: {EPIC}\nmarker: done-original")
+        self.run_row("done", commit_approved=1)
+
+        self.assertEqual(([TASK], []), self.reconcile())
+        self.assertIn("marker: done-original",
+                      (self.dirs["done"] / "task-9201.md").read_text(encoding="utf-8"))
+        self.assertTrue((self.dirs["backlog"] / "task-9201.md").is_file())
+
+    def test_a_forged_merge_branch_phrase_inside_a_sentence_closes_nothing(self):
+        self.commit(f"docs: quote the old Merge branch 'feature/{TASK}' message")
+        self.write("done", TASK)
+        self.run_row("implement", commit_approved=1)
+
+        self.assertEqual(([], []), self.reconcile())
+        self.set_fields.assert_not_called()
+
+    def test_gits_own_merge_message_at_line_start_still_closes(self):
+        self.git("checkout", "-b", f"feature/{TASK}")
+        self.commit("untagged work")
+        self.git("checkout", "main")
+        self.git("merge", "--no-ff", f"feature/{TASK}")
+        self.write("done", TASK)
+        self.run_row("implement", commit_approved=1)
+
+        self.assertEqual(([], [TASK]), self.reconcile())
+
+    def test_a_tag_after_leading_blanks_still_counts(self):
+        # Same grammar as pretool_gate.COMMIT_TAG_RE: blanks, then the tag.
+        self.commit(f"  [{TASK}] work with an indented subject")
+        self.write("done", TASK)
+        self.run_row("implement", commit_approved=1)
+
+        self.assertEqual(([], [TASK]), self.reconcile())
+
     # --- the legitimate paths still close -----------------------------------------
 
     def test_a_run_at_done_with_a_tagged_commit_on_main_closes(self):
-        self.merge_branch(f"feature/{TASK}", f"work [{TASK}]")
+        self.merge_branch(f"feature/{TASK}", f"[{TASK}] work")
         self.write("active", TASK)
         self.run_row("done", awaiting="merge")
 
@@ -167,7 +251,7 @@ class ReconcilerForgeryTest(unittest.TestCase):
 
     def test_a_run_at_done_without_a_tagged_commit_stays(self):
         self.git("checkout", "-b", f"feature/{TASK}")
-        self.commit(f"wip [{TASK}]")
+        self.commit(f"[{TASK}] wip")
         self.git("checkout", "main")
         self.write("active", TASK)
         self.run_row("done", awaiting="merge")
@@ -176,7 +260,7 @@ class ReconcilerForgeryTest(unittest.TestCase):
         self.assertEqual("active", self.where(TASK))
 
     def test_a_file_with_no_run_row_and_a_tagged_commit_on_main_closes(self):
-        self.merge_branch(f"feature/{TASK}", f"work [{TASK}]")
+        self.merge_branch(f"feature/{TASK}", f"[{TASK}] work")
         self.write("active", TASK)
 
         self.assertEqual(([TASK], []), self.reconcile())
@@ -184,17 +268,18 @@ class ReconcilerForgeryTest(unittest.TestCase):
         self.set_fields.assert_not_called()
 
     def test_the_subtask_sweep_runs_after_a_legitimate_close(self):
-        self.merge_branch(f"feature/{TASK}", f"work [{TASK}]")
+        self.merge_branch(f"feature/{TASK}", f"[{TASK}] work")
         self.write("active", TASK, f"epic: {EPIC}\numbrella: true\nsubtasks: [task-9201]")
         self.write("backlog", "task-9201", f"epic: {EPIC}")
+        self.run_row("done", commit_approved=1)
 
         self.assertEqual(([TASK, "task-9201"], []), self.reconcile())
         self.assertEqual("done", self.where("task-9201"))
 
     def test_a_stale_run_closes_when_main_carries_the_task(self):
-        self.merge_branch(f"feature/{TASK}", f"work [{TASK}]")
+        self.merge_branch(f"feature/{TASK}", f"[{TASK}] work")
         self.write("done", TASK)
-        self.run_row("implement")
+        self.run_row("implement", commit_approved=1)
 
         self.assertEqual(([], [TASK]), self.reconcile())
         self.assertEqual("done", self.set_fields.call_args.kwargs["stage"])

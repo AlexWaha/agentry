@@ -41,6 +41,7 @@ import pretool_gate
 import repo_scan
 import state
 import tmproot
+from gate_allow import assert_not_denied
 
 PROFILES = ("handle_dev", "handle_readonly", "handle_docs")
 SCAN = ".claude/tools/setup/repo_scan.py"
@@ -122,7 +123,7 @@ class AgentGateDeniesTheWriteTest(unittest.TestCase):
             for command in READS:
                 with self.subTest(profile=name, command=command):
                     code, err = run_profile(name, command)
-                    self.assertEqual(0, code, err)
+                    assert_not_denied(self, name, code, err)
 
     def test_the_verdict_function_names_the_script_only_for_writes(self):
         for command in WRITES:

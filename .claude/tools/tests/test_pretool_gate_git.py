@@ -56,6 +56,11 @@ def gate_state(mode: str | None = None, push_approval: bool | None = None,
     the projects whose trunk is neither 'main' nor 'master'.
     """
     original = (state.load_pipeline, state.DB_PATH, state.STATE_DIR)
+    # A throwaway repo has no origin/main, which the leak guard (task-0041) reads as
+    # "cannot verify" and denies. These tests are about the other push checks, so the
+    # guard answers clean here; test_push_leak_guard drives the real one.
+    real_leak_check = pretool_gate.leak_check
+    pretool_gate.leak_check = lambda ref, repo: (0, [])
     workflow = {}
     if mode is not None:
         workflow["mode"] = mode
@@ -86,15 +91,20 @@ def gate_state(mode: str | None = None, push_approval: bool | None = None,
         yield
     finally:
         state.load_pipeline, state.DB_PATH, state.STATE_DIR = original
+        pretool_gate.leak_check = real_leak_check
         tmproot.rmtree(tmp)
 
 
-def denial_reason(command: str, cwd: str) -> tuple:
+def denial_reason(command: str, cwd: str, orch: bool = True) -> tuple:
     """(exit code, stderr) of handle_bash - the deny message is an acceptance
-    criterion of its own, so tests read it instead of only the exit code."""
+    criterion of its own, so tests read it instead of only the exit code.
+
+    The call is the MAIN thread's by default: a subagent never pushes the trunk
+    (task-0120 SEC-B), so a test about the trunk-push approval must be the
+    orchestrator's. Pass orch=False to drive the subagent payload."""
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
-        code = pretool_gate.handle_bash(command, cwd=cwd)
+        code = pretool_gate.handle_bash(command, cwd=cwd, orch=orch)
     return code, err.getvalue()
 
 
@@ -807,17 +817,34 @@ class UnparseableGitTest(unittest.TestCase):
                 pretool_gate.handle_bash('git checkout -b evil "broken', cwd=repo.path), 2)
 
     def test_parse_failure_message_names_the_real_cause(self):
-        # A heredoc carrying an apostrophe was refused with "Commit for task-XXXX
-        # is not approved yet" - the wrong cause entirely.
+        # Unbalanced quote text was refused with "Commit for task-XXXX is not
+        # approved yet" - the wrong cause entirely.
         import contextlib
         import io
-        command = "cat <<'EOF' > note.txt\ngit history: don't guess\nEOF"
+        command = 'git log --grep "do not guess'
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             code = pretool_gate.handle_bash(command)
         self.assertEqual(code, 2)
         self.assertIn("cannot be tokenised", err.getvalue())
         self.assertNotIn("not approved yet", err.getvalue())
+
+    def test_an_apostrophe_in_a_heredoc_body_is_data_not_a_parse_failure(self):
+        # task-0116 (task-0118 QA): the quoted-delimiter body is stdin text, and an
+        # unbalanced quote inside it used to keep the body unstripped, so the whole
+        # command was refused as untokenisable. Only a shell consumer keeps the body.
+        import contextlib
+        import io
+        for command in ("cat <<'EOF' > note.txt\ngit history: don't guess\nEOF",
+                        "python - <<'PY'\n# it's a test\nprint(1)\nPY"):
+            with self.subTest(command=command):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    code = pretool_gate.handle_bash(command)
+                self.assertEqual(code, 0, err.getvalue())
+        shell_consumer = "bash <<'EOF'\ngit history: don't guess\nEOF"
+        self.assertTrue(pretool_gate.runs_a_shell(shell_consumer))
+        self.assertEqual(shell_consumer, pretool_gate.strip_heredocs(shell_consumer))
 
     def test_unparseable_git_is_still_mutating_for_agents(self):
         self.assertTrue(agent_gate.git_mutates('git checkout -b evil "broken'))
@@ -1218,12 +1245,12 @@ class TrunkPushApprovalTest(unittest.TestCase):
             with self.subTest(command=command):
                 with self.on_trunk() as path, gate_state(mode="solo"):
                     self.approve()
-                    self.assertEqual(0, pretool_gate.handle_bash(command, cwd=path))
+                    self.assertEqual(0, pretool_gate.handle_bash(command, cwd=path, orch=True))
 
     def test_the_approval_is_consumed_by_the_push_it_allows(self):
         with self.on_trunk() as path, gate_state(mode="solo"):
             marker = self.approve()
-            self.assertEqual(0, pretool_gate.handle_bash("git push origin main", cwd=path))
+            self.assertEqual(0, pretool_gate.handle_bash("git push origin main", cwd=path, orch=True))
             self.assertFalse(marker.exists())
             code, err = denial_reason("git push origin main", path)
         self.assertEqual(2, code)
@@ -1305,7 +1332,7 @@ class TrunkPushApprovalTest(unittest.TestCase):
 
             run_git(["checkout", "-q", "main"], repo.path)
             self.assertEqual(0, pretool_gate.handle_bash("git push origin main",
-                                                        cwd=repo.path))
+                                                        cwd=repo.path, orch=True))
             self.assertFalse(marker.exists())
 
     def test_an_unapproved_protected_target_denies_without_burning_the_marker(self):
@@ -1413,9 +1440,12 @@ class GatedToolNamedNotRunTest(unittest.TestCase):
                 self.assertIn("orchestrator-only", msg)
 
     def test_untokenisable_text_still_refuses(self):
+        # It still refuses, but it now says why: the approve.py text named a script
+        # the command might never have run (task-0118 QA false positive).
         code, msg = self.dev(f"python {self.SCRIPT} --task \"don't")
         self.assertEqual(2, code)
-        self.assertIn("orchestrator-only", msg)
+        self.assertIn("cannot be tokenised", msg)
+        self.assertNotIn("orchestrator-only", msg)
 
     def test_waive_is_gated_on_the_invocation_not_the_mention(self):
         code, msg = self.dev("git show sha -- .claude/tools/pipeline/handoff.py")

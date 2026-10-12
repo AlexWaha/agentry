@@ -2,7 +2,9 @@
 """Pipeline run state - the orchestrator's memory outside the model.
 
 A tiny SQLite store (stdlib only) holding one row per task that is currently
-moving through the execution pipeline, plus an append-only gate log. Hook scripts
+moving through the execution pipeline. History does not live here: every write
+below also appends to the event journal (events.py, task-0046), which is
+evidence only and never read back to decide anything. Hook scripts
 (advance.py, gate.py, stop_gate.py, pretool_gate.py, approve.py) read and write
 through this module so the FSM decision is made by deterministic code, never by
 the probabilistic model.
@@ -22,8 +24,16 @@ import os
 import re
 import sqlite3
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+
+# The journal is evidence, never a dependency: a missing or broken events.py must
+# not take the run store (imported at the top of every hook) down with it.
+try:
+    import events
+except Exception:
+    events = None
 
 ROOT = Path(__file__).resolve().parents[3]
 STATE_DIR = ROOT / ".agentry" / "state"
@@ -317,13 +327,6 @@ def init_db(conn: sqlite3.Connection) -> None:
             continuations   INTEGER DEFAULT 0,
             updated         TEXT
         );
-        CREATE TABLE IF NOT EXISTS gate_log (
-            task TEXT,
-            stage TEXT,
-            cmd TEXT,
-            exit INTEGER,
-            at TEXT
-        );
         """
     )
     # Added after the first runs existed: default keeps them on the build flow.
@@ -353,6 +356,131 @@ def all_runs(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# --- event journal (task-0046) ----------------------------------------------------
+# Every run-store write below is mirrored into events.py AFTER its commit. The
+# journal is append-only evidence: nothing here or anywhere reads it to decide a
+# transition, and a failed append is reported on stderr and ignored.
+
+def _via() -> str:
+    """The stem of the script that made this write (`approve` = the CEO,
+    `advance` = a level grant, `stop_gate`, `supervisor`). '' when argv[0] is not a
+    plain name, so a hostile argv cannot put free text in the journal."""
+    stem = Path(sys.argv[0] or "").stem if sys.argv else ""
+    return stem if LANE_RE.match(stem) else ""
+
+
+@contextmanager
+def _beside_run_store():
+    """Yield the events module pointed at the directory of the run store in use,
+    or None when it did not import. The journal lives next to run.db, so a caller
+    that moves DB_PATH (every test sandbox) moves the journal with it and nothing
+    leaks into the live one; the module's own setting is put back afterwards."""
+    if events is None:
+        yield None
+        return
+    saved = events.STATE_DIR
+    events.STATE_DIR = Path(DB_PATH).parent
+    try:
+        yield events
+    finally:
+        events.STATE_DIR = saved
+
+
+def emit(kind: str, task: str, **fields) -> bool:
+    """Append one journal row. Never raises; False when it was skipped."""
+    try:
+        with _beside_run_store() as journal:
+            if journal is None:
+                return False
+            fields.setdefault("via", _via())
+            return journal.append(kind, task, **fields)
+    except Exception:
+        return False
+
+
+def emit_gate(task: str, stage: str, which: str, cmd: str, exit_code: int | None,
+              passed: bool, duration_ms: int) -> bool:
+    """One `gate` row. The command, its exit code and its duration are kept; its
+    output never is."""
+    outcome = ""
+    if events is not None:
+        outcome = events.GATE_PASS if passed else events.GATE_FAIL
+    return emit("gate", task, stage=stage, pipeline=which, outcome=outcome,
+                detail={"cmd": cmd, "exit": exit_code, "duration_ms": duration_ms})
+
+
+def last_event_at(task: str, kind: str = "") -> str:
+    """Timestamp of the newest journal row for `task` (of one kind), or ''. The
+    supervisor's liveness report is the only reader; the journal's own dedupe of
+    `merged` is the other. Neither decides a transition."""
+    try:
+        with _beside_run_store() as journal:
+            return journal.last_at(task, kind) if journal is not None else ""
+    except Exception:
+        return ""
+
+
+def _journal_write(task: str, before: dict | None, fields: dict, event: str,
+                   reason: str) -> None:
+    """Derive the journal rows of one set_fields() call from what changed.
+
+    `before` is the run row as it was; a field that did not change writes nothing,
+    so a repeated write (the merge park, a second approval) is not a second event.
+    Never raises."""
+    try:
+        old = before or {}
+        new_stage = fields.get("stage", old.get("stage") or "")
+        old_stage = old.get("stage") or ""
+        which = old.get("pipeline") or BUILD
+        why = {"reason": reason} if reason else {}
+
+        def put(kind: str, *, stage: str = "", from_stage: str = "", outcome: str = "",
+                detail: dict | None = None) -> None:
+            emit(kind, task, stage=stage or new_stage, from_stage=from_stage,
+                 outcome=outcome, pipeline=which, detail=detail if detail is not None else why)
+
+        if event == "rejected":
+            put("rejected", from_stage=old_stage)
+            # An attempt is counted from transition rows, and a rejection starts
+            # one even when the run goes back to the stage it was already in.
+            put("transition", from_stage=old_stage, detail={})
+            return
+
+        old_status = old.get("stage_status") or ""
+        status = fields.get("stage_status")
+        if status is not None:
+            if status == ST_PAUSED and old_status != ST_PAUSED:
+                put("paused", detail={"reason": fields.get("pause_reason") or reason,
+                                      "kind": fields.get("pause_kind") or ""})
+            elif old_status == ST_PAUSED and status != ST_PAUSED:
+                put("resumed", detail={"status": status})
+            elif status == ST_BLOCKED and old_status != ST_BLOCKED:
+                put("blocked")
+
+        if "stage" in fields and new_stage != old_stage:
+            put("transition", from_stage=old_stage, detail={})
+
+        waiting = fields.get("awaiting_human")
+        if waiting and waiting != old.get("awaiting_human"):
+            put("parked", outcome=str(waiting))
+
+        for column, value in fields.items():
+            if (column.endswith("_approved") and value and not old.get(column)):
+                put("approved", outcome=column[:-len("_approved")], detail={})
+
+        count = fields.get("continuations")
+        if count and int(count) > int(old.get("continuations") or 0):
+            put("continued", detail={"count": int(count)})
+
+        if event in ("merged", "closed"):
+            # One merge per task: a done run advanced again (the CEO re-running
+            # advance.py) must not push the registration-to-merge figure out.
+            if event == "closed" or not last_event_at(task, "merged"):
+                put(event)
+    except Exception:
+        pass
+
+
 def create_run(conn: sqlite3.Connection, task: str, task_type: str, stage: str,
                which: str = BUILD) -> dict:
     conn.execute(
@@ -361,6 +489,7 @@ def create_run(conn: sqlite3.Connection, task: str, task_type: str, stage: str,
         (task, task_type, stage, ST_IN_PROGRESS, which, now()),
     )
     conn.commit()
+    emit("registered", task, stage=stage, pipeline=which, detail={"type": task_type})
     return get_run(conn, task)  # type: ignore[return-value]
 
 
@@ -391,13 +520,26 @@ def run_pipeline(run: dict | None) -> str:
     return (run or {}).get("pipeline") or BUILD
 
 
-def set_fields(conn: sqlite3.Connection, task: str, **fields) -> None:
+def set_fields(conn: sqlite3.Connection, task: str, *, event: str = "", reason: str = "",
+               **fields) -> None:
+    """Write run columns, then journal what changed.
+
+    `event` names a fact the columns alone do not carry: `rejected` (the CEO sent
+    the run back), `merged` or `closed` (the run reached done because git says so).
+    `reason` is the human text for a blocked, rejected, paused or closed row. Both
+    only feed the journal; the UPDATE is exactly the `fields`."""
     if not fields:
         return
-    fields["updated"] = now()
-    cols = ", ".join(f"{k} = ?" for k in fields)
-    conn.execute(f"UPDATE runs SET {cols} WHERE task = ?", (*fields.values(), task))
+    try:
+        before = get_run(conn, task)
+    except Exception:
+        before = None
+    written = dict(fields)
+    written["updated"] = now()
+    cols = ", ".join(f"{k} = ?" for k in written)
+    conn.execute(f"UPDATE runs SET {cols} WHERE task = ?", (*written.values(), task))
     conn.commit()
+    _journal_write(task, before, fields, event, reason)
 
 
 def task_dir(task: str) -> str | None:
@@ -408,42 +550,46 @@ def task_dir(task: str) -> str | None:
     return None
 
 
-def task_repo(task: str) -> str | None:
-    """The `repo:` frontmatter value of a task file, wherever the file sits.
+def _head_field(task: str, key: str) -> str:
+    """One top-level frontmatter value of a task file, wherever the file sits,
+    with surrounding quotes stripped; '' when the file, the field or its value is
+    absent.
 
-    The single reader for that field: `stack_gate.py` dispatches a stage's gate
-    by it and `git_state.repos_for_task()` scopes merge detection by it, and the
-    two must not be able to resolve the same task to different repos. Only the
-    head of the file is read, so the word `repo:` inside the task's prose cannot
-    be mistaken for the field."""
-    for folder in TASK_DIRS.values():
-        path = folder / f"{task}.md"
-        try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[:40]
-        except OSError:
-            continue
-        for line in lines:
-            if line.startswith("repo:"):
-                return line.split(":", 1)[1].strip().strip("'\"") or None
-    return None
+    The single reader for every task-file field (`repo`, `branch`, `epic`,
+    `umbrella`, `subtasks`). Only the head is read: the frontmatter block, or the
+    first 40 lines when the file has none, so the word `repo:` inside a task's
+    prose cannot be mistaken for the field."""
+    folder = task_dir(task)
+    if folder is None:
+        return ""
+    try:
+        text = (TASK_DIRS[folder] / f"{task}.md").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    if text.startswith("---"):
+        head = text.split("\n---", 1)[0]
+    else:
+        head = "\n".join(text.splitlines()[:40])
+    m = re.search(rf"(?m)^{re.escape(key)}:[ \t]*(.*)$", head)
+    return m.group(1).strip().strip("'\"") if m else ""
+
+
+def task_repo(task: str) -> str | None:
+    """The `repo:` value of a task file, None when blank or absent.
+
+    `stack_gate.py` dispatches a stage's gate by it and
+    `git_state.repos_for_task()` scopes merge detection by it, and the two must
+    not be able to resolve the same task to different repos."""
+    return _head_field(task, "repo") or None
 
 
 def task_branch(task: str) -> str:
-    """The `branch:` frontmatter value of a task file ('' when absent): the
-    branch a task declares it rides on when it is not its own `<type>/task-NNNN`.
-    Merge detection already resolves a carrier branch from it; the commit gate
-    reads the same field to decide whether a commit tagged with this task may be
-    made on the checked-out branch. Head of the file only, like task_repo."""
-    for folder in TASK_DIRS.values():
-        path = folder / f"{task}.md"
-        try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[:40]
-        except OSError:
-            continue
-        for line in lines:
-            if line.startswith("branch:"):
-                return line.split(":", 1)[1].strip().strip("'\"")
-    return ""
+    """The `branch:` value of a task file ('' when absent): the branch a task
+    declares it rides on when it is not its own `<type>/task-NNNN`. Merge
+    detection resolves a carrier branch from it; the commit gate reads the same
+    field to decide whether a commit tagged with this task may be made on the
+    checked-out branch."""
+    return _head_field(task, "branch")
 
 
 def move_task(task: str, to: str) -> bool:
@@ -453,8 +599,10 @@ def move_task(task: str, to: str) -> bool:
     no frontmatter field to keep in step with it. Only `done` stamps a date,
     because that is the one transition worth reading off the file itself.
 
-    Fail-open: any error returns False without raising, so bookkeeping can never
-    brick the pipeline."""
+    Returns False and moves nothing when the destination file already exists:
+    `done/<task>.md` is the record of a finished task and a move must not replace
+    it. Fail-open: any error returns False without raising, so bookkeeping can
+    never brick the pipeline."""
     dst_dir = TASK_DIRS.get(to)
     if dst_dir is None:
         return False
@@ -469,40 +617,90 @@ def move_task(task: str, to: str) -> bool:
             if re.search(r"(?m)^completed:", text):
                 text = re.sub(r"(?m)^completed:.*$", f"completed: {stamp}", text, count=1)
         dst_dir.mkdir(parents=True, exist_ok=True)
-        (dst_dir / f"{task}.md").write_text(text, encoding="utf-8")
+        dst = dst_dir / f"{task}.md"
+        # Exclusive create: a file already sitting at the destination is never
+        # overwritten, whoever put it there. Exists-then-write would leave a gap
+        # for the same overwrite; "x" refuses atomically (FileExistsError).
+        try:
+            with open(dst, "x", encoding="utf-8") as out:
+                out.write(text)
+        except FileExistsError:
+            # A crash or lock between the create and the unlink below leaves both
+            # copies, and every retry would land here. The same text at the
+            # destination means the move already happened: finish it. Different
+            # text is somebody else's file and stays refused (move_conflicts()).
+            if not _same_task_text(dst.read_text(encoding="utf-8", errors="replace"), text):
+                return False
         src.unlink()
         return True
     except Exception:
         return False
 
 
+def _same_task_text(a: str, b: str) -> bool:
+    """Equal task-file text, ignoring the `completed:` stamp a retry on another
+    day would write differently."""
+    return re.sub(r"(?m)^completed:.*$", "", a) == re.sub(r"(?m)^completed:.*$", "", b)
+
+
+def move_conflicts() -> list[str]:
+    """Task ids whose file sits in done/ AND in backlog/ or active/ with
+    different text: the one state move_task() refuses for good, so nothing
+    resolves it without a human. Fail-open: never raises."""
+    found: list[str] = []
+    try:
+        for done in sorted(TASK_DIRS["done"].glob("task-*.md")):
+            for name in ("backlog", "active"):
+                twin = TASK_DIRS[name] / done.name
+                if twin.is_file() and not _same_task_text(
+                        done.read_text(encoding="utf-8", errors="replace"),
+                        twin.read_text(encoding="utf-8", errors="replace")):
+                    found.append(done.stem)
+                    break
+    except Exception:
+        pass
+    return found
+
+
 def move_task_to_done(task: str) -> bool:
     return move_task(task, "done")
 
 
-def _head_field(task: str, key: str) -> str:
-    """One top-level frontmatter value of a task file, '' when absent."""
-    folder = task_dir(task)
-    if folder is None:
-        return ""
-    text = (TASK_DIRS[folder] / f"{task}.md").read_text(encoding="utf-8", errors="replace")
-    head = text.split("\n---", 1)[0] if text.startswith("---") else text
-    m = re.search(rf"(?m)^{key}:[ \t]*(.*)$", head)
-    return m.group(1).strip() if m else ""
+def _commit_approved(task: str, conn: sqlite3.Connection | None) -> bool:
+    """True when the task's run row records an approved commit. Any error reading
+    it is False: the one caller sweeps files, and a sweep must never happen on an
+    unreadable answer."""
+    own = conn is None
+    try:
+        if own:
+            conn = connect()
+        return any(r["task"] == task and r.get("commit_approved") for r in all_runs(conn))
+    except Exception:
+        return False
+    finally:
+        if own and conn is not None:
+            conn.close()
 
 
-def move_swarm_subtasks(task: str) -> list[str]:
+def move_swarm_subtasks(task: str, conn: sqlite3.Connection | None = None) -> list[str]:
     """When an umbrella task (`umbrella: true`) has reached done/, move the
     subtask files it lists in `subtasks: [...]` there too - only those still in
     backlog/ or active/ whose `epic:` equals the umbrella's. An unlisted subtask,
     or one from another epic, stays. The single sweep behind both merge paths:
     advance.py's merge confirmation and stop_gate's drift reconciler.
 
+    Only when the umbrella's own run row has `commit_approved`: the umbrella:,
+    epic: and subtasks: lines are read from a file the agent being judged can
+    write, so they alone must not be able to move other tasks' files. `conn` is
+    the caller's open run-store connection; without one the store is opened here.
+
     Fail-open: any error returns what moved so far (or []), never raises."""
     moved: list[str] = []
     try:
         epic = _head_field(task, "epic")
         if _head_field(task, "umbrella").lower() != "true" or not epic:
+            return moved
+        if not _commit_approved(task, conn):
             return moved
         for sub in re.findall(r"task-\d+", _head_field(task, "subtasks")):
             if (sub != task and task_dir(sub) in ("backlog", "active")
@@ -513,12 +711,33 @@ def move_swarm_subtasks(task: str) -> list[str]:
     return moved
 
 
-def log_gate(conn: sqlite3.Connection, task: str, stage: str, cmd: str, exit_code: int) -> None:
-    conn.execute(
-        "INSERT INTO gate_log (task, stage, cmd, exit, at) VALUES (?, ?, ?, ?, ?)",
-        (task, stage, cmd, exit_code, now()),
-    )
-    conn.commit()
+def covering_umbrella(task: str) -> str | None:
+    """The done umbrella that covers a swarm subtask's handoff doc and memory
+    stamp, or None.
+
+    An umbrella task is documented once, for the whole swarm; its subtasks are
+    swept to done/ with it and carry no doc of their own, so the debt readers
+    (handoff.uncovered_done_tasks, update.unstamped_done_tasks) would otherwise
+    demand 15 documents for one piece of work. A task is covered when a file in
+    done/ is an umbrella (`umbrella: true`), shares the task's non-empty `epic:`
+    and lists the task in `subtasks:`. The umbrella must itself sit in done/, so a
+    queued or active file naming a task cannot cancel that task's debt.
+
+    Never raises: None means "not covered", the safe answer for a debt check."""
+    try:
+        epic = _head_field(task, "epic")
+        if not epic:
+            return None
+        for f in sorted(TASK_DIRS["done"].glob("task-*.md")):
+            umb = f.stem
+            if (umb != task and task_dir(umb) == "done"
+                    and _head_field(umb, "umbrella").lower() == "true"
+                    and _head_field(umb, "epic") == epic
+                    and task in re.findall(r"task-\d+", _head_field(umb, "subtasks"))):
+                return umb
+    except Exception:
+        pass
+    return None
 
 
 def _blocked_tasks(live: list[dict]) -> list[str]:
@@ -557,7 +776,7 @@ def _resume_text(conn: sqlite3.Connection) -> str:
         lines.append(f"BLOCKED, needs the CEO before anything else: {', '.join(stuck)}. "
                      f"advance.py will not move a blocked run - raise it with the CEO "
                      f"(AskUserQuestion), then either fix the blocker or run approve.py "
-                     f"--reject to send the task back.")
+                     f"--reject --reason \"<why>\" to send the task back.")
     # Same shape for a paused run: the line above would send the orchestrator to
     # advance a task the CEO deliberately set aside, and advance.py refuses it.
     paused = [r for r in live if is_paused(r)]

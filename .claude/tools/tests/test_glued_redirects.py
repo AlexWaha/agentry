@@ -8,14 +8,14 @@ overwrite any file with them, and a glued path-qualified NUL (`ls>./NUL`) slippe
 past every NUL deny. `orch_check_bash` also read only the FIRST write fragment,
 so `echo x > docs/a.md; echo y > src/app.py` was allowed for the main thread.
 
-The lookbehind still guards `->`, `-->` and the second `>` of `>>` / `<>`, so the
-arrows, descriptor duplications and quoted text below must stay no-write.
+The lookbehind still guards the second `>` of `>>` / `<>`, so descriptor
+duplications and quoted text below must stay no-write. It no longer guards a
+`-` (task-0108): an unquoted `echo x -> f` is a redirect to `f` in the shell.
 """
 
 from __future__ import annotations
 
 import io
-import re
 import sys
 import unittest
 import unittest.mock
@@ -23,9 +23,11 @@ from pathlib import Path
 
 TESTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS_DIR.parent / "pipeline"))
+sys.path.insert(0, str(TESTS_DIR))
 
 import agent_gate  # noqa: E402 - path set above
 import pretool_gate  # noqa: E402
+from gate_allow import assert_not_denied  # noqa: E402
 
 # glued command -> the fragment the classifier must report
 GLUED = {
@@ -35,18 +37,29 @@ GLUED = {
     "echo x>>f": ">>f",
     "ls 2>&1>f": ">f",
     'echo "hi">f': ">f",
+    "ls>|f": ">|f",
+    "ls>&f": ">&f",
+    "cat<>f": "<>f",
 }
 
-# The lookbehind task-0095 shipped, verbatim apart from the operator group.
-PRE_FIX_REDIR_RE = re.compile(
-    rf"(?<![-\w<>])(?P<op>{pretool_gate._REDIR_OP})\s*(?P<t>[^\s;|&<>]+)")
+# An unquoted arrow is a redirect: the shell splits `a->b` into the word `a-` and
+# `>b`. The old `-` guard in the lookbehind let all of these through (task-0108).
+ARROWS = {
+    "echo a->b": ">b",
+    "echo a-->b": ">b",
+    "echo x -> f": "> f",
+    "echo x-->f": ">f",
+    "git log --graph --format=%h->%s": ">%s",
+    "ls ->NUL": ">NUL",
+}
 
 # Text that merely contains `>` or an arrow, or duplicates a descriptor.
 NO_WRITE = (
-    "echo a->b", "echo a-->b", "git log --graph --format=%h->%s", "make 2>&1", "echo x>&2",
-    "ls 2>&1", "echo x 1>&2", "ls >&-", "echo 'k => v'", 'echo "k => v"', "echo 'x>y'",
-    'echo "x>y"', "echo '->' 'a>b'", "git commit -m 'merge a>b into c'",
-    'git commit -m "fix a->b => c"', 'python -c "print(1>0)"', "out=$(ls 2>&1)",
+    "make 2>&1", "echo x>&2", "ls 2>&1", "echo x 1>&2", "ls >&-", "echo 'k => v'",
+    'echo "k => v"', "echo 'x>y'", 'echo "x>y"', "echo '->' 'a>b'",
+    "git commit -m 'merge a>b into c'", 'git commit -m "fix a->b => c"',
+    'python -c "print(1>0)"', "out=$(ls 2>&1)", "echo 'a->b' \"c-->d\"",
+    "ls # a->b", "git log --format='%h->%s'",
 )
 
 ORCH_TWO_FRAGMENTS = (
@@ -75,21 +88,9 @@ def orchestrator_bash(command: str) -> tuple[int, str]:
         return run(lambda t, ti: pretool_gate.orch_check_bash(ti["command"]), command)
 
 
-class PreFixLookbehindFoundNothingTest(unittest.TestCase):
-    """Documents the defect on the old pattern, so the fix is not a rewrite of
-    the question: the pre-fix lookbehind finds no redirect in any glued form, and
-    the current REDIR_RE finds exactly the real one."""
+class OrchestratorFirstFragmentIsNotTheWholeStoryTest(unittest.TestCase):
 
-    def test_the_pre_fix_pattern_matches_none_of_the_glued_forms(self):
-        for command in GLUED:
-            with self.subTest(command=command):
-                masked = pretool_gate.mask_quoted(pretool_gate.strip_heredocs(command))
-                found = [m.group("op") + m.group("t") for m in PRE_FIX_REDIR_RE.finditer(masked)]
-                # `ls 2>&1>f` keeps its descriptor dup `2>&1`; no FILE target is found.
-                self.assertEqual([], [f for f in found if not f.startswith("2>&")],
-                                 f"the pre-fix pattern already saw {command!r}")
-
-    def test_the_pre_fix_first_fragment_rule_let_a_second_redirect_through(self):
+    def test_a_second_redirect_is_a_fragment_of_its_own(self):
         # redirect_write_target() is the first fragment, which is all the old
         # orch_check_bash read: it is allowed, and only the second one is not.
         command = ORCH_TWO_FRAGMENTS[0]
@@ -138,6 +139,32 @@ class GluedRedirectYieldsItsRealTargetTest(unittest.TestCase):
                 self.assertEqual(0, run(agent_gate.handle_dev, command)[0])
 
 
+class UnquotedArrowsAreRealRedirectsTest(unittest.TestCase):
+    """task-0108 (task-0102 review M1). The lookbehind skipped a `-`, so a readonly
+    or docs agent could write a file through `echo x -> f`; the shell does."""
+
+    def test_the_classifier_reports_the_target_after_the_arrow(self):
+        for command, expected in ARROWS.items():
+            with self.subTest(command=command):
+                self.assertEqual(expected, pretool_gate.redirect_write_target(command))
+
+    def test_readonly_and_docs_are_denied_each_arrow(self):
+        for command in ARROWS:
+            for name in ("handle_readonly", "handle_docs"):
+                with self.subTest(command=command, profile=name):
+                    code, _ = run(getattr(agent_gate, name), command)
+                    self.assertEqual(2, code, f"{name} was ALLOWED {command!r}")
+
+    def test_the_orchestrator_is_denied_an_arrow_outside_its_allowlist(self):
+        self.assertEqual(2, orchestrator_bash("echo a->b")[0])
+        self.assertEqual(0, orchestrator_bash("echo a->docs/b.md")[0])
+
+    def test_an_arrow_in_a_comment_or_a_heredoc_body_is_still_text(self):
+        for command in ("ls # a->b", "echo ok # a-->b", "cat <<EOF\nrule -> recorded\nEOF"):
+            with self.subTest(command=command):
+                self.assertEqual("", pretool_gate.redirect_write_target(command))
+
+
 class ArrowsAndDuplicationsStayNoWriteTest(unittest.TestCase):
 
     def test_the_classifier_reports_no_target_for_each(self):
@@ -150,7 +177,7 @@ class ArrowsAndDuplicationsStayNoWriteTest(unittest.TestCase):
             if command.startswith("git commit"):
                 continue
             with self.subTest(command=command):
-                self.assertEqual(0, run(agent_gate.handle_readonly, command)[0])
+                assert_not_denied(self, "handle_readonly", *run(agent_gate.handle_readonly, command))
 
     def test_the_orchestrator_is_not_denied_any_of_them(self):
         for command in NO_WRITE:

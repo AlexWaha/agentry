@@ -202,13 +202,29 @@ class UmbrellaDoneMovesSubtasksTest(unittest.TestCase):
         for name in ("backlog", "active", "done"):
             self.dirs[name] = self.tmp / name
             self.dirs[name].mkdir()
-        patcher = unittest.mock.patch.object(state, "TASK_DIRS", self.dirs)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for target, name, value in (
+                (state, "TASK_DIRS", self.dirs),
+                (state, "STATE_DIR", self.tmp / "state"),
+                (state, "DB_PATH", self.tmp / "state" / "run.db")):
+            patcher = unittest.mock.patch.object(target, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def write(self, folder, name, head):
         (self.dirs[folder] / f"{name}.md").write_text(
             f"---\n{head}\n---\nbody\n", encoding="utf-8")
+
+    def run_row(self, task, **fields):
+        """A run row in the sandbox store; the sweep reads its commit flag."""
+        conn = state.connect()
+        try:
+            state.create_run(conn, task, "feature", "done")
+            if fields:
+                cols = ", ".join(f"{k} = ?" for k in fields)
+                conn.execute(f"UPDATE runs SET {cols} WHERE task = ?", (*fields.values(), task))
+                conn.commit()
+        finally:
+            conn.close()
 
     def umbrella(self, subtasks="[task-0028, task-0029]", flag="true"):
         self.write("done", "task-0100",
@@ -219,6 +235,7 @@ class UmbrellaDoneMovesSubtasksTest(unittest.TestCase):
 
     def test_listed_subtasks_of_the_epic_move_to_done(self):
         self.umbrella()
+        self.run_row("task-0100", commit_approved=1)
         self.write("backlog", "task-0028", f"id: 28\nepic: {EPIC}\ncompleted:")
         self.write("active", "task-0029", f"id: 29\nepic: {EPIC}\ncompleted:")
         self.assertEqual(["task-0028", "task-0029"], state.move_swarm_subtasks("task-0100"))
@@ -227,6 +244,7 @@ class UmbrellaDoneMovesSubtasksTest(unittest.TestCase):
 
     def test_unlisted_subtask_and_other_epic_subtask_stay(self):
         self.umbrella(subtasks="[task-0028, task-0031]")
+        self.run_row("task-0100", commit_approved=1)
         self.write("backlog", "task-0028", f"id: 28\nepic: {EPIC}")
         self.write("backlog", "task-0030", f"id: 30\nepic: {EPIC}")
         self.write("backlog", "task-0031", "id: 31\nepic: epic-0008")
@@ -234,8 +252,73 @@ class UmbrellaDoneMovesSubtasksTest(unittest.TestCase):
         self.assertEqual("backlog", self.where("task-0030"))
         self.assertEqual("backlog", self.where("task-0031"))
 
+    def test_umbrella_run_without_an_approved_commit_sweeps_nothing(self):
+        self.umbrella()
+        self.write("backlog", "task-0028", f"id: 28\nepic: {EPIC}")
+        self.write("active", "task-0029", f"id: 29\nepic: {EPIC}")
+        self.run_row("task-0100", commit_approved=0)
+        self.assertEqual([], state.move_swarm_subtasks("task-0100"))
+        self.assertEqual("backlog", self.where("task-0028"))
+        self.assertEqual("active", self.where("task-0029"))
+
+    def test_umbrella_file_with_no_run_row_sweeps_nothing(self):
+        self.umbrella()
+        self.write("backlog", "task-0028", f"id: 28\nepic: {EPIC}")
+        self.assertEqual([], state.move_swarm_subtasks("task-0100"))
+        self.assertEqual("backlog", self.where("task-0028"))
+
+    def test_an_unreadable_run_store_sweeps_nothing(self):
+        self.umbrella()
+        self.write("backlog", "task-0028", f"id: 28\nepic: {EPIC}")
+        self.run_row("task-0100", commit_approved=1)
+        with unittest.mock.patch.object(state, "connect", side_effect=OSError("locked")):
+            self.assertEqual([], state.move_swarm_subtasks("task-0100"))
+        self.assertEqual("backlog", self.where("task-0028"))
+
+    def test_another_tasks_approved_commit_does_not_authorise_the_sweep(self):
+        self.umbrella()
+        self.write("backlog", "task-0028", f"id: 28\nepic: {EPIC}")
+        self.run_row("task-0100", commit_approved=0)
+        self.run_row("task-0101", commit_approved=1)
+        self.assertEqual([], state.move_swarm_subtasks("task-0100"))
+
+    def test_an_open_connection_from_the_caller_is_used_and_left_open(self):
+        self.umbrella()
+        self.write("backlog", "task-0028", f"id: 28\nepic: {EPIC}")
+        self.run_row("task-0100", commit_approved=1)
+        conn = state.connect()
+        try:
+            with unittest.mock.patch.object(state, "connect", side_effect=AssertionError):
+                self.assertEqual(["task-0028"], state.move_swarm_subtasks("task-0100", conn))
+            conn.execute("SELECT 1")
+        finally:
+            conn.close()
+
+    def test_a_done_record_that_already_exists_is_not_overwritten_by_the_sweep(self):
+        self.umbrella()
+        self.run_row("task-0100", commit_approved=1)
+        self.write("backlog", "task-0028", f"id: 28\nepic: {EPIC}\nmarker: backlog-copy")
+        self.write("done", "task-0028", f"id: 28\nepic: {EPIC}\nmarker: done-original")
+        self.assertEqual([], state.move_swarm_subtasks("task-0100"))
+        self.assertIn("done-original", (self.dirs["done"] / "task-0028.md").read_text())
+        self.assertTrue((self.dirs["backlog"] / "task-0028.md").is_file())
+
+    def test_move_task_refuses_an_existing_destination_and_moves_nothing(self):
+        self.write("active", "task-0050", "id: 50\nmarker: from-active\ncompleted:")
+        self.write("done", "task-0050", "id: 50\nmarker: done-original\ncompleted:")
+        self.assertFalse(state.move_task("task-0050", "done"))
+        self.assertIn("done-original", (self.dirs["done"] / "task-0050.md").read_text())
+        self.assertIn("from-active", (self.dirs["active"] / "task-0050.md").read_text())
+
+    def test_move_task_still_moves_into_an_empty_destination(self):
+        self.write("active", "task-0050", "id: 50\ncompleted:")
+        self.assertTrue(state.move_task("task-0050", "done"))
+        self.assertEqual("done", self.where("task-0050"))
+        self.assertFalse((self.dirs["active"] / "task-0050.md").exists())
+
     def test_ordinary_task_moves_nothing(self):
         self.umbrella(flag="false")
+        self.run_row("task-0100", commit_approved=1)
         self.write("backlog", "task-0028", f"id: 28\nepic: {EPIC}")
         self.assertEqual([], state.move_swarm_subtasks("task-0100"))
         self.assertEqual("backlog", self.where("task-0028"))
@@ -244,6 +327,7 @@ class UmbrellaDoneMovesSubtasksTest(unittest.TestCase):
         self.write("active", "task-0100",
                    f"id: 100\nepic: {EPIC}\numbrella: true\nsubtasks: [task-0028]\ncompleted:")
         self.write("backlog", "task-0028", f"id: 28\nepic: {EPIC}")
+        self.run_row("task-0100", commit_approved=1)
         merged = [{"repo": "agentry", "branch": "feature/task-0100", "in_main": True}]
         with unittest.mock.patch.object(advance.git_state, "task_report", return_value=merged), \
                 unittest.mock.patch.object(advance, "_merge_wait", side_effect=lambda t, r, w: r), \
@@ -270,10 +354,11 @@ class UmbrellaDoneMovesSubtasksTest(unittest.TestCase):
                    f"id: 100\nepic: {EPIC}\numbrella: true\nsubtasks: [task-0028]\ncompleted:")
         self.write("backlog", "task-0028", f"id: 28\nepic: {EPIC}")
         self.write("backlog", "task-0030", f"id: 30\nepic: {EPIC}")
+        umbrella_run = run(task="task-0100", stage="done", commit_approved=1)
         with unittest.mock.patch.object(stop_gate, "ACTIVE_DIR", self.dirs["active"]), \
                 unittest.mock.patch.object(
                     stop_gate.git_state, "task_tagged_in_main", return_value=True), \
-                unittest.mock.patch.object(state, "all_runs", return_value=[]), \
+                unittest.mock.patch.object(state, "all_runs", return_value=[umbrella_run]), \
                 unittest.mock.patch.object(state, "set_fields"):
             moved, _ = stop_gate.reconcile_status_drift(object())
         self.assertEqual(["task-0100", "task-0028"], moved)
