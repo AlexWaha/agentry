@@ -291,8 +291,9 @@ class PostTaskGateTest(StoreTestCase):
 
 # What the live SubagentStart payload actually holds: the session fields plus
 # hook_event_name, agent_id and agent_type. Read out of the 2.1.269 binary
-# (`{...session, hook_event_name:"SubagentStart", agent_id:n, agent_type:r}`)
-# and confirmed against inject.payload_text() before it was deleted, which
+# (`{...session, hook_event_name:"SubagentStart", agent_id:n, agent_type:r}`;
+# the same literal is in 2.1.296, where a live hook that dumped stdin received
+# exactly those keys) and confirmed against inject.payload_text() before it was deleted, which
 # returned "" for every dispatch this project has ever made. No prompt, no
 # description, no task field - so the payload is NOT the query, and these tests
 # feed a realistic one rather than the invented {"prompt": ...} they used to.

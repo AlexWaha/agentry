@@ -9,7 +9,14 @@ maxTurns: 30
 tools: Read, Write, Edit, Glob, Grep
 skills:
   - update-docs
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - documentation.md
   - human-voice.md
   - business-standards.md
@@ -49,7 +56,7 @@ You create and maintain ALL project documentation - technical specs, API docs, u
 
 Doc with title/date/author/status/ToC/version-history header; CHANGELOG entries under Added/Changed/Fixed/Removed; API docs with per-endpoint request/response examples; Mermaid diagrams for flows and architecture.
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/quality-standard.md - production-grade, investor-presentable
 - rules/documentation.md - structure, headers, Mermaid diagrams

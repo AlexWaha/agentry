@@ -29,7 +29,8 @@ prompt, and nothing you write in the prompt changes what comes back. The query
 is not the dispatch text and cannot be: the `SubagentStart` payload carries
 only the session fields plus `hook_event_name`, `agent_id` and `agent_type`,
 with no prompt, description or task field anywhere in it (measured in the
-2.1.269 binary, task-0081). Until that task the hook also printed its block as
+2.1.269 binary, task-0081; re-verified on 2.1.296 in the binary and with a live
+hook that dumped its stdin, 2026-10-13). Until that task the hook also printed its block as
 plain stdout, which this event discards, so every dispatch received zero rows
 silently at exit 0 while these paragraphs said otherwise - so if an agent
 reports that no memory block reached it, treat that as a live defect, not as an

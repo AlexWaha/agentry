@@ -10,7 +10,14 @@ tools: Read, Write, Glob, Grep, Bash, WebSearch, WebFetch
 skills:
   - market-research
   - business-plan
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - documentation.md
   - human-voice.md
   - business-standards.md
@@ -51,7 +58,7 @@ You run deep market research, competitive analysis, requirements gathering, and 
 
 Market research: TAM/SAM/SOM with methodology and sources, segments, trends. Competitive analysis: profiles, comparison matrix, SWOT, Porter's Five Forces, positioning map. Risk register: id, category, probability, impact, score, owner, mitigation, contingency.
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/quality-standard.md - investor-presentable, production-grade output
 - rules/business-standards.md - documented assumptions, sourced numbers, best/base/worst scenarios

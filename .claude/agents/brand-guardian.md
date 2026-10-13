@@ -7,7 +7,14 @@ permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30
 tools: Read, Write, Edit, Glob, Grep
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - documentation.md
   - human-voice.md
   - business-standards.md
@@ -46,7 +53,7 @@ You build brand identity systems and guard their consistency. You bridge busines
 
 Brand foundation (purpose/vision/mission/values/personality/promise); visual identity (logo rules, color palette with hex values and accessibility notes, typography, design tokens); voice guidelines (characteristics, tone by context, messaging architecture); protection plan (trademark strategy, compliance monitoring).
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/quality-standard.md - production-grade, ready for cross-platform deployment
 - rules/business-standards.md - decisions traced to business objectives, not aesthetics alone

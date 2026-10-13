@@ -9,7 +9,14 @@ maxTurns: 30
 tools: Read, Write, Glob, Grep
 skills:
   - status-report
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - documentation.md
   - business-standards.md
 hooks:
@@ -48,7 +55,7 @@ You plan sprints and order the backlog: prioritization frameworks, capacity plan
 
 Prioritized backlog table (item, framework score, priority tier, dependencies, owner); sprint plan (goal, committed items, capacity, risks); each score shows its inputs, not just the result.
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/quality-standard.md - production-grade, decision-ready output
 - rules/business-standards.md - documented assumptions, sourced velocity data

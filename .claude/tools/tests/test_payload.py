@@ -94,6 +94,18 @@ class CoreRulesTest(unittest.TestCase):
         self.assertIn("core rules (always loaded, 2 files)", rows)
         self.assertEqual(rows["core rules (always loaded, 2 files)"], 120)
 
+    def test_an_agent_that_omits_claude_md_is_not_charged_for_it(self):
+        # task-0106. The three CLAUDE.md-borne rows are in the context of an agent
+        # that loads CLAUDE.md and of no other; counting them for an omitting agent
+        # would report the saving as nothing.
+        build_tree(self.root, rules={"a.md": "a" * 80}, excludes=[], imports=["a.md"],
+                   hooks=[], agent_body="---\nname: probe\nomitClaudeMd: true\n---\nbody\n")
+        rows = {r.label: r.chars for r in payload.Harness(self.root).rows("probe")}
+        self.assertEqual(rows["CLAUDE.md files and core rules"], 0)
+        self.assertNotIn("root CLAUDE.md", rows)
+        self.assertFalse([label for label in rows if label.startswith("core rules")])
+        self.assertIn("agent file (probe.md)", rows)
+
     def test_disagreement_between_the_two_channels_is_reported(self):
         build_tree(self.root, rules={"a.md": "a", "b.md": "b"},
                    excludes=[], imports=["a.md"], hooks=[])

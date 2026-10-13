@@ -7,7 +7,14 @@ permissionMode: bypassPermissions
 effort: low
 maxTurns: 30
 tools: Read, Write, Edit, Glob, Grep, Bash
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - architecture.md
   - security.md
   - human-voice.md
@@ -61,7 +68,7 @@ geo_report:
   priority_actions: [...]
 ```
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/i18n.md - answers in the storefront language, matching the target prompts
 - rules/architecture.md - structured data via the project's mechanism, never patch framework core

@@ -7,7 +7,14 @@ permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30
 tools: Read, Write, Edit, Glob, Grep
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - architecture.md
   - documentation.md
   - human-voice.md
@@ -62,7 +69,7 @@ content_brief:
 ```
 Inventory audits: table of URL, type, status (fresh/thin/stale/duplicate), target keyword, action.
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/i18n.md - content in the storefront language(s), no hardcoded UI strings
 - rules/documentation.md - briefs and plans are structured, concrete, measurable

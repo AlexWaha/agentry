@@ -3,7 +3,7 @@
 FR-56 to FR-59 of spec-0001. The counts are the point: a field dropped from one
 file out of 31 is invisible in review and silently changes how that agent runs.
 Every accepted-value set below was read out of the Claude Code binary
-(2.1.270), not assumed: `color` from the subagent palette map, `effort` from
+(2.1.270; `omitClaudeMd` out of 2.1.296), not assumed: `color` from the subagent palette map, `effort` from
 the effort enum, `cacheTtl` from the experimental schema ("5m" or "1h").
 """
 
@@ -46,6 +46,27 @@ ALLOW_SCRIPT_AGENTS = {
     "performance-benchmarker": ("readonly", ("k6", "lighthouse", "npx")),
     "evidence-collector": ("readonly", ("playwright", "npx")),
     "accessibility-auditor": ("readonly", ("axe", "lighthouse", "pa11y", "npx")),
+}
+
+# task-0106: omitClaudeMd on exactly these 19 and no others. The key is read from the
+# 2.1.296 binary (agent schema: "Run this agent without the user, project and local
+# CLAUDE.md instruction files when it runs as a subagent; managed policy files are
+# kept"; the frontmatter parser takes true or "true"). Measured on 2.1.296: it removes
+# the user CLAUDE.md, the project CLAUDE.md files and the .claude/rules walk, and
+# leaves nested CLAUDE.md files (docs/technical/claude-code-2.1.296-delta.md,
+# section 5). The profile is docs or readonly on purpose: those two profiles are
+# default-deny on Bash, so the user-level rules that only CLAUDE.md carried for a
+# shell-capable agent (no gh, no PR creation) have nothing to apply to. An agent whose
+# hook line carries --allow-script (npx in particular installs and runs any package,
+# gh included) is shell-capable and stays on CLAUDE.md. dev agents stay on CLAUDE.md
+# too, and so do architect, reviewer and seo-specialist, whose rules plus the core set
+# would need 13 or more inject_rules chunks against 13 wired entries.
+OMIT_CLAUDE_MD_AGENTS = {
+    "ai-detector", "incident-response-commander", "security-engineer",
+    "brand-guardian", "business-analyst", "content-manager", "content-writer", "editor",
+    "feedback-synthesizer", "financial-analyst", "geo-specialist", "humanizer",
+    "marketing-strategist", "product-manager", "spec-developer", "sprint-prioritizer",
+    "technical-writer", "ux-researcher", "ux-ui-designer",
 }
 
 # FR-57: cacheTtl on exactly these eight and no others.
@@ -234,6 +255,41 @@ class AgentFrontmatterTest(unittest.TestCase):
                 self.assertRegex(
                     self.agents[name], r"(?m)^experimental:\n  cacheTtl: 1h$",
                 )
+
+    def test_omit_claude_md_is_on_exactly_the_named_agents(self):
+        present = {n for n, t in self.agents.items() if re.search(r"(?m)^omitClaudeMd:", t)}
+        self.assertEqual(present, OMIT_CLAUDE_MD_AGENTS)
+        for name in present:
+            with self.subTest(agent=name):
+                self.assertEqual(_scalar(self.agents[name], "omitClaudeMd"), "true")
+                profile = re.search(r"--profile (\w+)", self.agents[name]).group(1)
+                self.assertIn(profile, {"docs", "readonly"},
+                              "a dev agent has an unrestricted shell; it keeps CLAUDE.md")
+
+    def test_no_agent_with_allow_script_omits_claude_md(self):
+        # --allow-script lets a readonly agent run npx, which installs and runs any
+        # package (gh included); "no gh, no PR, no push" lives only in CLAUDE.md.
+        for name, text in self.agents.items():
+            if "--allow-script" in text:
+                with self.subTest(agent=name):
+                    self.assertNotRegex(text, r"(?m)^omitClaudeMd:")
+
+    def test_an_agent_that_omits_claude_md_declares_the_whole_core_set(self):
+        # Without CLAUDE.md the core @rules/ list reaches the agent only through
+        # its own rules: key. The list is PARSED from .claude/CLAUDE.md, never
+        # transcribed, so a rule added to the core set turns this red until every
+        # omitting agent declares it. Delivery itself is proved in
+        # test_inject_rules.py.
+        core = re.findall(r"^@rules/([A-Za-z0-9._-]+\.md)\s*$", ROSTER.read_text(encoding="utf-8"),
+                          re.MULTILINE)
+        self.assertEqual(len(core), 6, core)
+        for name in OMIT_CLAUDE_MD_AGENTS:
+            declared = re.search(r"(?m)^rules:\n((?:  - .*\n)+)", self.agents[name])
+            self.assertIsNotNone(declared, name)
+            entries = re.findall(r"- (\S+)", declared.group(1))
+            with self.subTest(agent=name):
+                self.assertEqual(entries[:len(core)], core)
+                self.assertEqual(len(entries), len(set(entries)))
 
     def test_no_em_or_en_dash(self):
         for name, text in self.agents.items():

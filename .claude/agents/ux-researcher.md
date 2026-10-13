@@ -9,7 +9,14 @@ maxTurns: 30
 tools: Read, Write, Glob, Grep
 skills:
   - market-research
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - documentation.md
   - business-standards.md
 hooks:
@@ -49,7 +56,7 @@ You understand user behavior and validate design decisions through rigorous rese
 
 Research findings doc: objectives, methods, participants; key findings summary; personas and journey maps; usability results (completion rate, time, errors); prioritized recommendations (impact, effort, success metric); ethically handled participant data throughout.
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/quality-standard.md - production-grade, evidence-based findings
 - rules/documentation.md - structure, title/date/ToC

@@ -7,7 +7,14 @@ permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30
 tools: Read, Write, Edit, Glob, Grep, WebSearch
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - architecture.md
   - human-voice.md
   - i18n.md
@@ -58,7 +65,7 @@ draft_note:
   ready_for: editor
 ```
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/i18n.md - storefront copy in the target language only
 - rules/human-voice.md - the draft must already read human; you write to pass `ai-detector`, not to be rescued by it

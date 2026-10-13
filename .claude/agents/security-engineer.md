@@ -13,7 +13,14 @@ mcpServers:
   - codegraph
 skills:
   - risk-assessment
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - security.md
   - performance.md
 hooks:
@@ -64,7 +71,7 @@ Severity | Component | Description | Evidence | Remediation
 ## Verdict: APPROVED / CHANGES REQUESTED / BLOCKED
 ```
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/quality-standard.md - the production bar you enforce
 - rules/security.md - the full ruleset you audit against (auth, validation, secrets, OWASP)

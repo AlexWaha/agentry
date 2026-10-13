@@ -348,7 +348,9 @@ The `.claude/` system (rules, agents, skills) must self-improve over time.
 
 The `@rules/` list below is the core set: the rules every context
 gets, main thread included. Claude Code loads them by walking `.claude/rules/`
-at session start (build 2.1.269; design record
+at session start (measured on 2.1.269, re-verified on 2.1.296 on 2026-10-13: the
+`instructions` attachment of a fresh session lists every non-excluded rule file
+once, and the `@rules/` lines add no second copy; design record
 `.agentry/plans/2026-09-14-task-0014-rules-split-matrix.md`), and the `@rules/`
 lines name the same files as a live include so the set survives a build without
 that walk. The main thread has no frontmatter, so
@@ -357,7 +359,13 @@ runs on. A rule that leaves the list is named in `claudeMdExcludes` in
 `.claude/settings.json` - that is what stops it loading everywhere - and reaches
 only the agents whose `rules:` key declares it. Those patterns match by
 filename, so a user-level rule of the same name under `~/.claude/rules/` is
-excluded too. Adding a rule here costs every dispatch its size.
+excluded too. Adding a rule here costs every dispatch its size - except for an
+agent with `omitClaudeMd: true` in its frontmatter, which runs without any
+CLAUDE.md or rules-walk file (nested `CLAUDE.md` files still load when it reads
+one) and so gets this whole list through its own `rules:` key instead; the agents
+that do this, the measured saving and the reasons are in
+`docs/technical/claude-code-2.1.296-delta.md`, section 5, and
+`test_agent_frontmatter.py` pins that each declares every entry below.
 
 A rule that belongs to one repository rather than to the whole workspace does
 not belong in this list at all - it belongs in that repo's nested `CLAUDE.md`,
@@ -394,11 +402,13 @@ agent dispatch saves their size (measure it with `wc -c` on the two files; it
 changes with every edit to either). A rule moved here must be added to
 `RULES` in that hook, to the table below, and to `claudeMdExcludes`, or
 `RealTreeTest` goes red. The hook delivers in chunks, one `SessionStart` entry
-per `--chunk N` plus a final `--index`: build 2.1.269 persists a hook command's
+per `--chunk N` plus a final `--index`: Claude Code persists a hook command's
 stdout to a file and leaves a 2000-char preview once it passes 10,000
-characters (`NEr`), and one entry carrying both files was 52,514. Changing a
-rule's size can change the chunk count, so re-run `--index` and re-wire
-`settings.json` to match - `RealTreeTest` fails on the mismatch.
+characters (`NEr` in 2.1.269, `PCs` in 2.1.296; exactly 10,000 arrives whole and
+10,001 does not, measured live on 2.1.296), and one entry carrying both files
+was 52,514. Changing a rule's size can change the chunk count, so re-run
+`--index` and re-wire `settings.json` to match - `RealTreeTest` fails on the
+mismatch.
 
 | Rule | Why the main thread needs it (FR-30) |
 |---|---|

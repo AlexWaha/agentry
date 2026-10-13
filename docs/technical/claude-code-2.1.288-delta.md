@@ -78,7 +78,14 @@ Each of these is a numeric claim taken from the 2.1.269 binary:
 - the `SubagentStart` payload carrying no prompt text and discarding plain
   stdout (`memory/inject.py`, task-0081);
 - the `stop_gate.py` measurements at lines 120 and 187;
-- `.claude/CLAUDE.md`: the rules directory walk at session start.
+- `.claude/CLAUDE.md`: the rules directory walk at session start;
+- the per-dispatch bytes of CLAUDE.md (2.1.286 and 2.1.287 fixed it being attached
+  twice).
+
+**Done (task-0106, 2026-10-13).** The host had moved on to 2.1.296 by then, so the
+five measurements, the `omitClaudeMd` evaluation and their raw output are in
+[claude-code-2.1.296-delta.md](claude-code-2.1.296-delta.md), sections 4 and 5. None
+of the four 2.1.269 numbers moved; no duplicate CLAUDE.md was found.
 
 Note: the git repo is `src/`; `src/docs/technical/nested-claude-md.md` exists and
 its audit table must be re-checked against the 2.1.288 Write/Edit loading change.

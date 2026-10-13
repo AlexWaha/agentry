@@ -111,6 +111,13 @@ created or changed, not only when it is read (source:
 been re-measured for the Write and Edit trigger; treat the trigger list as taken
 from the changelog and the walk itself as unchanged.
 
+Re-observed on 2.1.296 (2026-10-13, task-0106): a subagent that read a file beside a
+nested `CLAUDE.md` received it as a `nested_memory` attachment, and it did so for
+agents with `omitClaudeMd: true` as well as without (that flag removes the user and
+project `CLAUDE.md` files and the rules walk, not nested files). The Write and Edit
+trigger was not re-measured. See
+[claude-code-2.1.296-delta.md](claude-code-2.1.296-delta.md), section 5.1.
+
 When the Read, Write or Edit tool touches a file, Claude Code walks from that file's directory
 upward to the session's working directory and loads the memory files of every
 directory in between. The working directory itself is excluded from this walk -

@@ -10,7 +10,14 @@ tools: Read, Write, Edit, Glob, Grep
 skills:
   - new-epic
   - new-task
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - documentation.md
   - business-standards.md
 hooks:
@@ -53,7 +60,7 @@ You decompose approved specs into epics and tasks, and - once business planning 
 
 Epic + linked task files (skills/new-epic template); user stories with priority, acceptance criteria (Given/When/Then), dependencies, S/M/L/XL sizing; roadmap by phase with goals, features, success metrics, dependencies, MVP cutline.
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/quality-standard.md - production-grade deliverables
 - rules/business-standards.md - structured frameworks, documented assumptions

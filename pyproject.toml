@@ -22,10 +22,11 @@ select = ["E", "F", "I", "W", "UP", "FURB", "RUF", "DTZ", "PIE", "ISC"]
 # BLE001 (blind-except), S110/S112 (try-except-pass/continue), PLW1510
 # (subprocess-run-without-check), PLC0415 (import-outside-top-level). This
 # harness's hooks are documented to fail open by design (see
-# .claude/rules/orchestration.md: "All gates fail open: a bug in a hook allows
-# the action rather than bricking the agent") - broad except/pass/continue and
-# lazy sys.path-dependent imports are the intended pattern in hooks, gates and
-# setup scripts across this codebase, not an oversight.
+# .claude/rules/orchestration.md: "Our gate scripts fail open: a bug inside a
+# hook script allows the action rather than bricking the agent") - broad
+# except/pass/continue and lazy sys.path-dependent imports are the intended
+# pattern in hooks, gates and setup scripts across this codebase, not an
+# oversight.
 
 [tool.ruff.lint.per-file-ignores]
 # These import a sibling module from .claude/tools/{pipeline,memory}, neither of

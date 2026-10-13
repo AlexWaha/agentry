@@ -20,13 +20,17 @@ ensure_ascii=True on purpose: a cp1252 stdout on Windows raises
 UnicodeEncodeError on the arrows and Cyrillic the rule files contain, and that
 error would die in main()'s blanket handler as a silent, permanent no-op.
 
-CHUNKED, and the number that forces it. Build 2.1.269 runs a hook's
+CHUNKED, and the number that forces it. Claude Code runs a hook's
 additionalContext through the SAME persist path as its stdout - a single
-`Zhe(text, id, label, {threshold: NEr})` with `NEr = 1e4`, called as
-`Zhe(hook.additionalContext, id, "additionalContext")` - so a block over 10000
-CHARACTERS is written to `hook-<id>-<n>-additionalContext.txt` and replaced by a
-2000-char preview (`w2e`). There is no separate cap for SubagentStart and no
-8000-char variant anywhere in the build. Every agent declaring more than 10000
+`gce(text, id, label, {threshold: PCs})` with `PCs = 1e4`, called as
+`gce(hook.additionalContext, id, "additionalContext", ...)` (2.1.296 names; they
+were `Zhe` and `NEr` in 2.1.269, so anchor on the strings and the value) - so a
+block over 10000 CHARACTERS is written to `hook-<id>-<n>-additionalContext.txt`
+and replaced by a 2000-char preview. There is no separate cap for SubagentStart
+and no 8000-char variant anywhere in the build. Re-measured live on 2.1.296 on
+2026-10-13: a SubagentStart additionalContext of 9900 characters reached the
+agent whole and one of 10100 arrived as the preview plus the file path (see
+docs/technical/claude-code-2.1.296-delta.md, section 4). Every agent declaring more than 10000
 chars of rules therefore received a preview, not its rules, from task-0014 until
 task-0091. Delivery is now one SubagentStart entry per chunk (`--chunk N`) under
 CHUNK_BUDGET, plus an `--index` entry printing the K-of-K line, the same shape
@@ -39,6 +43,14 @@ strict subset of what leaves the core @import set, so it cannot raise any
 agent's context. A runtime cap would drop a whole policy at the moment it is
 needed and hide the drop behind exit 0; size is decided where the declarations
 are written (task-0014) and measured by FR-35.
+
+An agent with `omitClaudeMd: true` (task-0106) runs without any CLAUDE.md, so the
+core @rules/ set does not reach it through the file walk. It declares the core
+rules in its own `rules:` key and this hook delivers them like any other; the
+block then carries the core set too, but the CLAUDE.md files it dropped were
+larger (measured on 2.1.296, docs/technical/claude-code-2.1.296-delta.md,
+section 5). test_agent_frontmatter.py pins which agents do this and that each
+declares the whole core set.
 
 Fail-open by contract (NFR-4): no `rules:` key prints nothing and exits 0, a
 declared file that does not resolve under .claude/rules/ becomes a diagnostic
@@ -64,8 +76,9 @@ RULES_DIR = ROOT / ".claude" / "rules"
 sys.path.insert(0, str(HERE.parent))
 from main_thread_rules import pack  # noqa: E402
 
-# Chars, not bytes, and per hook command: NEr = 1e4. 10 percent margin, the same
-# number main_thread_rules.py uses for the identical threshold on SessionStart.
+# Chars, not bytes, and per hook command: PCs = 1e4 (NEr in 2.1.269; re-verified
+# on 2.1.296). 10 percent margin, the same number main_thread_rules.py uses for
+# the identical threshold on SessionStart.
 CHUNK_BUDGET = 9000
 
 # This module imports no sibling and inserts nothing into sys.path, so it has no
