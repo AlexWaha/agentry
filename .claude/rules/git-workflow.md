@@ -168,6 +168,18 @@ every task type except those in `skip_for_types` (`bugfix`, `techdebt`). These a
 re-engages during execution, and in `solo` mode the push one does not arise
 except for the one-shot trunk publication (`approve.py --trunk-push`).
 
+### Worktrees and the checkpoints
+
+The commit and push approvals are per task and are read from the run row, so they
+work the same for a task in a worktree; the gate places a `git commit` by its `-C`,
+`cd` or payload cwd and finds the tree's branch there. With `worktrees.enabled`,
+edits inside a trunk checkout (`src/` on `main`) are denied outside `.agentry/`,
+and subagents may not move its HEAD (checkout, switch, reset, rebase, `branch -M`).
+While trees are in play each commit, merge, pull and push is judged in the place
+its own `-C` / `cd` names (literal paths only), and `--git-dir`, `--work-tree`,
+`-c core.worktree` and `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` on it are
+refused. A branch merged locally must still be named `<type>/task-NNNN`.
+
 ### Multi-repo workspaces
 
 Some workspaces hold several independent git repos in subdirectories (for
@@ -203,6 +215,44 @@ git rev-list --count main..HEAD                  # expect 0 => no commits ahead 
 ```
 
 **If already on a feature branch:** continue working there only if the task is the same. For new tasks - always go back to `main` and branch fresh.
+
+#### With `worktrees.enabled`: registration cuts the branch and the tree
+
+The three steps above are replaced for build-flow tasks (not swarm umbrellas) when
+`worktrees.enabled` is `true` in `pipeline.json`. `advance.py --task task-XXXX
+--type <type>` runs `git worktree add -b <type>/task-XXXX <repo path>-wt/task-XXXX
+<trunk>` itself, verifies the branch and its base, and records the path. Do NOT run
+`git checkout -b`, and do not run `git worktree add` by hand: the dev gate denies
+it and the orchestrator never needs it.
+
+- **Layout.** `src/` is the trunk checkout: it stays on `main`, is never edited
+  (the trunk-checkout freeze denies it) and is where the solo merge runs. Each task
+  lives in `E:/Personal/Agenty/src-wt/task-XXXX` (workspace-relative
+  `src-wt/task-XXXX`), outside every repo.
+- **Branch base.** Cut from the trunk at registration, so the base rule holds. When
+  the trunk moves afterwards, freshness applies (below).
+- **Where git commands run.** Cwd does not persist between Bash calls and a hook
+  judges a command by its own `cd "<tree>" &&` or `git -C <tree>`, so every git
+  command against a tree names it. A bare `git commit` from the workspace root is
+  refused as "Not on a feature branch".
+- **Freshness.** If `main` gains commits after the cut, the task is sent back from
+  `review` to `test` (`main moved <n> commits: git merge main in the worktree`),
+  keeping its commit approval (also checked again at merge time; repeated send-backs
+  up to `retry_budget` park the task `blocked`). Sync with `git -C <tree> merge main`, then let the
+  gates re-run. Merging into the tree from `main` is the one sanctioned way to take
+  trunk work; branching from another feature branch stays forbidden.
+- **Merge.** The solo merge runs from `src/` (`git -C src merge --no-ff <type>/task-XXXX`)
+  under the three conditions of the solo mode plus a fourth for a task with a recorded
+  tree: the trunk has no commit the source branch lacks. A stale source is denied with
+  the same `main moved <n> commits` text.
+- **Cleanup.** After `advance.py` confirms the merge it runs `git worktree remove`
+  (no `--force`, three tries; the Stop hook only reports a tree, it never removes one). The branch is kept; deleting it follows "Branch
+  Deletion" below. A tree that is dirty, locked or held by a running process is left
+  in place and reported; `python .claude/tools/pipeline/worktree.py --remove --task
+  task-XXXX` retries once it is free. Full rules, the measured Windows behaviour and
+  the CLI: "Parallel tasks in worktrees" in `orchestration.md`.
+
+With the flag off, or for a LEGACY run, the original procedure above applies unchanged.
 
 #### FORBIDDEN: branching from a non-`main` branch
 
@@ -415,6 +465,9 @@ git branch -d feature/task-XXXX
 - **Never** delete remote branches without CEO approval
 - **Never** use `git branch -D` (force delete) - use `git branch -d` (safe delete)
 - After PR merge, delete the local branch
+- With worktrees, the pipeline removes the task's tree after the merge but keeps the
+  branch (automatic branch deletion is out of scope). Git refuses to delete a branch
+  that is still checked out in a tree, so delete it only after the tree is gone
 - Remote branch deletion: only after CEO confirmation
 
 ```bash

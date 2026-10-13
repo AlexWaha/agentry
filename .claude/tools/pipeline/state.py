@@ -356,6 +356,14 @@ def _late_columns() -> list[tuple[str, str]]:
         # Why the CEO dropped the task (task-0122). Not a frozen field: it comes
         # from the abandon command, never from the task file.
         ("abandon_reason", "TEXT DEFAULT ''"),
+        # The task's own git worktree, workspace-relative posix (`src-wt/task-0130`),
+        # or '' for a run that works in the repo itself (epic-0004). Not a frozen
+        # field: it comes from registration, never from the task file, and only
+        # create_run writes it.
+        ("worktree", "TEXT DEFAULT ''"),
+        # How many times the run was sent back to `test` because its tree lacked trunk
+        # commits (advance.py); at the retry budget it blocks instead of looping.
+        ("stale_sendbacks", "INTEGER DEFAULT 0"),
         # Task-file decisions frozen at registration (task-0124): the closure sweep,
         # the umbrella debt cover, the commit-tag branch rule and the repo scoping
         # read these columns, never the file, which the agent being judged can
@@ -544,15 +552,24 @@ def _journal_write(task: str, before: dict | None, fields: dict, event: str,
 
 
 def create_run(conn: sqlite3.Connection, task: str, task_type: str, stage: str,
-               which: str = BUILD) -> dict:
+               which: str = BUILD, worktree: str = "") -> dict:
+    """Insert the run row. `worktree` is the task's tree as a workspace-relative posix
+    path (worktree.py), '' for a run that works in the repo itself; a value that is not
+    a valid tree path for this task is refused (ValueError) before anything is
+    inserted. Only registration passes one, and nothing rewrites it afterwards."""
+    if worktree:
+        import worktree as worktrees  # lazy: worktree.py imports this module
+        if not worktrees.valid_path(worktree, task):
+            raise ValueError(f"{worktree!r} is not a valid worktree path for {task}")
     frozen = frozen_frontmatter(task)
     conn.execute(
-        "INSERT INTO runs (task, type, stage, stage_status, awaiting_human, pipeline, updated, "
-        f"{', '.join(frozen)}) VALUES (?, ?, ?, ?, '', ?, ?, {', '.join('?' * len(frozen))})",
-        (task, task_type, stage, ST_IN_PROGRESS, which, now(), *frozen.values()),
+        "INSERT INTO runs (task, type, stage, stage_status, awaiting_human, pipeline, worktree, "
+        f"updated, {', '.join(frozen)}) VALUES (?, ?, ?, ?, '', ?, ?, ?, {', '.join('?' * len(frozen))})",
+        (task, task_type, stage, ST_IN_PROGRESS, which, worktree, now(), *frozen.values()),
     )
     conn.commit()
-    emit("registered", task, stage=stage, pipeline=which, detail={"type": task_type})
+    emit("registered", task, stage=stage, pipeline=which,
+         detail={"type": task_type, **({"worktree": worktree} if worktree else {})})
     return get_run(conn, task)  # type: ignore[return-value]
 
 
@@ -909,6 +926,16 @@ def blocked_notice(conn: sqlite3.Connection) -> str:
             f"its first stage.")
 
 
+def _dispatch_note(task: str) -> str:
+    """` <dispatch line>` for a task living in a worktree, else "". Fail-open."""
+    try:
+        import worktree  # lazy: worktree.py imports this module
+        line = worktree.dispatch_line(task)
+    except Exception:
+        return ""
+    return f" {line}" if line else ""
+
+
 def _resume_text(conn: sqlite3.Connection) -> str:
     """One-line-per-run summary for SessionStart context injection."""
     live = [r for r in all_runs(conn) if r["stage"] != "done"]
@@ -917,7 +944,8 @@ def _resume_text(conn: sqlite3.Connection) -> str:
     lines = ["Pipeline state (resume in-flight work, do not restart from scratch):"]
     for r in live:
         tail = f" awaiting_human={r['awaiting_human']}" if r["awaiting_human"] else ""
-        lines.append(f"  - {r['task']}: stage={r['stage']} status={r['stage_status']}{tail}")
+        lines.append(f"  - {r['task']}: stage={r['stage']} status={r['stage_status']}{tail}"
+                     f"{_dispatch_note(r['task'])}")
     lines.append("Drive these through the pipeline via tools/pipeline/advance.py without asking the user.")
     # A blocked run is the one exception to the line above, and it needs saying
     # out loud: advance.py refuses to move it, so the instruction to drive it is

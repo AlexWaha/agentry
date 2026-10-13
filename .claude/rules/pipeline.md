@@ -40,7 +40,11 @@ refused until that spec is approved.
   `bugfix`, `techdebt`) plans; those two start at `implement`. Driven by
   `advance.py`; see `orchestration.md`. The stage
   table below is the per-task flow: one task in an editing stage at a time, QA
-  at its own `test` stage. With the swarm dial on (`swarm.py on`), an epic with
+  at its own `test` stage. With `worktrees.enabled` that limit becomes slots:
+  each task registers into its own worktree (`<repo path>-wt/<task>`), its gates
+  run there, and up to `worktrees.max_parallel` tasks hold an editing stage at
+  once; LEGACY runs and umbrellas stay in `src/` and exclusive (see "Parallel
+  tasks in worktrees" in `orchestration.md`). With the swarm dial on (`swarm.py on`), an epic with
   two or more subtasks registers as ONE umbrella task and runs in swarm mode
   instead (the protocol is `skills/swarm/SKILL.md`; parallel agents inside
   `implement`, QA once after all of them report done); see "Swarm mode" in
@@ -56,7 +60,7 @@ refused until that spec is approved.
 | test | `qa-engineer` | `{{TEST_CMD}}` green; required cases per `testing.md` | - |
 | review | `reviewer` (+ `security-engineer`) | `{{LINT_CMD}}` clean; all Critical/High findings resolved; read-only (no code edits) | - |
 | ready | Orchestrator | gates green; diff prepared | **CEO reads the diff (`/diff`) and approves the commit**; rejecting sends the task back to `implement` |
-| done | CEO in `pr` mode; the pipeline in `solo` mode | merged into `main` (confirmed by `git_state.py`, not just pushed) | **CEO approves push** (`pr` mode only; in `solo` mode the local merge follows the commit approval, see `git-workflow.md`); task file moved to `done/` once the merge is confirmed; next registration is blocked until this task's handoff doc exists AND its memory review is stamped - both refused by `advance.py` at registration, both blocking the Stop hook before it lets the session end (`tools/pipeline/handoff.py`, `tools/memory/update.py`) |
+| done | CEO in `pr` mode; the pipeline in `solo` mode | merged into `main` (confirmed by `git_state.py`, not just pushed) | **CEO approves push** (`pr` mode only; in `solo` mode the local merge follows the commit approval, see `git-workflow.md`); task file moved to `done/` once the merge is confirmed, then the task's worktree, if any, is removed and its branch kept; next registration is blocked until this task's handoff doc exists AND its memory review is stamped - both refused by `advance.py` at registration, both blocking the Stop hook before it lets the session end (`tools/pipeline/handoff.py`, `tools/memory/update.py`) |
 
 UI-bearing tasks add a `senior-frontend-dev` implement pass and an
 `evidence-collector` screenshot check inside review. Performance-sensitive work
@@ -114,7 +118,18 @@ passes.
 - **Branch from `main` only.** Every task branch is cut from up-to-date `main`,
   never from another branch (verify `git merge-base --is-ancestor origin/main HEAD`).
   Off a non-`main` base the deterministic gates are not enforced - the task is
-  outside the pipeline and must not advance.
+  outside the pipeline and must not advance. With `worktrees.enabled`, registration
+  does the cut itself (`git worktree add -b <type>/<task> <repo path>-wt/<task>
+  <trunk>`) and records the tree in the run row.
+- **Gates run where the work is.** A run with a recorded worktree has its stage
+  commands run in that tree (`gate.py`, `stack_gate.py`); `{root}` in a command is
+  the workspace root, used by `artifact_gate.py` and `ui_evidence.py` so they read
+  the live plans. A recorded tree that is MISSING or INVALID blocks the gate; it
+  never falls back to `src/`. At the transition into the commit-checkpoint stage a
+  tree that lacks trunk commits sends the run back to `test` (`stale`), commit
+  approval kept. Details, the dispatch line every implement, test and review
+  dispatch must carry, and the rollout: "Parallel tasks in worktrees" in
+  `orchestration.md`.
 - **No silent skips.** A stage advances only when `advance.py` runs its gate and
   the gate passes. The orchestrator verifies; the agent does not self-certify. The
   gate must cover EVERY stack the change touches: a frontend change on a branch

@@ -36,6 +36,7 @@ from pathlib import Path
 
 import git_state
 import state
+import worktree
 
 STAGES = ("implement", "test", "review")
 
@@ -108,6 +109,17 @@ def main() -> int:
         print(f"{key}: {args.stage} gate has commands but its path "
               f"'{entries[key]['path']}' is not a directory; nothing was run.")
         return 1
+    # A task with a worktree of its own is judged on the code in it. A recorded tree
+    # that is missing or malformed fails the gate: falling back to the repo would
+    # judge the trunk checkout, which holds none of the task's work.
+    found = worktree.status(args.task)
+    if found in (worktree.STATUS_MISSING, worktree.STATUS_INVALID):
+        print(f"{key}: {args.stage} gate FAILED. task worktree {found}; nothing was run.")
+        return 1
+    if found == worktree.STATUS_OK:
+        tree = worktree.work_dir(args.task)
+        if tree is not None and worktree.repo_dir(worktree.recorded(args.task)) == cwd:
+            cwd = tree
     return run(cmds, cwd)
 
 

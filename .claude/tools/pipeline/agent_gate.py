@@ -338,6 +338,45 @@ def runs_waive(command: str, _depth: int = 0) -> bool:
                for body in pretool_gate.nested_command_bodies(command))
 
 
+# --- Worktree layout (epic-0004) ------------------------------------------------------
+# With worktrees.enabled, advance.py creates a task's tree and the merge cleanup removes it.
+# A dev agent that could add, move, remove or re-link one by hand could point its task at
+# another tree or pull the tree out from under a running gate. worktree.py --list and
+# --sweep only read, so they stay open; --remove and --repair (and any argparse
+# abbreviation of them) write.
+GIT_WORKTREE_WRITERS = frozenset({"add", "remove", "move", "prune", "repair", "lock", "unlock"})
+WORKTREE_SCRIPT_RE = re.compile(r"(?:^|[\\/])worktree\.py[. )]*$", re.IGNORECASE)
+WORKTREE_WRITE_OPTIONS = ("--remove", "--repair")
+WORKTREE_LAYOUT_MSG = ("{who}: '{hit}' changes the worktree layout. A task's worktree is created by "
+                       "advance.py and removed by the merge cleanup (worktree.py --remove and "
+                       "--repair are the orchestrator's). Report the layout change you need to "
+                       "the orchestrator instead.")
+
+
+def worktree_layout_change(command: str, _depth: int = 0) -> str:
+    """What `command` runs that changes the worktree layout: `git worktree add|remove|move|
+    prune|repair|lock|unlock`, or worktree.py with --remove / --repair, else ''. Nested
+    `sh -c` bodies are unwrapped like runs_waive does; text that cannot be tokenised is
+    left to the unparseable-command denies that run beside this one."""
+    for sub, args in pretool_gate.git_invocations(command):
+        if sub == "worktree" and args and args[0].lower() in GIT_WORKTREE_WRITERS:
+            return f"git worktree {args[0].lower()}"
+    for seg in pretool_gate.command_segments(command) or []:
+        if not any(WORKTREE_SCRIPT_RE.search(n) for n in pretool_gate.exec_names_of(seg)):
+            continue
+        for tok in seg:
+            name = tok.partition("=")[0]
+            if tok.startswith("--") and any(is_long_option_prefix(name, o) for o in WORKTREE_WRITE_OPTIONS):
+                return f"worktree.py {name}"
+    if pretool_gate.unscannable_depth(command, _depth):
+        return "a command nested too deep to read"
+    for body in pretool_gate.nested_command_bodies(command):
+        hit = worktree_layout_change(body, _depth + 1)
+        if hit:
+            return hit
+    return ""
+
+
 def is_force_push(command: str, _depth: int = 0) -> bool:
     """Force push in any spelling: `--force`, `--force-with-lease`, `-f`, and any
     short-flag cluster containing `f`. Resolved through git_invocations() so
@@ -963,6 +1002,117 @@ def write_operands(command: str, cwd: str = "", _depth: int = 0, paths_only: boo
     if _depth < pretool_gate.MAX_SHELL_DEPTH:
         for body in pretool_gate.nested_command_bodies(command):
             yield from write_operands(body, cwd, _depth + 1, paths_only)
+
+
+# --- The writers only the trunk freeze judges (epic-0004) -----------------------------
+# write_operands() knows the writers the plan gate and the swarm zone map share. The trunk
+# freeze adds the other common ones, and the git calls that rewrite the working tree. They
+# stay out of MUTATING_COMMANDS on purpose: the plan gate and the readonly profile judge
+# exactly what they judged before.
+TRUNK_ONLY_WRITERS = frozenset({"touch", "rmdir", "unlink", "install", "dd", "patch"})
+TRUNK_WRITER_NAMES = MUTATING_COMMANDS | TRUNK_ONLY_WRITERS
+TRUNK_GIT_WRITERS = frozenset({"restore", "apply", "am", "clean", "rm", "mv"})
+# The read-only forms of a git writer: `git apply --check`, `git clean -n`.
+TRUNK_GIT_READ_FORMS = {"apply": ("--check", "--stat", "--numstat", "--summary"),
+                        "clean": ("-n", "--dry-run")}
+FIND_WRITE_ACTIONS = frozenset({"-delete", "-fprint", "-fprint0", "-fprintf", "-fls"})
+FIND_EXEC_ACTIONS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
+# Options whose value is the next word, so the word is no path of the command's.
+TOUCH_VALUE_OPTIONS = frozenset({"-d", "-t", "-r", "--date", "--time", "--reference"})
+INSTALL_VALUE_OPTIONS = frozenset({"-m", "-o", "-g", "-S", "--mode", "--owner", "--group", "--suffix"})
+PATCH_VALUE_OPTIONS = frozenset({"-d", "-i", "-o", "-p", "-r", "-B", "-V", "-Y", "-z", "-D", "-F",
+                                 "--directory", "--input", "--strip", "--reject-file"})
+
+
+def option_operands(args: list, value_options: frozenset) -> list:
+    """The words of `args` that are operands: no option, no separate option value."""
+    out, skip = [], False
+    for n, tok in enumerate(args):
+        if skip:
+            skip = False
+        elif tok == "--":
+            out.extend(args[n + 1:])
+            break
+        elif tok.startswith("-") and len(tok) > 1:
+            skip = "=" not in tok and tok in value_options
+        else:
+            out.append(tok)
+    return out
+
+
+def find_write_targets(args: list) -> list:
+    """The start points of a `find` that deletes or writes (an action of its own, or an
+    -exec of a writer), else []. A read-only find, `-exec grep` included, yields nothing."""
+    writes = any(tok in FIND_WRITE_ACTIONS for tok in args)
+    for n, tok in enumerate(args):
+        if tok in FIND_EXEC_ACTIONS and n + 1 < len(args) and base_name(args[n + 1]) in TRUNK_WRITER_NAMES:
+            writes = True
+    if not writes:
+        return []
+    starts = []
+    for tok in args:
+        if tok.startswith("-") or tok in ("(", ")", "!", ","):
+            break
+        starts.append(tok)
+    return starts or ["."]
+
+
+def trunk_command_targets(name: str, args: list) -> list:
+    """The words one command names as what it writes, for the commands only the trunk
+    freeze judges (TRUNK_ONLY_WRITERS and `find`)."""
+    if name == "dd":
+        return [tok[3:] for tok in args if tok.startswith("of=")]
+    if name == "find":
+        return find_write_targets(args)
+    if name == "touch":
+        return option_operands(args, TOUCH_VALUE_OPTIONS)
+    if name in ("rmdir", "unlink"):
+        return option_operands(args, frozenset())
+    if name == "install":
+        into = target_directory(args)
+        if into:
+            return into
+        operands = option_operands(args, INSTALL_VALUE_OPTIONS)
+        return operands if "-d" in args else operands[-1:]
+    if name == "patch":
+        where = next((tok.partition("=")[2] for tok in args if tok.startswith("--directory=")), "")
+        for n, tok in enumerate(args):
+            if tok == "-d" and n + 1 < len(args):
+                where = args[n + 1]
+            elif tok.startswith("-d") and len(tok) > 2 and not tok.startswith("--"):
+                where = tok[2:]
+        return [where or ".", *option_operands(args, PATCH_VALUE_OPTIONS)]
+    return []
+
+
+def git_writes_tree(sub: str, args: list) -> bool:
+    """Whether `git SUB ARGS` rewrites working-tree files: restore, apply, am, clean, rm,
+    mv, `checkout -- paths` and `stash pop|apply`, except the read-only forms."""
+    if sub in TRUNK_GIT_WRITERS:
+        return not any(tok in TRUNK_GIT_READ_FORMS.get(sub, ()) for tok in args)
+    if sub == "checkout":
+        return "--" in args
+    return sub == "stash" and bool(args) and args[0].lower() in ("pop", "apply")
+
+
+def trunk_write_operands(command: str, cwd: str = "", _depth: int = 0):
+    """Yield (operand, directories it may resolve against) for what `command` writes
+    through the writers only the trunk freeze judges: touch, rmdir, unlink, install, dd
+    of=, patch, `find -delete`, and the git calls that rewrite the working tree (their
+    operand is the directory the call runs in, placed by its own -C and the cd in front
+    of it). Nested shell bodies are walked too."""
+    for segment, cur in walk_segments(command, cwd) or []:
+        i = pretool_gate.argv0_index(segment)
+        if i is not None:
+            name, args = base_name(segment[i]), real_arguments(segment[i + 1:])
+            for tok in trunk_command_targets(name, args):
+                yield tok, [cur]
+        for sub, gargs, opts in pretool_gate.git_calls_in(segment):
+            if git_writes_tree(sub, gargs):
+                yield ".", [pretool_gate.place_of(opts, cur)]
+    if _depth < pretool_gate.MAX_SHELL_DEPTH:
+        for body in pretool_gate.nested_command_bodies(command):
+            yield from trunk_write_operands(body, cwd, _depth + 1)
 
 
 def writes_protected_state(command: str, _depth: int = 0, cwd: str = "") -> str:
@@ -1903,6 +2053,51 @@ def zone_denial(tool: str, ti: dict, cwd: str, payload: dict | None) -> str:
         return ZONE_BROKEN_MSG.format(why="the check itself failed")
 
 
+# --- HEAD-moving git in the trunk checkout (epic-0004) ---------------------------------
+# The trunk freeze reads "HEAD is on main". A subagent that moves HEAD off main (checkout -b,
+# switch -c, --detach, reset, rebase onto another branch, branch -M, symbolic-ref) would lift
+# the freeze for the next write, so with worktrees.enabled those calls are refused in a
+# primary checkout that no feature branch holds. A task's own linked worktree is not one.
+# The orchestrator is not bound by this prelude: it cuts branches in the trunk checkout.
+HEAD_MOVING_GIT = frozenset({"checkout", "switch", "reset", "rebase", "symbolic-ref", "update-ref"})
+HEAD_MOVE_MSG = ("{who}: {hit} moves HEAD of the trunk checkout, which would lift the freeze that "
+                 "keeps the trunk free of edits while worktrees.enabled. Work in your task's "
+                 "worktree (the Task worktree line of your dispatch names it); git checkout, "
+                 "switch, reset and branch moves there are yours. Report what you need from the "
+                 "trunk checkout to the orchestrator.")
+
+
+def branch_moves(args: list) -> bool:
+    """`git branch` that renames or force-moves a branch: -f, -m, -M, --force, --move (or a
+    cluster holding one of them)."""
+    for tok in args:
+        if tok == "--":
+            break
+        if tok.startswith("--"):
+            if any(is_long_option_prefix(tok.partition("=")[0], o) for o in ("--force", "--move")):
+                return True
+        elif tok.startswith("-") and any(ch in tok[1:] for ch in "fmM"):
+            return True
+    return False
+
+
+def trunk_head_move(command: str, cwd: str) -> str:
+    """The first HEAD-moving git call of `command` that runs in a trunk checkout, as
+    `git <sub>`, else ''. A call whose place the text does not give counts as a hit."""
+    try:
+        calls = pretool_gate.placed_git_calls(command, cwd, HEAD_MOVING_GIT | {"branch"})
+        for sub, args, _, place in calls or []:
+            if sub == "branch" and not branch_moves(args):
+                continue
+            if pretool_gate.primary_trunk_checkout(place):
+                return f"git {sub}"
+    except pretool_gate.Unplaceable as exc:
+        return f"a git call placed by {exc}"
+    except Exception:
+        return "a git call the check failed on"
+    return ""
+
+
 DEV_WHO = "Dev agent"
 # What a dev agent is told on top of the shared orchestrator-only sentence; the readonly
 # and docs profiles get the sentence alone.
@@ -1930,6 +2125,12 @@ def bash_prelude(who: str, command: str, cwd: str) -> int:
     written = writes_protected_state(command, cwd=cwd)
     if written:
         return deny(PROTECTED_STATE_MSG.format(who=who, path=written))
+    layout = worktree_layout_change(command)
+    if layout and pretool_gate.worktrees_active():
+        return deny(WORKTREE_LAYOUT_MSG.format(who=who, hit=layout))
+    moved = trunk_head_move(command, cwd) if pretool_gate.worktrees_on() else ""
+    if moved:
+        return deny(HEAD_MOVE_MSG.format(who=who, hit=moved))
     return memory_target_deny(who, command, cwd)
 
 

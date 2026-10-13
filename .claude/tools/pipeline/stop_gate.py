@@ -21,6 +21,13 @@ nothing holds it: no run in an editing stage (blocked included - a blocked task
 still owns its dirty tree) and no run awaiting a human, because the CEO may be
 reading the diff on that very branch.
 
+With worktrees on and `max_parallel` above 1 that sentence changes shape: a task
+that lives in its own worktree holds a SLOT, not the checkout, so a parked or
+busy one no longer stops the queue. A new task starts while a slot is free and
+nothing exclusive is live - a legacy run holding `src/`, or an umbrella (see
+parallel_slots() and the free-slot test in decide()). With the flag off or
+`max_parallel` 1 every decision below is the serial one, unchanged.
+
 Documentation owed by COMPLETED tasks - a missing handoff doc, an unstamped
 memory review - is read on every stop and blocks it, regardless of what is in
 flight. Both checks used to sit inside the free-slot branch, which switched them
@@ -73,6 +80,7 @@ import mode
 import pretool_gate
 import state
 import swarm
+import worktree
 
 DEPENDS_RE = re.compile(r"^depends_on:\s*\[(.*?)\]", re.MULTILINE)
 TASK_ID_RE = re.compile(r"(task-\d+)")
@@ -166,7 +174,7 @@ STOP_HOOK_ACTIVE = False
 # eleven call sites. A single-shot CLI process with exactly one decide() call is
 # the only reason a module global is honest here; an empty context simply means
 # "nothing to park", which is the case for every block() outside decide().
-_CTX: dict = {"conn": None, "runs": ()}
+_CTX: dict = {"conn": None, "runs": (), "left": []}
 
 BACKLOG_DIR = state.BACKLOG_DIR
 ACTIVE_DIR = state.ACTIVE_DIR
@@ -636,6 +644,48 @@ def any_busy_marker_fresh() -> bool:
         return False
 
 
+def doc_busy_marker_fresh(runs: list[dict]) -> bool:
+    """True when a fresh busy marker belongs to a task that has NO live run - a
+    handoff doc being scaffolded for a finished task, say. Only that kind still
+    silences the hook once several tasks may run at once (F6).
+
+    A marker of a live run says "this run is being worked", which the step 2 loop
+    already honours for that run alone, and the run holds a slot whatever its
+    marker says. Silencing every other task on its account is the serial rule's
+    shape: right with one tree, wrong with several. `runs` is the stop's snapshot.
+
+    Fail-open like any_busy_marker_fresh(): an error means nothing is busy."""
+    try:
+        live = {r["task"] for r in runs if r["stage"] != "done"}
+        return any(busy_marker_fresh(task) for task in busy.tasks() if task not in live)
+    except Exception:
+        return False
+
+
+def parallel_slots() -> int:
+    """How many tasks may be in flight at once: `max_parallel` when worktrees are
+    enabled, else 1. 1 is the serial conveyor, decision for decision.
+
+    Both halves are needed. The flag off means no new task gets a tree, so every
+    run would hold `src/` and the slot count would be meaningless; `max_parallel`
+    1 is the CEO choosing serial. Any error reads as 1, the safe side."""
+    try:
+        return worktree.max_parallel() if worktree.enabled() else 1
+    except Exception:
+        return 1
+
+
+def slots_in_use(limit: int) -> int:
+    """worktree.slots_used(), or `limit` (full) when it cannot be read: a start
+    the hook cannot count slots for is a start it does not make. Doubt is any
+    exception (worktree.Doubt from an unreadable store or an invalid row included),
+    and it reads as "no free slot"."""
+    try:
+        return worktree.slots_used()
+    except Exception:
+        return limit
+
+
 def task_file(task: str):
     """The task's file wherever it currently sits, or None."""
     for d in (DONE_DIR, ACTIVE_DIR, BACKLOG_DIR):
@@ -692,6 +742,22 @@ def stranded(r: dict, pipeline: dict) -> bool:
     than declaring every run stranded."""
     names = state.stage_names(pipeline, state.run_pipeline(r))
     return bool(names) and r["stage"] != "done" and r["stage"] not in names
+
+
+def holds_tree(r: dict, pipeline: dict) -> bool:
+    """True when this run owns the checkout it works in: an editing or checkpoint
+    stage, a run awaiting a human, a BLOCKED run (it keeps its dirty tree) or a
+    stranded one. A paused run owns nothing. decide() step 3 explains each clause;
+    this is that test, lifted out so the parallel branch can ask the same question
+    of the runs that DO share `src/`."""
+    which = state.run_pipeline(r)
+    return bool(not state.is_paused(r) and (
+        r["stage"] in state.editing_stages(pipeline, which)
+        or r["stage"] in state.checkpoint_stages(pipeline, which)
+        or r["awaiting_human"]
+        or (r["stage"] != "done" and r["stage_status"] == state.ST_BLOCKED)
+        or stranded(r, pipeline)
+    ))
 
 
 def handoff_debt() -> list:
@@ -939,8 +1005,14 @@ def reconcile_status_drift(conn) -> tuple[list, list]:
     also sweeps an umbrella's subtasks, so a forgeable signal here skipped every
     checkpoint of every one of them.
 
+    A task closed here by a confirmed merge keeps its worktree: removing it takes
+    git calls the 20 s hook budget cannot afford, so a tree still on disk is
+    recorded in `_CTX["left"]` for decide() to name, with the command that removes
+    it. The task is closed either way.
+
     Returns (moved, closed) task-id lists. Fail-open: never raises."""
     moved, closed = [], []
+    _CTX["left"] = []
     try:
         runs = {r["task"]: r for r in state.all_runs(conn)}
         active_files = list(ACTIVE_DIR.glob("task-*.md")) if ACTIVE_DIR.is_dir() else []
@@ -960,6 +1032,7 @@ def reconcile_status_drift(conn) -> tuple[list, list]:
                     # awaiting_human set would freeze the queue on a finished task.
                     state.set_fields(conn, task, stage="done", awaiting_human="",
                                      stage_status=state.ST_GATE_PASSED, event="merged")
+                note_merged_tree(task)
         for task, r in runs.items():
             # A run whose file left active/ for done/ - or vanished - is stale;
             # close it. A file put BACK into backlog/ is a deliberate unqueue,
@@ -972,9 +1045,26 @@ def reconcile_status_drift(conn) -> tuple[list, list]:
                                  stage_status=state.ST_GATE_PASSED, event="closed",
                                  reason="its task file left active/ and main carries its tag")
                 closed.append(task)
+                note_merged_tree(task)
     except Exception:
         pass
     return moved, closed
+
+
+def note_merged_tree(task: str) -> None:
+    """A merged task whose recorded tree is still on disk is NAMED in `_CTX["left"]`,
+    never removed: `worktree.remove` is up to three git calls with sleeps in between,
+    and the Stop hook has twenty seconds in all. advance.py removes the tree after a
+    merge it confirmed; for a merge it did not, the person runs
+    `worktree.py --remove --task <task>` (the bookkeeping block says so). A task with
+    no tree (legacy, or already removed) adds nothing, so this is a no-op for every
+    serial run. Fail-open."""
+    try:
+        rel = worktree.recorded(task)
+        if rel and (state.ROOT / rel).exists():
+            _CTX["left"].append(f"{task} ({rel})")
+    except Exception:
+        pass
 
 
 # What each `awaiting_human` value advance.py writes means to the person the run
@@ -1150,7 +1240,7 @@ def decide() -> int:
                 return block(
                     f"{r['task']} checkpoint approved (awaiting_human={aw}). Perform the "
                     f"git {aw} now, then run: python .claude/tools/pipeline/advance.py --task {r['task']}. "
-                    f"Do not ask the user.{busy_marker_note(r['task'])}",
+                    f"Do not ask the user.{state._dispatch_note(r['task'])}{busy_marker_note(r['task'])}",
                     f"{r['task']}: the {aw} approval is recorded and the agent is doing the "
                     f"git {aw} now. Nothing is owed by you.")
             # Parked, unapproved checkpoint -> not autonomously advanceable.
@@ -1190,7 +1280,7 @@ def decide() -> int:
                     return block(
                         f"{r['task']} stage '{stage}' gate FAILED. Fix the cause, then re-run: "
                         f"python .claude/tools/pipeline/advance.py --task {r['task']}. Do not ask the user."
-                        f"{busy_marker_note(r['task'])}",
+                        f"{state._dispatch_note(r['task'])}{busy_marker_note(r['task'])}",
                         f"{r['task']} failed the exit gate of stage '{stage}'. The agent is "
                         f"fixing it and re-running; nothing is owed by you unless the retries "
                         f"run out.", "gate-failure")
@@ -1198,7 +1288,7 @@ def decide() -> int:
                     f"{r['task']} is at stage '{stage}'. Finish the stage work (dispatch the owning "
                     f"subagent if needed), then run: python .claude/tools/pipeline/advance.py "
                     f"--task {r['task']}. Do not ask the user whether to continue."
-                    f"{busy_marker_note(r['task'])}",
+                    f"{state._dispatch_note(r['task'])}{busy_marker_note(r['task'])}",
                     f"{r['task']} is at stage '{stage}' and the agent is still working on it. "
                     f"Nothing is owed by you.")
             # A LIVE RUN ON A STAGE ITS OWN FLOW DEFINES AND editing_stages DOES
@@ -1239,7 +1329,7 @@ def decide() -> int:
                 f"hook drives it. Run: python .claude/tools/pipeline/advance.py "
                 f"--task {r['task']} - it advances the stage or names the recovery. If the "
                 f"stage is real work, add it to editing_stages. Do not ask the user."
-                f"{busy_marker_note(r['task'])}",
+                f"{state._dispatch_note(r['task'])}{busy_marker_note(r['task'])}",
                 f"{r['task']} is at stage '{stage}', which the '{which}' flow does not list as "
                 f"work for the agent. The agent is being told to advance it; nothing is owed "
                 f"by you.")
@@ -1258,7 +1348,15 @@ def decide() -> int:
         # silence was permanent. A marker expires (state.BUSY_TIMEOUT), so the
         # debt is deferred by at most one marker's life and is then raised again
         # by the branches below.
-        if any_busy_marker_fresh():
+        #
+        # With several slots (parallel_slots() above 1) only a marker that belongs
+        # to no live run still silences everything (F6): that is a doc scaffold,
+        # which the paragraph above is about. A live run's marker is that run's
+        # alone - the loop above skipped the run - and the run already counts as a
+        # slot, so letting it silence the whole queue would put the serial rule
+        # back in a conveyor that is supposed to start the next task meanwhile.
+        slots = parallel_slots()
+        if doc_busy_marker_fresh(runs) if slots > 1 else any_busy_marker_fresh():
             return allow()
 
         # 3. Nothing holding the working tree -> start the next ready backlog task.
@@ -1322,17 +1420,19 @@ def decide() -> int:
         # on its own branch. It is therefore left out of this test whole, whatever
         # stage it was set aside at. This is the paused half of the pair whose
         # other half is the `continue` at the top of the step 2 loop.
-        occupied = any(
-            not state.is_paused(r) and (
-                r["stage"] in state.editing_stages(pipeline, state.run_pipeline(r))
-                or r["stage"] in state.checkpoint_stages(pipeline, state.run_pipeline(r))
-                or r["awaiting_human"]
-                or (r["stage"] != "done" and r["stage_status"] == state.ST_BLOCKED)
-                or stranded(r, pipeline)
-            )
-            for r in runs
-        )
-        if not occupied:
+        # PARALLEL (slots above 1): a run that lives in its own worktree holds a
+        # slot, not the checkout, so it is left out of the tree test above and
+        # counted against `max_parallel` instead - a parked, blocked or busy one
+        # no longer stops the queue (F5, F11). What still holds `src/` is exclusive
+        # and stops it: a legacy run, an umbrella (no worktree, 2.12) and a plan
+        # flow run. SERIAL (slots 1: flag off or max_parallel 1): the test above,
+        # for every run, exactly as before.
+        if slots > 1:
+            free = (not any(holds_tree(r, pipeline) and not r.get("worktree") for r in runs)
+                    and slots_in_use(slots) < slots)
+        else:
+            free = not any(holds_tree(r, pipeline) for r in runs)
+        if free:
             # Taking work on is itself a checkpoint. Below `auto` the CEO says
             # which task to start, so an empty in-flight set means "stop and
             # ask", not "help yourself to the queue".
@@ -1369,6 +1469,13 @@ def decide() -> int:
                     elif sum(1 for u in queue
                              if u.get("epic") == t["epic"] and not u.get("umbrella")) >= 2:
                         swarm_epic = t["epic"]
+                # An umbrella runs in `src/` itself (no worktree, plan 2.12), so it
+                # is exclusive in BOTH directions: nothing of the slot kind starts
+                # while it lives (the free-slot test), and it does not start while
+                # a slot is in use. The candidate is waited for, not skipped, or a
+                # steady stream of ordinary tasks would starve it for ever.
+                if slots > 1 and (t.get("umbrella") or swarm_epic) and slots_in_use(slots) > 0:
+                    break
                 # What the demands below end in: the advance.py command for this
                 # task, or the swarm start when t is a subtask of a swarm epic.
                 tail = (swarm_tail(swarm_epic) if swarm_epic else
@@ -1431,9 +1538,17 @@ def decide() -> int:
                 if swarm_epic:
                     reason, human = swarm_demand(t["id"], swarm_epic)
                 else:
+                    # Worktrees on: registration creates the branch AND the tree
+                    # (F10), so the old "create its branch" step would cut a second
+                    # branch in `src/` - the trunk checkout nobody edits. An umbrella
+                    # is the exception: it gets no tree and runs in `src/` on its own
+                    # branch, so it keeps the old instruction.
+                    how = ("advance.py creates its branch and its worktree, so do not run "
+                           "git checkout -b yourself. Run: python "
+                           if worktree.enabled() and not t.get("umbrella") else
+                           "create its branch per git-workflow.md, then run: python ")
                     reason = (
-                        f"Start the next ready task {t['id']}: create its branch per "
-                        f"git-workflow.md, then run: python "
+                        f"Start the next ready task {t['id']}: {how}"
                         f".claude/tools/pipeline/advance.py --task {t['id']}. "
                         f"Drive it through the pipeline without asking the user.")
                     human = (
@@ -1455,6 +1570,10 @@ def decide() -> int:
                 bits.append(f"moved to tasks/done/: {', '.join(moved)}")
             if closed:
                 bits.append(f"closed stale run(s): {', '.join(closed)}")
+            left = list(_CTX["left"])
+            if left:
+                bits.append(f"worktree still in place: {', '.join(left)} - remove it with "
+                            f"python .claude/tools/pipeline/worktree.py --remove --task <task>")
             return block(
                 "Reconciled task-status drift (" + "; ".join(bits) + "). These were "
                 "already merged but left in tasks/active/ or run.db. This is bookkeeping "
@@ -1539,11 +1658,23 @@ def decide() -> int:
         if owed or parked_now(runs):
             return release(" ".join(text for text, _ in owed),
                            next((ev for _, ev in owed if ev), None))
+        # Idle: one line when a task worktree is left over (plan section 3). It is
+        # information for the person, never a demand on the model, so it releases.
+        # Only with the flag on, so a harness without worktrees pays nothing here.
+        try:
+            orphans = worktree.orphans() if worktree.enabled() else []
+        except Exception:
+            orphans = []
+        if orphans:
+            return release(f"{len(orphans)} task worktree(s) left over, e.g. {orphans[0]['path']} "
+                           f"({orphans[0]['why']}): python .claude/tools/pipeline/worktree.py "
+                           f"--sweep lists them, --remove --task <task> removes one. "
+                           f"Nothing is owed by you.")
         return allow()
     finally:
         # The snapshot is this stop's alone: left behind, a later call outside
         # decide() would announce parks that were already announced.
-        _CTX.update(conn=None, runs=())
+        _CTX.update(conn=None, runs=(), left=[])
         conn.close()
 
 

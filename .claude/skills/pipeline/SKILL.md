@@ -64,6 +64,19 @@ name keep their value.
 
 After any switch, run the adapter's `show` and report the state in one line.
 
+## Worktrees (config, not a dial)
+
+Parallel tasks are switched by `pipeline.json` `worktrees`, not by a command:
+`{"enabled": false, "max_parallel": 2}`. It is independent of the three dials and
+applies to the `build` flow only. With `enabled` true, `advance.py` registers each
+non-umbrella task into its own git worktree (`<repo path>-wt/<task>`, branch
+`<type>/<task>`), its gates run there, and up to `max_parallel` tasks hold an
+editing stage at once (the swarm dial's umbrellas and any run registered before the
+flag stay in `src/` and exclusive). Every dispatch for such a task carries the
+`Task worktree:` line that `advance.py` prints. Read the current state with
+`python .claude/tools/pipeline/worktree.py --list`. Rules,
+rollout and rollback: "Parallel tasks in worktrees" in `rules/orchestration.md`.
+
 ## Behaviour per mode
 
 - **build**: drive the build flow through the project's gated scripts; with swarm on follow the swarm skill, with swarm off one task at a time. The build flow is `plan -> plan-approval -> implement -> test -> review -> ready -> done`; every type except those in `skip_for_types` (`bugfix`, `techdebt`) starts at `plan` and needs the CEO's plan approval (`approve.py --gate plan`) before any edit outside `.agentry/`, while `bugfix` and `techdebt` start at `implement`.

@@ -22,7 +22,7 @@ becomes an allow, least of all on a commit, a push or a plan. Every test below t
 says "keeps the deny" pins that for one gate.
 
 N of N: the table in DenySiteAccountingTest is every `deny(` call in pretool_gate.py
-(40) and agent_gate.py (21), classified. Five pretool_gate sites ask the CEO for
+(50) and agent_gate.py (25), classified. Five pretool_gate sites ask the CEO for
 something (a plan, a commit, a push, a merge's commit approval, a step left to the
 human by an unattended session); the rest are policy denies and say nothing to him.
 agent_gate asks nobody: its denies are role boundaries.
@@ -72,19 +72,21 @@ DASHES = tuple(chr(code) for code in (0x2014, 0x2013))
 PRETOOL_DENIES = {
     "check_bare_nul": 1, "check_branch_base": 1, "check_branch_creation": 2,
     "check_commit_attribution": 1, "check_destructive_and_repl": 4,
-    "check_merge_source": 4, "check_nul_redirect": 1, "check_piped_test_suite": 1,
+    "check_merge_source": 5, "check_nul_redirect": 1, "check_piped_test_suite": 1,
     "check_push_target": 4, "check_trunk_merge": 2, "check_unattended": 1,
     "evaluate": 1, "finish": 1,
-    "handle_bash": 13, "handle_edit": 5, "orch_check_bash": 4, "orch_check_edit": 1,
-    "plan_deny": 1,
+    "handle_bash": 3, "handle_edit": 5, "judge_git": 9, "orch_check_bash": 4,
+    "orch_check_edit": 1, "placement_deny": 1, "plan_deny": 1, "trunk_freeze_deny": 1,
+    "unc_deny": 1,
 }
-# The subset that asks the human: it passes `human=`. handle_bash holds the commit
-# and the push; plan_deny is the one plan site, called from handle_bash and
-# handle_edit.
-PRETOOL_ASKING = {"check_merge_source": 1, "check_unattended": 1, "handle_bash": 2,
+# The subset that asks the human: it passes `human=`. judge_git (the git half of
+# handle_bash, run once per commit / merge / pull / push while worktrees are in play)
+# holds the commit and the push; plan_deny is the one plan site, called from handle_bash
+# and handle_edit.
+PRETOOL_ASKING = {"check_merge_source": 1, "check_unattended": 1, "judge_git": 2,
                   "plan_deny": 1}
 PLAN_DENY_CALLERS = {"handle_bash": 1, "handle_edit": 1}
-AGENT_DENIES = {"bash_prelude": 4, "check_program": 1, "evaluate": 2, "handle_dev": 7,
+AGENT_DENIES = {"bash_prelude": 6, "check_program": 1, "evaluate": 2, "handle_dev": 7,
                 "handle_docs": 3, "handle_readonly": 1, "handle_web": 1,
                 "lexical_bash_checks": 1,
                 "memory_target_deny": 1, "git_target_deny": 1, "restricted_bash": 2}
@@ -186,7 +188,7 @@ class DenySiteAccountingTest(unittest.TestCase):
                          "a deny() was added or removed in pretool_gate.py: decide whether "
                          "it asks the CEO for something (then give it human=) and update "
                          "this table")
-        self.assertEqual(48, sum(every.values()))
+        self.assertEqual(51, sum(every.values()))
         self.assertEqual(PRETOOL_ASKING, asking)
         self.assertEqual(PLAN_DENY_CALLERS, via_plan)
 
@@ -196,7 +198,7 @@ class DenySiteAccountingTest(unittest.TestCase):
                          "a deny() was added or removed in agent_gate.py: a role boundary "
                          "asks the CEO for nothing; if this one does, it needs a human= "
                          "channel that agent_gate does not have yet")
-        self.assertEqual(24, sum(every.values()))
+        self.assertEqual(26, sum(every.values()))
         self.assertEqual({}, asking)
         self.assertEqual({}, via_plan)
 

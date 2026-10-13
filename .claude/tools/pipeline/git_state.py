@@ -123,19 +123,41 @@ def repos() -> list[Path]:
         return [state.ROOT / str(r) for r in legacy]
 
     found: list[Path] = []
-    if (state.ROOT / ".git").exists():
+    if is_repo_root(state.ROOT):
         found.append(state.ROOT)
     for child in sorted(state.ROOT.iterdir()):
         try:
-            if child.is_dir() and (child / ".git").exists():
+            if child.is_dir() and is_repo_root(child):
                 found.append(child)
             elif child.is_dir():
                 for grandchild in sorted(child.iterdir()):
-                    if grandchild.is_dir() and (grandchild / ".git").exists():
+                    if grandchild.is_dir() and is_repo_root(grandchild):
                         found.append(grandchild)
         except OSError:
             continue
     return found
+
+
+def is_repo_root(path: Path) -> bool:
+    """True when `path` holds a git repo of its own: a `.git` directory, or a `.git`
+    file (a submodule checkout, a repo made with --separate-git-dir) that is not a
+    LINKED WORKTREE's. A linked worktree's `.git` file points at
+    `<common git dir>/worktrees/<name>`; it is a second checkout of a repo already
+    listed, never a repo of its own (epic-0004), so `src-wt/task-0130` is never
+    scanned, fetched or merge-checked as if it were one."""
+    git = Path(path) / ".git"
+    try:
+        if git.is_dir():
+            return True
+        if not git.is_file():
+            return False
+        for line in git.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("gitdir:"):
+                target = Path(line.split(":", 1)[1].strip())
+                return target.parent.name.casefold() != "worktrees"
+    except OSError:
+        pass
+    return False
 
 
 def main_branch() -> str:
@@ -319,6 +341,16 @@ def base_is_current(repo: Path, ref: str = "HEAD") -> bool | None:
     return _is_ancestor(repo, trunk(repo), ref)
 
 
+def behind_trunk(repo: Path, ref: str = "HEAD", timeout: int | None = None) -> int | None:
+    """How many commits the trunk has that `ref` lacks: 0 is fresh, None is "cannot
+    tell" (a git error, an unresolvable ref). `repo` may be a linked worktree - the
+    refs are shared, so the trunk reads the same from every checkout. `timeout`
+    None means GIT_TIMEOUT."""
+    limit = GIT_TIMEOUT if timeout is None else timeout
+    code, out = _git(repo, "rev-list", "--count", f"{ref}..{trunk(repo)}", timeout=limit)
+    return int(out) if code == 0 and out.isdigit() else None
+
+
 def resolve_key(entries: dict[str, dict], repo: str) -> str:
     """The repos{} key for a `repo:` value, or "". Loose on purpose, because task
     files carry both `backend` and `backend/src` for the same repo: the exact
@@ -386,6 +418,21 @@ def repos_for_task(task: str) -> list[Path]:
     if not declared:
         return repos()
     return repos_named(declared)
+
+
+def work_trees_for_task(task: str) -> list[Path]:
+    """The directories a task's changes are read from. A recorded worktree that is
+    usable is the only one; a run with no worktree of its own reads the repos it
+    lives in, as before; a recorded one that is missing or malformed is UNKNOWN - an
+    empty list, never the trunk checkout, so a caller that gets nothing parks."""
+    import worktree  # lazy: worktree.py imports this module
+    found = worktree.status(task)
+    if found == worktree.STATUS_OK:
+        tree = worktree.work_dir(task)
+        return [tree] if tree is not None else []
+    if found == worktree.STATUS_LEGACY:
+        return repos_for_task(task)
+    return []
 
 
 def task_tagged_in_main(task: str) -> bool:

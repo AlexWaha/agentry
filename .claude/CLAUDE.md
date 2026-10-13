@@ -91,7 +91,11 @@ state and gate checks live in deterministic hooks (`.claude/tools/pipeline/` +
   stage at a time; parked tasks wait for the CEO while the next ready task runs.
   A multi-subtask epic registered as one umbrella task runs in parallel inside
   its `implement` stage instead (after the plan approval, since the umbrella is a
-  `feature`) - see "Swarm mode" in `rules/orchestration.md`.
+  `feature`) - see "Swarm mode" in `rules/orchestration.md`. With
+  `worktrees.enabled` in `pipeline.json`, each task gets its own git worktree
+  (`src-wt/<task>`) and up to `max_parallel` tasks edit at once; legacy runs and
+  umbrellas stay exclusive - see "Parallel tasks in worktrees" in
+  `rules/orchestration.md`.
 - **Handoff chain:** before a new task registers, the previous completed task's
   handoff doc must exist and validate in `.agentry/tasks/handoffs/`. The NEXT
   task's assignee is to write it in its own words; that is an instruction, and

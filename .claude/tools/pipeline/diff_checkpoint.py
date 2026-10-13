@@ -12,6 +12,10 @@ is approving a summary of it. Two delivery paths, one entry point (deliver):
     model a capped diff to put in the AskUserQuestion preview, with a pointer to
     /diff for the full view.
 
+A task that lives in its own worktree always takes the second path: /diff reads the
+session's checkout, not that tree, so nothing is typed and the preview carries the
+tree's diff.
+
 Neither path reaches the checkpoint without a diff, and neither can block it:
 every failure on the injection path falls through to the preview, and every
 failure on the preview path degrades to the bare /diff pointer (NFR-4).
@@ -32,6 +36,7 @@ import sys
 
 import git_state
 import state
+import worktree
 
 DIFF_COMMAND = "/diff"
 
@@ -162,8 +167,17 @@ def _cap(text: str) -> str:
 def _changes(task: str, with_diff: bool) -> str:
     """Working-tree changes of every repo the task lives in, capped. The short
     status comes first because a new file does not appear in a diff. With more
-    than one repo each block is headed `# <repo name>`."""
-    repos = git_state.repos_for_task(task)
+    than one repo each block is headed `# <repo name>`.
+
+    A task that lives in a worktree is read from that tree, not from `src/` (F8).
+    When the tree is MISSING or INVALID there is nothing honest to show, and the
+    clean `src/` would show an empty diff for work it cannot see, so the answer is
+    one line saying so."""
+    broken = worktree.status(task)
+    if broken in (worktree.STATUS_MISSING, worktree.STATUS_INVALID):
+        return (f"task worktree {broken}: no changes can be shown. Repair it: python "
+                f".claude/tools/pipeline/worktree.py --repair --task {task}")
+    repos = git_state.work_trees_for_task(task)
     blocks = []
     for repo in repos:
         # Colour forced off: a user config of color.status=always puts escape
@@ -188,12 +202,26 @@ def changed_files(task: str) -> str:
     return _changes(task, with_diff=False)
 
 
+def _in_tree(task: str) -> bool:
+    """The task's changes live in its own worktree. The built-in /diff reads the
+    session's checkout, so for such a task it would not show them (F3): nothing is
+    typed into the console and the card carries the tree's diff instead."""
+    try:
+        return worktree.status(task) == worktree.STATUS_OK
+    except Exception:
+        return False
+
+
 def _preview_note(task: str) -> str:
     try:
         diff = capped_diff(task)
     except Exception:
         diff = ""
-    pointer = f" Tell the CEO to run {DIFF_COMMAND} for the full diff."
+    if _in_tree(task):
+        pointer = (f" {DIFF_COMMAND} does not read this task's worktree, so do not point the CEO "
+                   f"to it.")
+    else:
+        pointer = f" Tell the CEO to run {DIFF_COMMAND} for the full diff."
     if not diff:
         return pointer
     return (f"{pointer} Put the diff below, verbatim, in the preview field of the "
@@ -219,7 +247,7 @@ def deliver(task: str, *, inject: bool) -> str:
     try:
         if not at_commit_parking_point(task):
             return ""
-        if inject and inject_diff(task):
+        if inject and not _in_tree(task) and inject_diff(task):
             return _injected_note(task)
         return _preview_note(task)
     except Exception:
