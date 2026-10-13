@@ -411,9 +411,10 @@ def task_tagged_in_main(task: str) -> bool:
 def task_report(task: str, do_fetch: bool = True, branch: str = "") -> list[dict]:
     """Where a task stands in every repo that knows about it.
 
-    `branch` is the task's declared carrier branch (see declared_ref). Merge
-    detection resolves against it when given, so two tasks sharing one branch
-    are both detectable.
+    `branch` is the task's declared carrier branch (see declared_ref); when empty
+    it is the one recorded at registration (state.task_branch), never the file's
+    current `branch:`. Merge detection resolves against it when given, so two
+    tasks sharing one branch are both detectable.
 
     An EMPTY list means no repo carries either signal - no branch and no tagged
     commit. That is UNKNOWN, never "nothing to merge": the caller must park, not
@@ -422,6 +423,7 @@ def task_report(task: str, do_fetch: bool = True, branch: str = "") -> list[dict
     The loop runs over repos_for_task(), not repos(): a colliding task id in an
     unrelated repo is otherwise read as this task's unmerged branch."""
     out = []
+    branch = branch or state.task_branch(task)
     for repo in repos_for_task(task):
         if do_fetch:
             fetch(repo)

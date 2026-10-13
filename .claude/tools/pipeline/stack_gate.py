@@ -70,6 +70,8 @@ def main() -> int:
     args = ap.parse_args()
 
     entries = git_state.repo_entries()
+    # task_repo() reads the `repo:` recorded at registration, so rewriting the task
+    # file after the approval cannot send this gate to a repo with weaker commands.
     repo = args.repo or state.task_repo(args.task) or ""
     key = resolve_key(entries, repo)
 

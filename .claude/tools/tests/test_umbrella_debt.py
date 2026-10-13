@@ -53,6 +53,7 @@ class UmbrellaDebtTest(unittest.TestCase):
         for target, name, value in (
                 (state, "ROOT", self.root), (state, "TASK_DIRS", dirs),
                 (state, "STATE_DIR", self.root / ".agentry" / "state"),
+                (state, "DB_PATH", self.root / ".agentry" / "state" / "run.db"),
                 (update, "DONE_DIR", self.done), (update, "STAMP_DIR", self.stamps)):
             patcher = unittest.mock.patch.object(target, name, value)
             patcher.start()
@@ -72,6 +73,15 @@ class UmbrellaDebtTest(unittest.TestCase):
         listed = SUBTASKS if listed is None else listed
         self.put(folder or self.done, UMBRELLA,
                  f"epic: {epic}\numbrella: {flag}\nsubtasks: [{', '.join(listed)}]")
+        # The umbrella flag, epic and list are read from the run row (task-0124), and
+        # only a row at `done` with the commit approved covers anything.
+        conn = state.connect()
+        try:
+            if state.get_run(conn, UMBRELLA) is None:
+                state.create_run(conn, UMBRELLA, "feature", "done")
+                state.set_fields(conn, UMBRELLA, commit_approved=1)
+        finally:
+            conn.close()
 
     def subtasks(self, epic: str = EPIC) -> None:
         for task in SUBTASKS:

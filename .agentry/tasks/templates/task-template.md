@@ -24,7 +24,8 @@ epic:
 # umbrella task sets `umbrella: true`, the `epic:` above, and lists the epic's
 # subtask files as `subtasks: [task-0001, task-0002]` (bracketed). When it is
 # merged, advance.py moves the listed subtasks to done/ too. Leave both off on
-# an ordinary task.
+# an ordinary task. umbrella, epic, subtasks, branch and repo are frozen in the
+# run row when the task is registered; editing them afterwards changes nothing.
 # umbrella: true
 # subtasks: []
 spec:

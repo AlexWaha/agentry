@@ -319,8 +319,9 @@ and "forgot to commit" look identical in git a week later.
 Two tasks worked on one branch (what a preemption can leave behind) are judged
 by the commit message, not the branch name: a commit tagged `[task-NNNN]` is
 approved by that task's run. A tag that names a task other than the branch's is
-accepted only when that task is registered, not done, and declares `branch:
-<the checked-out branch>` in its task-file frontmatter; otherwise the commit is
+accepted only when that task is registered, not done, and declared `branch:
+<the checked-out branch>` when it was registered (frozen in the run row; later
+edits to the task file change nothing); otherwise the commit is
 denied naming both ids. An untagged commit is judged by the branch, as before.
 The drift reconciler (`stop_gate` step 4) is deliberately not reachable while a
 run needs driving; a task file moved by hand does not stop the hook, pausing
@@ -532,8 +533,11 @@ This project's specifics:
   session. The subtask files stay in `.agentry/tasks/backlog/` as the work list
   and move to `done/` with the umbrella task after the merge.
 - **How the scripts recognise an umbrella.** Its task file carries frontmatter
-  `umbrella: true`, `epic: epic-XXXX` and `subtasks: [task-A, task-B]`. With the
-  dial on, the Stop hook never offers a backlog task whose `epic:` matches a
+  `umbrella: true`, `epic: epic-XXXX` and `subtasks: [task-A, task-B]`. These
+  are read once at registration and kept in the run row; the sweep and the debt
+  cover read the row, so list every subtask before starting the umbrella. Swarm
+  is single-lane: the umbrella cover and the sweep read the current lane's run
+  db. With the dial on, the Stop hook never offers a backlog task whose `epic:` matches a
   registered umbrella. When the next ready task belongs to an epic with two or
   more non-umbrella backlog subtasks and no umbrella, it demands the swarm start
   (create the umbrella file if missing) instead of a single-task start, at the
@@ -546,8 +550,9 @@ This project's specifics:
   has `commit_approved` set, and a move never overwrites an existing
   destination file (task-0121).
 - **Umbrella debt.** Handoff and memory-stamp debt is owed by the umbrella task
-  alone. A done subtask whose covering umbrella (same non-empty `epic:`, listed in
-  its `subtasks:`) is itself debt-checked is skipped by `handoff.py` and
+  alone. A done subtask whose covering umbrella (an umbrella run row at stage
+  `done` with the commit approved, same non-empty `epic:`, the task in its
+  recorded `subtasks` list) is itself debt-checked is skipped by `handoff.py` and
   `memory/update.py`, so one handoff doc and one stamp for the umbrella cover all
   of its subtasks and no per-subtask waiver is needed. The umbrella's own debt is
   still reported. `git_state.task_in_main` now matches the `[task-N]` tag only at
@@ -636,12 +641,13 @@ rules that govern the orchestrator's own tool calls also govern the agents:
 
 | Profile | Agents | Enforced |
 |---------|--------|----------|
-| `dev` | senior-backend-dev, senior-frontend-dev, qa-engineer, devops-engineer, data-engineer, rapid-prototyper | commit/push approval flags, protected-branch push deny, review-stage edit freeze, no force push, no `approve.py`, no test-suite runs (`gates.dev_forbidden_commands` - the full suite runs once, in the test-stage exit gate the orchestrator drives through `advance.py`; agents run narrowed runs only) |
+| `dev` | senior-backend-dev, senior-frontend-dev, qa-engineer, devops-engineer, data-engineer, rapid-prototyper | commit/push approval flags, protected-branch push deny, review-stage edit freeze, no force push, no git `update-ref` or `symbolic-ref`, no fetch/pull/push that writes `refs/remotes`, no `approve.py`, no test-suite runs (`gates.dev_forbidden_commands` - the full suite runs once, in the test-stage exit gate the orchestrator drives through `advance.py`; agents run narrowed runs only) |
 | `readonly` | architect, reviewer, security-engineer, evidence-collector, performance-benchmarker, ai-detector, accessibility-auditor, incident-response-commander | Edit/Write denied; Bash default-deny on the program name plus a per-program flag allowlist (below); any gate crash denies |
 | `docs` | technical-writer, product-manager, spec-developer, sprint-prioritizer, content-manager, content-writer, editor, humanizer, seo-specialist, geo-specialist, business-analyst, financial-analyst, marketing-strategist, brand-guardian, ux-researcher, ux-ui-designer, feedback-synthesizer | Edit/Write only under `.claude/`, `.agentry/`, `docs/`, README, never the live `.claude/rules\|skills\|commands` or a `.git` path; Bash default-deny as `readonly`; any gate crash denies |
 
 Every profile: no write to any `.git` path; a crash in the `dev` gate allows the
-call (see "Gate crash" below).
+call (see "Gate crash" below). A time-out is not a crash: the glob deadline (2 s)
+and the 14 s hook watchdog deny in every profile, `dev` included.
 
 The MAIN THREAD carries its own profile: `orchestrator_gate` in `pipeline.json`
 (enforced by `pretool_gate.py`) denies orchestrator Edit/Write and shell
@@ -705,6 +711,9 @@ profile). What each layer does and does not cover (task-0116):
   remote or `allow_push_to_main` is read. The orchestrator spends the marker
   atomically (`os.replace` to a `.spent-<uuid>` file) before the push is allowed;
   if it cannot be spent, the push is denied.
+- **UNC paths.** In readonly and docs, a path operand with two or more leading
+  `/` or `\` is refused, and no gate ever stats one (a stat on a UNC host can
+  block on the network).
 - **A command over the scan budget** (`pretool_gate.too_complex`) is refused in
   every profile, never allowed; the deny says it is too complex to check.
 - **Orchestrator gate.** Heredoc bodies and quoted arguments are data; a body is
@@ -752,7 +761,13 @@ profile). What each layer does and does not cover (task-0116):
   paths named inside its input (`apply`, `am` or `checkout-index` of a patch the
   agent wrote, `checkout`, `restore`, `reset --hard`; the `.git` rule is
   path-based and does not see them), and `core.worktree`, an alias or an include
-  set earlier with `git config`.
+  set earlier with `git config`. The dev profile does deny `update-ref`,
+  `symbolic-ref` and any fetch/pull/push that writes `refs/remotes`, because
+  `leak_guard` trusts the local `refs/remotes` base. A dev interpreter can
+  still move that base.
+- **UNC and nested shells.** A UNC positional inside a nested `bash -c` is not
+  caught by the argument scan (the 14 s watchdog covers it), and the Read, Grep
+  and Glob tools are not gated for UNC paths.
 - **Directory-level operations** (`rm -r .agentry`, `.claude`), and a glob that
   expands to a file NAMED like an option (`sort *` beside a file called
   `--output=x`, which a docs agent can create). In readonly and docs every
@@ -823,7 +838,8 @@ continuation ceiling) is surfaced to the CEO and never auto-retried. The CEO
 fixes the blocker or rejects; then `approve.py --reject --reason "<why>"` sends
 it back to `implement` to retry cleanly (to `plan` if it was blocked before the
 plan approval). The reason is required (a bare `--reject` exits 2 and writes
-nothing) and is journaled with the rejection.
+nothing) and is journaled with the rejection. It is capped at 500 characters and
+control characters become spaces.
 
 ## Event journal
 

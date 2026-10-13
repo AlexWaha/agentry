@@ -307,7 +307,11 @@ def connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=5)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 3000")
-    init_db(conn)
+    try:
+        init_db(conn)
+    except Exception:
+        conn.close()  # a handle left open keeps run.db locked on Windows
+        raise
     return conn
 
 
@@ -329,21 +333,68 @@ def init_db(conn: sqlite3.Connection) -> None:
         );
         """
     )
-    # Added after the first runs existed: default keeps them on the build flow.
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(runs)")}
-    if "pipeline" not in cols:
-        conn.execute(f"ALTER TABLE runs ADD COLUMN pipeline TEXT DEFAULT '{BUILD}'")
-    # The plan flow's checkpoint, mirroring commit_approved. Rows that predate
-    # the column take the default 0: an old run is never pre-approved.
-    if "plan_approved" not in cols:
-        conn.execute("ALTER TABLE runs ADD COLUMN plan_approved INTEGER DEFAULT 0")
-    # Pause record (task-0059): the status the run had when it was paused, the
-    # CEO's reason, and whether the tree was clean or already committed. All three
-    # are empty on a run that was never paused.
-    for col in ("paused_status", "pause_reason", "pause_kind"):
-        if col not in cols:
-            conn.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT DEFAULT ''")
-    conn.commit()
+    _add_late_columns(conn)
+
+
+def _late_columns() -> list[tuple[str, str]]:
+    """The runs columns added after the first stores existed, with their DDL. A
+    default keeps old rows on the build flow (`pipeline`), unapproved
+    (`plan_approved`, the pause record) or empty (the frozen task-file fields)."""
+    return [
+        ("pipeline", f"TEXT DEFAULT '{BUILD}'"),
+        # The plan flow's checkpoint, mirroring commit_approved: an old run is never
+        # pre-approved.
+        ("plan_approved", "INTEGER DEFAULT 0"),
+        # Pause record (task-0059): the status the run had when it was paused, the
+        # CEO's reason, and whether the tree was clean or already committed.
+        ("paused_status", "TEXT DEFAULT ''"),
+        ("pause_reason", "TEXT DEFAULT ''"),
+        ("pause_kind", "TEXT DEFAULT ''"),
+        # Task-file decisions frozen at registration (task-0124): the closure sweep,
+        # the umbrella debt cover, the commit-tag branch rule and the repo scoping
+        # read these columns, never the file, which the agent being judged can
+        # rewrite after the CEO's approval.
+        *((col, "TEXT DEFAULT ''") for col in FROZEN_FIELDS),
+    ]
+
+
+def _add_late_columns(conn: sqlite3.Connection) -> None:
+    """Add the missing late columns and freeze the new frozen ones from the task files.
+
+    One `BEGIN IMMEDIATE` transaction holds the column check, the ALTERs and the
+    backfill (SQLite DDL is transactional), so a failure part way leaves neither a
+    column without its values nor a half-filled one: the next connect starts over.
+    The column check is repeated under the lock, so a second process connecting
+    for the first time waits for the first and then finds nothing to add.
+
+    Only the columns added NOW are filled. Rows that predate them are frozen once,
+    from the file as it reads at the upgrade (empty would be stricter, but it would
+    strip the cover from every subtask of an umbrella that is already done and
+    refuse every later registration); a column that already existed keeps what the
+    registration recorded."""
+    def missing() -> list[tuple[str, str]]:
+        have = {r[1] for r in conn.execute("PRAGMA table_info(runs)")}
+        return [(col, ddl) for col, ddl in _late_columns() if col not in have]
+
+    if not missing():
+        return
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        todo = missing()
+        for col, ddl in todo:
+            conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {ddl}")
+        fresh = [col for col, _ in todo if col in FROZEN_FIELDS]
+        if fresh:
+            for (task,) in conn.execute("SELECT task FROM runs").fetchall():
+                values = {k: v for k, v in frozen_frontmatter(task).items() if k in fresh}
+                conn.execute("UPDATE runs SET " + ", ".join(f"{k} = ?" for k in values)
+                             + " WHERE task = ?", (*values.values(), task))
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        if missing():
+            raise
 
 
 def get_run(conn: sqlite3.Connection, task: str) -> dict | None:
@@ -483,10 +534,11 @@ def _journal_write(task: str, before: dict | None, fields: dict, event: str,
 
 def create_run(conn: sqlite3.Connection, task: str, task_type: str, stage: str,
                which: str = BUILD) -> dict:
+    frozen = frozen_frontmatter(task)
     conn.execute(
-        "INSERT INTO runs (task, type, stage, stage_status, awaiting_human, pipeline, updated) "
-        "VALUES (?, ?, ?, ?, '', ?, ?)",
-        (task, task_type, stage, ST_IN_PROGRESS, which, now()),
+        "INSERT INTO runs (task, type, stage, stage_status, awaiting_human, pipeline, updated, "
+        f"{', '.join(frozen)}) VALUES (?, ?, ?, ?, '', ?, ?, {', '.join('?' * len(frozen))})",
+        (task, task_type, stage, ST_IN_PROGRESS, which, now(), *frozen.values()),
     )
     conn.commit()
     emit("registered", task, stage=stage, pipeline=which, detail={"type": task_type})
@@ -574,22 +626,87 @@ def _head_field(task: str, key: str) -> str:
     return m.group(1).strip().strip("'\"") if m else ""
 
 
+# The task-file fields whose value decides closure or approval borrowing. They are
+# copied into the run row when the run is created and read from there afterwards.
+FROZEN_FIELDS = ("epic", "umbrella", "subtasks", "branch", "repo")
+
+# `branch` and `repo` end up as git arguments (git_state rev-parse), so a value is
+# frozen only when it is a plain ref-like name: no leading `-` (an option), no `..`.
+# Anything else is stored empty, as if the task had declared nothing.
+REF_FIELDS = ("branch", "repo")
+REF_RE = re.compile(r"[A-Za-z0-9._/-]+")
+
+
+def _plain_ref(value: str) -> bool:
+    return bool(REF_RE.fullmatch(value)) and not value.startswith("-") and ".." not in value
+
+
+def invalid_frozen_refs(task: str) -> list[str]:
+    """The REF_FIELDS the task file declares with a value that freezing refuses."""
+    return [key for key in REF_FIELDS
+            if _head_field(task, key) and not _plain_ref(_head_field(task, key))]
+
+
+def frozen_frontmatter(task: str) -> dict[str, str]:
+    """The FROZEN_FIELDS values of the task file as it reads now, normalized: the
+    umbrella flag is "true" or "", the subtask list is the bare task ids joined by a
+    space, and a `branch` or `repo` that is not a plain ref name is "" (see
+    invalid_frozen_refs). All empty when the file is absent."""
+    return {
+        "epic": _head_field(task, "epic"),
+        "umbrella": "true" if _head_field(task, "umbrella").lower() == "true" else "",
+        "subtasks": " ".join(re.findall(r"task-\d+", _head_field(task, "subtasks"))),
+        **{key: "" if key in invalid_frozen_refs(task) else _head_field(task, key)
+           for key in REF_FIELDS},
+    }
+
+
+def _run_row(task: str, conn: sqlite3.Connection | None = None) -> dict:
+    """The task's run row; {} when there is none or the store cannot be read, which
+    every caller treats as "nothing recorded"."""
+    own = conn is None
+    try:
+        if own:
+            conn = connect()
+        return get_run(conn, task) or {}
+    except Exception:
+        return {}
+    finally:
+        if own and conn is not None:
+            conn.close()
+
+
 def task_repo(task: str) -> str | None:
-    """The `repo:` value of a task file, None when blank or absent.
+    """The `repo:` value the task had when it was registered, None when blank or absent.
 
     `stack_gate.py` dispatches a stage's gate by it and
     `git_state.repos_for_task()` scopes merge detection by it, and the two must
-    not be able to resolve the same task to different repos."""
+    not be able to resolve the same task to different repos. Read from the run
+    row, not the file, so rewriting `repo:` after the approval cannot move the
+    merge check to a repo the diff never touched; a task with no run row yet
+    (not registered, so nothing is frozen) reads the file. An unreadable store
+    answers None, never the file: a corrupt run.db must not hand the choice of repo
+    back to the file the agent being judged can write."""
+    try:
+        conn = connect()
+        try:
+            row = get_run(conn, task)
+        finally:
+            conn.close()
+    except Exception:
+        return None
+    if row:
+        return row.get("repo") or None
     return _head_field(task, "repo") or None
 
 
 def task_branch(task: str) -> str:
-    """The `branch:` value of a task file ('' when absent): the branch a task
-    declares it rides on when it is not its own `<type>/task-NNNN`. Merge
-    detection resolves a carrier branch from it; the commit gate reads the same
-    field to decide whether a commit tagged with this task may be made on the
-    checked-out branch."""
-    return _head_field(task, "branch")
+    """The `branch:` value the task had when it was registered ('' when it had none
+    or has no run row): the branch it declared it rides on when it is not its own
+    `<type>/task-NNNN`. The commit gate reads it to decide whether a commit tagged
+    with this task may be made on the checked-out branch. Read from the run row, not
+    the file, so editing `branch:` after registration changes nothing."""
+    return _run_row(task).get("branch") or ""
 
 
 def move_task(task: str, to: str) -> bool:
@@ -666,43 +783,28 @@ def move_task_to_done(task: str) -> bool:
     return move_task(task, "done")
 
 
-def _commit_approved(task: str, conn: sqlite3.Connection | None) -> bool:
-    """True when the task's run row records an approved commit. Any error reading
-    it is False: the one caller sweeps files, and a sweep must never happen on an
-    unreadable answer."""
-    own = conn is None
-    try:
-        if own:
-            conn = connect()
-        return any(r["task"] == task and r.get("commit_approved") for r in all_runs(conn))
-    except Exception:
-        return False
-    finally:
-        if own and conn is not None:
-            conn.close()
-
-
 def move_swarm_subtasks(task: str, conn: sqlite3.Connection | None = None) -> list[str]:
-    """When an umbrella task (`umbrella: true`) has reached done/, move the
-    subtask files it lists in `subtasks: [...]` there too - only those still in
-    backlog/ or active/ whose `epic:` equals the umbrella's. An unlisted subtask,
-    or one from another epic, stays. The single sweep behind both merge paths:
-    advance.py's merge confirmation and stop_gate's drift reconciler.
+    """When an umbrella task has reached done/, move the subtask files it listed
+    there too - only those still in backlog/ or active/ whose `epic:` equals the
+    umbrella's. An unlisted subtask, or one from another epic, stays. The single
+    sweep behind both merge paths: advance.py's merge confirmation and stop_gate's
+    drift reconciler.
 
-    Only when the umbrella's own run row has `commit_approved`: the umbrella:,
-    epic: and subtasks: lines are read from a file the agent being judged can
-    write, so they alone must not be able to move other tasks' files. `conn` is
-    the caller's open run-store connection; without one the store is opened here.
+    Only when the umbrella's own run row has `commit_approved`, and the umbrella
+    flag, epic and subtask list come from that row as recorded at registration:
+    `active/` is not in the CEO's diff, so a subtask added to the file after the
+    approval must not be swept without a merge. `conn` is the caller's open
+    run-store connection; without one the store is opened here. A run that
+    recorded no umbrella sweeps nothing.
 
     Fail-open: any error returns what moved so far (or []), never raises."""
     moved: list[str] = []
     try:
-        epic = _head_field(task, "epic")
-        if _head_field(task, "umbrella").lower() != "true" or not epic:
+        row = _run_row(task, conn)
+        epic = row.get("epic") or ""
+        if row.get("umbrella") != "true" or not epic or not row.get("commit_approved"):
             return moved
-        if not _commit_approved(task, conn):
-            return moved
-        for sub in re.findall(r"task-\d+", _head_field(task, "subtasks")):
+        for sub in re.findall(r"task-\d+", row.get("subtasks") or ""):
             if (sub != task and task_dir(sub) in ("backlog", "active")
                     and _head_field(sub, "epic") == epic and move_task(sub, "done")):
                 moved.append(sub)
@@ -718,22 +820,31 @@ def covering_umbrella(task: str) -> str | None:
     An umbrella task is documented once, for the whole swarm; its subtasks are
     swept to done/ with it and carry no doc of their own, so the debt readers
     (handoff.uncovered_done_tasks, update.unstamped_done_tasks) would otherwise
-    demand 15 documents for one piece of work. A task is covered when a file in
-    done/ is an umbrella (`umbrella: true`), shares the task's non-empty `epic:`
-    and lists the task in `subtasks:`. The umbrella must itself sit in done/, so a
-    queued or active file naming a task cannot cancel that task's debt.
+    demand 15 documents for one piece of work. A task is covered when an umbrella
+    run row shares the task's non-empty `epic:` and listed the task, and that
+    umbrella's file sits in done/, so a queued or active file naming a task cannot
+    cancel that task's debt. The umbrella's flag, epic and list come from its run
+    row as recorded at registration, not from its file: editing the file later
+    cancels no debt. The row must also be at stage `done` with the commit approved:
+    a registered umbrella whose file was merely moved to done/ by hand has been
+    through neither the pipeline nor the CEO's diff, and covers nothing.
 
     Never raises: None means "not covered", the safe answer for a debt check."""
     try:
         epic = _head_field(task, "epic")
         if not epic:
             return None
-        for f in sorted(TASK_DIRS["done"].glob("task-*.md")):
-            umb = f.stem
+        conn = connect()
+        try:
+            rows = conn.execute(
+                "SELECT task, subtasks FROM runs WHERE umbrella = 'true' AND epic = ? "
+                "AND stage = 'done' AND commit_approved = 1 ORDER BY task",
+                (epic,)).fetchall()
+        finally:
+            conn.close()
+        for umb, subtasks in rows:
             if (umb != task and task_dir(umb) == "done"
-                    and _head_field(umb, "umbrella").lower() == "true"
-                    and _head_field(umb, "epic") == epic
-                    and task in re.findall(r"task-\d+", _head_field(umb, "subtasks"))):
+                    and task in re.findall(r"task-\d+", subtasks or "")):
                 return umb
     except Exception:
         pass

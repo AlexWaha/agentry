@@ -8,7 +8,7 @@ Project values for the keys in `.claude/skills/swarm/SKILL.md` (adapter contract
 | `set_mode` | `python .claude/tools/pipeline/mode.py build\|plan\|talk` |
 | `set_approvals` | `python .claude/tools/pipeline/approvals.py manual\|assisted\|auto` |
 | `set_swarm` | `python .claude/tools/pipeline/swarm.py on\|off` |
-| `start_epic` | `python .claude/tools/pipeline/advance.py --task task-<epic> --type feature` (the umbrella task file must already sit in `backlog/` with non-empty acceptance criteria, and its spec must be `approved`). A `feature` run starts at the `plan` stage, not at `implement` (see Notes) |
+| `start_epic` | `python .claude/tools/pipeline/advance.py --task task-<epic> --type feature` (the umbrella task file must already sit in `backlog/` with non-empty acceptance criteria, and its spec must be `approved`; `umbrella`, `epic`, `subtasks`, `branch` and `repo` are frozen in the run row at this registration). A `feature` run starts at the `plan` stage, not at `implement` (see Notes) |
 | `advance` | `python .claude/tools/pipeline/advance.py --task task-<epic>` |
 | `approve_push` | `python .claude/tools/pipeline/approve.py --task task-<epic> --gate push` (only after the CEO approves in chat). In `solo` mode there is no push checkpoint: the CEO approves the commit with `--gate commit`, and publishing the trunk is the separate one-shot `approve.py --task task-<epic> --trunk-push` |
 | `reject` | `python .claude/tools/pipeline/approve.py --task task-<epic> --reject --reason "<why>"` (`--reason` is required: a bare `--reject` exits 2 and writes nothing; the reason is journaled in `events.db`. Back to `plan` while the plan is unapproved; back to `implement` from the commit checkpoint, plan approval kept) |

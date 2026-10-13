@@ -249,8 +249,11 @@ def finish_or_wait_for_merge(task: str, run: dict) -> int:
     unmerged for a day while the task file said done. So the file only moves to
     done/ once git confirms the merge - and until then the task keeps saying it
     is waiting for one."""
-    declared = _task_frontmatter(task).get("branch", "")
-    report = git_state.task_report(task, branch=declared)
+    # The branch recorded at registration, not the file's current `branch:`: the file
+    # is not in the CEO's diff, and a line added to it after the commit approval
+    # must not point this check at a branch that is already merged.
+    declared = state.task_branch(task)
+    report = git_state.task_report(task)
 
     if not report:
         # Absence of evidence is not evidence of a merge. Neither signal was
@@ -274,8 +277,11 @@ def finish_or_wait_for_merge(task: str, run: dict) -> int:
                       f"branch: {missing}; (2) tagged commit: the main branch carries no "
                       f"'[{task}]' commit. This is UNKNOWN, not merged, so the task stays "
                       f"out of tasks/done/. If its work rides on another task's branch, "
-                      f"add 'branch: <type>/task-NNNN' to the frontmatter and re-run; "
-                      f"otherwise push the branch or surface it to the CEO.")
+                      f"registration did not record that branch and editing the file now "
+                      f"changes nothing (it is frozen in the run row). The CEO decides: "
+                      f"the orchestrator re-registers the task with 'branch: <type>/task-NNNN' "
+                      f"declared, or retags the carrying commit '[{task}]'; otherwise push "
+                      f"the branch.")
 
     unmerged = [r for r in report if r["in_main"] is not True]
     if unmerged:
@@ -485,9 +491,16 @@ def main() -> int:
         state.move_task(args.task, "active")
         skipped = (f" ({first}..{begin} skipped for type '{args.type}': skip_for_types in "
                    f"pipeline.json)" if begin != first else "")
+        frozen = ", ".join(f"{k}={run.get(k) or '-'}" for k in state.FROZEN_FIELDS)
+        refused = state.invalid_frozen_refs(args.task)
+        if refused:
+            frozen += (f". NOT frozen, stored empty because the value is not a plain name "
+                       f"([A-Za-z0-9._/-], no leading '-', no '..'): {', '.join(refused)}")
         return result("started", args.task, run,
                       f"started at '{begin}' on the {which} flow{skipped} "
                       f"(owner: {stage_owner(pipeline, begin, args.task, which)}). "
+                      f"Task-file fields frozen at registration, read from the run row "
+                      f"from now on ('-' = none): {frozen}. "
                       f"Do the stage work, then re-run advance.py --task {args.task}.")
 
     cur = run["stage"]

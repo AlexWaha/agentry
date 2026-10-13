@@ -27,14 +27,20 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
 import approvals
 import git_state
+import leak_guard
 import pretool_gate
 import state
 
+REASON_MAX = 500
+# Control, format, line and paragraph separator, private use, unassigned and
+# surrogate characters: none belongs in text echoed into a later agent's context.
+UNSAFE_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Co", "Cn", "Cs"})
 PAUSE_CLEAN = "clean"
 PAUSE_COMMITTED = "committed"
 GIT_TIMEOUT = 20
@@ -43,11 +49,19 @@ GIT_TIMEOUT = 20
 BOOKKEEPING_PREFIX = ".agentry/"
 
 
+def clean_reason(text: str | None) -> str:
+    """A reason as it is stored and journaled: control and format characters
+    (newlines, escapes, bidi overrides) become spaces and at most REASON_MAX
+    characters are kept. The text is echoed into later agents' context, so it
+    must be bounded and carry no line breaks or terminal sequences."""
+    flat = "".join(" " if unicodedata.category(ch) in UNSAFE_CATEGORIES else ch for ch in text or "")
+    return flat.strip()[:REASON_MAX].strip()
+
+
 def trunk_name() -> str:
-    """The configured trunk, with the template placeholder resolved - read the
-    same way pretool_gate.push_protected_branches() reads it."""
-    name = str(state.load_pipeline().get("main_branch") or "main")
-    return "main" if name.startswith("{{") else name
+    """The configured trunk, with the template placeholder resolved - the same
+    reader the leak guard compares against (leak_guard.trunk_name)."""
+    return leak_guard.trunk_name()
 
 
 def record_trunk_push(remote: str = pretool_gate.TRUNK_PUSH_DEFAULT_REMOTE) -> int:
@@ -150,7 +164,8 @@ def pause_run(conn, run: dict, reason: str) -> tuple[str, str]:
     task paused after its commit checkpoint is not asked to re-earn it and one
     paused before it does not look approved."""
     task = run["task"]
-    if not reason.strip():
+    reason = clean_reason(reason)
+    if not reason:
         return "", "a pause needs a reason, so a later reader can tell a preemption from a failure"
     if run["stage"] == "done":
         return "", f"{task} is already done - there is nothing to pause."
@@ -162,7 +177,7 @@ def pause_run(conn, run: dict, reason: str) -> tuple[str, str]:
         return "", problem
     state.set_fields(conn, task, stage_status=state.ST_PAUSED,
                      paused_status=run["stage_status"] or state.ST_IN_PROGRESS,
-                     pause_reason=reason.strip(), pause_kind=kind)
+                     pause_reason=reason, pause_kind=kind)
     detail = ("it has no commits and no edits - nothing was written yet" if kind == PAUSE_CLEAN
               else "its branch carries commits and the tree is clean")
     return (f"{task} paused at '{run['stage']}': {detail}. It is no longer driven and does "
@@ -234,7 +249,8 @@ def main() -> int:
                              "unapproved), clearing approvals")
     parser.add_argument("--reason", metavar="TEXT",
                         help="with --reject: why the CEO sent the task back (required); "
-                             "recorded in the event journal")
+                             "recorded in the event journal, capped at 500 characters, "
+                             "control characters become spaces")
     parser.add_argument("--pause", metavar="REASON",
                         help="set the task aside (CEO force majeure): refused while it has "
                              "uncommitted work; records REASON and whether it had commits")
@@ -278,7 +294,7 @@ def main() -> int:
         return 0
 
     if args.reject:
-        reason = (args.reason or "").strip()
+        reason = clean_reason(args.reason)
         if not reason:
             conn.close()
             print(json.dumps({"error": "--reject needs --reason \"<why>\": the reason is "

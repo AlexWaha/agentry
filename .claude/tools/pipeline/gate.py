@@ -14,13 +14,89 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
+import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 import state
 
 PLACEHOLDER = "{{"
+GATE_TIMEOUT = 900
+OUTPUT_TAIL_BYTES = 4000
+KILL_WAIT = 10
+# The task id is spliced into a shell command, so only the registered shape passes.
+TASK_ID_RE = re.compile(r"task-[0-9]+")
+
+
+def taskkill_path() -> str:
+    """taskkill by its absolute path: a bare name is looked up through PATH and the
+    current directory, which a task can plant a program in."""
+    return os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe")
+
+
+def kill_tree(proc: subprocess.Popen) -> None:
+    """Kill `proc` and everything it started, the grandchildren a test runner leaves
+    behind included. On Windows `taskkill /T` walks the process tree from the pid, so
+    the process group the command is started in plays no part; on POSIX the command
+    runs in its own session precisely so `killpg` can reach them."""
+    try:
+        if os.name == "nt":
+            subprocess.run([taskkill_path(), "/T", "/F", "/PID", str(proc.pid)],
+                           capture_output=True, timeout=KILL_WAIT)
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def run_command(cmd: str, cwd: str, timeout: float) -> tuple[int, str]:
+    """(exit code, output tail) of `cmd`, bounded by `timeout` seconds.
+
+    Output goes to a temp file, never a pipe: a grandchild that inherits a pipe's
+    write end and outlives the command keeps the reader blocked past any timeout
+    (subprocess.run waits for EOF after the kill). A file has no EOF to wait for,
+    so the call returns when the command does. On timeout the whole process tree
+    is killed and the exit code is 124."""
+    group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+             else {"start_new_session": True})
+    fd, path = tempfile.mkstemp(prefix="gaterun-", suffix=".log")
+    code = 124
+    note = ""
+    try:
+        with os.fdopen(fd, "wb") as sink:
+            proc = subprocess.Popen(cmd, shell=True, cwd=cwd, stdout=sink,
+                                    stderr=subprocess.STDOUT, **group)
+            try:
+                code = proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                kill_tree(proc)
+                note = f"gate command timed out after {timeout:g}s"
+                try:
+                    proc.wait(timeout=KILL_WAIT)
+                except subprocess.TimeoutExpired:
+                    note += " (and did not exit when killed)"
+        with open(path, "rb") as log:
+            log.seek(0, os.SEEK_END)
+            log.seek(max(0, log.tell() - OUTPUT_TAIL_BYTES))
+            # Decoded as UTF-8 with replacement: on Windows the default text mode
+            # decodes with the locale codepage (cp1252), which crashes on the UTF-8
+            # output modern test runners emit (vitest check marks, box-drawing). Never
+            # let a decode error masquerade as a gate failure.
+            tail = log.read().decode("utf-8", errors="replace")
+        return code, (f"{tail}\n{note}" if note else tail)
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass  # a surviving grandchild still holds it open; the temp dir keeps it
 
 
 def run_gate(pipeline: dict, stage_name: str, task: str | None = None,
@@ -34,6 +110,10 @@ def run_gate(pipeline: dict, stage_name: str, task: str | None = None,
         return {"stage": stage_name, "has_gate": False, "configured": True,
                 "cmd": None, "exit": 0, "passed": True, "output": ""}
 
+    if task and not TASK_ID_RE.fullmatch(task):
+        return {"stage": stage_name, "has_gate": True, "configured": False,
+                "cmd": str(gate["cmd"]), "exit": None, "passed": False,
+                "output": f"refusing task id {task!r}: it must look like task-0123"}
     cmd = str(gate["cmd"]).replace("{task}", task or "")
     if PLACEHOLDER in cmd:
         return {"stage": stage_name, "has_gate": True, "configured": False,
@@ -46,19 +126,8 @@ def run_gate(pipeline: dict, stage_name: str, task: str | None = None,
     expect = gate.get("expect_exit", 0)
     started = time.monotonic()
     try:
-        # Force UTF-8 decoding with replacement: on Windows the default text mode
-        # decodes with the locale codepage (cp1252), which crashes on the UTF-8
-        # output modern test runners emit (vitest check marks, box-drawing). Never
-        # let a decode error masquerade as a gate failure.
-        proc = subprocess.run(
-            cmd, shell=True, cwd=str(state.ROOT / cwd if cwd != "." else state.ROOT),
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=900,
-        )
-        exit_code = proc.returncode
-        output = (proc.stdout or "")[-2000:] + (proc.stderr or "")[-2000:]
-    except subprocess.TimeoutExpired:
-        exit_code, output = 124, "gate command timed out after 900s"
+        exit_code, output = run_command(
+            cmd, str(state.ROOT / cwd if cwd != "." else state.ROOT), GATE_TIMEOUT)
     except OSError as exc:
         exit_code, output = 127, f"gate command failed to start: {exc}"
 
