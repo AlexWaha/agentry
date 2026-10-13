@@ -30,6 +30,7 @@ Sections:
 from __future__ import annotations
 
 import ast
+import json
 import os
 import subprocess
 import sys
@@ -70,11 +71,24 @@ class QaCase(WorkspaceCase):
                                                        **SUBAGENT))
         return code, err
 
-    def subagent_bash(self, command: str, cwd=None, profile: str = "dev") -> tuple:
-        """(worst exit code, stderr) of pretool_gate and agent_gate for one Bash call."""
+    def identified(self, task: str, agent_id: str = "a1") -> dict:
+        """Payload fields of a subagent whose dispatch prompt opens with `Task worktree:
+        <task>`, written to a real transcript the way agent_gate reads it (task-0134)."""
+        session = "932b93d4-360c-4529-87ee-75d3a6d89557"
+        parent = self.root / "claude-projects" / "proj" / f"{session}.jsonl"
+        sub = parent.parent / session / "subagents"
+        sub.mkdir(parents=True, exist_ok=True)
+        line = {"message": {"role": "user", "content": f"Task worktree: {task}\nwork"}}
+        (sub / f"agent-{agent_id}.jsonl").write_text(json.dumps(line) + "\n", encoding="utf-8")
+        return {**SUBAGENT, "agent_id": agent_id, "session_id": session, "transcript_path": str(parent)}
+
+    def subagent_bash(self, command: str, cwd=None, profile: str = "dev", identity=None) -> tuple:
+        """(worst exit code, stderr) of pretool_gate and agent_gate for one Bash call.
+        `identity` names the task tree the subagent was dispatched into."""
         where = str(cwd or self.root)
-        pre = hook(pretool_gate, bash_payload(command, where, **SUBAGENT))
-        agent = hook(agent_gate, bash_payload(command, where, **SUBAGENT),
+        who = self.identified(identity) if identity else SUBAGENT
+        pre = hook(pretool_gate, bash_payload(command, where, **who))
+        agent = hook(agent_gate, bash_payload(command, where, **who),
                      ["agent_gate", "--profile", profile])
         return max(pre[0], agent[0]), pre[2] + agent[2]
 
@@ -287,10 +301,10 @@ class TrunkFreezeSpellingTest(QaCase):
             with self.subTest(spelling=label):
                 self.assertEqual(2, self.subagent_edit(spelling)[0])
 
-    @unittest.expectedFailure
-    def test_FINDING_the_main_thread_is_frozen_out_of_the_trunk_in_extended_length_spelling(self):
-        # in_trunk_checkout answers False for any UNC-shaped path, and the main thread has no
-        # live-harness UNC deny (subagents do), so `\\?\E:\...\src\.claude\x.py` is editable.
+    def test_the_main_thread_is_frozen_out_of_the_trunk_in_extended_length_spelling(self):
+        # in_trunk_checkout once answered False for any UNC-shaped path, and the main thread
+        # has no live-harness UNC deny (subagents do), so the extended-length spelling of a
+        # local trunk path was editable. It is placed like the plain one now (task-0134).
         plain = str(self.src / ".claude" / "tools" / "x.py")
         for spelling in (BACKSLASH * 2 + "?" + BACKSLASH + plain,
                          "//?/" + plain.replace(BACKSLASH, "/")):
@@ -479,7 +493,7 @@ class TrunkFreezeShellTest(QaCase):
                         f"cd {t} && cp app/main.py app/copy.py",
                         f"cd {t}/app && echo x > ../n.py"):
             with self.subTest(command=command):
-                self.assertEqual(0, self.subagent_bash(command)[0], command)
+                self.assertEqual(0, self.subagent_bash(command, identity=TASK_A)[0], command)
 
     def test_a_variable_at_the_end_of_a_trunk_path_does_not_hide_the_write(self):
         # The literal prefix already sits in the trunk checkout; only the last word is a

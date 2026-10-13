@@ -1953,15 +1953,28 @@ def map_is_dormant() -> bool:
     return stage != zones.STAGE_UNREADABLE and stage not in zones.LIVE_STAGES
 
 
-def agent_zone(payload: dict) -> str | None:
-    """The zone of the calling agent, read from its own transcript, or None. Needs the
+def agent_transcript_dir(payload: dict) -> Path | None:
+    """The directory holding the calling agent's OWN transcript, or None. Needs the
     payload's agent_id (absent on the main thread), session_id and transcript_path."""
     agent_id, sid, transcript = (payload.get(k) for k in ("agent_id", "session_id",
                                                            "transcript_path"))
     if not (isinstance(agent_id, str) and isinstance(sid, str) and isinstance(transcript, str)
             and transcript and SESSION_ID_RE.match(sid)):
         return None
-    return zones.zone_for_agent(agent_id, Path(transcript).parent / sid / "subagents")
+    return Path(transcript).parent / sid / "subagents"
+
+
+def agent_zone(payload: dict) -> str | None:
+    """The zone of the calling agent, read from its own transcript, or None."""
+    where = agent_transcript_dir(payload)
+    return None if where is None else zones.zone_for_agent(payload["agent_id"], where)
+
+
+def agent_worktree_task(payload: dict) -> str | None:
+    """The `Task worktree: <task>` of the calling agent's dispatch prompt, read from its
+    own transcript like the zone, or None."""
+    where = agent_transcript_dir(payload)
+    return None if where is None else zones.worktree_task_for_agent(payload["agent_id"], where)
 
 
 def zone_path_denial(path: str, dirs: list, zone: str, data: dict) -> str:
@@ -2053,6 +2066,146 @@ def zone_denial(tool: str, ti: dict, cwd: str, payload: dict | None) -> str:
         return ZONE_BROKEN_MSG.format(why="the check itself failed")
 
 
+# --- Task worktree confinement (task-0134) -----------------------------------------------
+# While worktrees are in play (pretool_gate.worktrees_active(): the flag is on, or a run
+# that is not done records a tree) a subagent that writes must write inside its OWN task's
+# tree. Its task comes from the `Task worktree: <task>` line of its dispatch prompt, read
+# from its own transcript the way the swarm zone is (agent_worktree_task), and is believed
+# only for a task that holds a usable tree at an editing stage (worktree.holds_tree). The
+# dev profile (Edit, Write, Bash) and the docs profile (Edit, Write) share the check.
+#   identity T:  own tree allowed; another recorded tree denied; a repository checkout that
+#                is no tree (the trunk, a run with no tree) denied; anywhere else allowed.
+#   no identity: writes into any recorded tree denied; elsewhere unchanged, so a legacy or
+#                umbrella dispatch keeps working while the flag is on.
+#   any doubt:   the store unreadable, an operand the shell expands, a path that cannot be
+#                placed, a module that fails: denied.
+# Not covered, as everywhere in this file: code an interpreter runs (`python -c "open(...)"`).
+WORKTREE_GIT_WRITERS = ZONED_GIT_DENIED | {"add", "commit"}
+WT_OTHER_MSG = ("{who}: '{path}' is inside the worktree of {owner}, not yours ({mine}). Write "
+                "only inside your own task worktree (or under tmp/ and .agentry/); report the "
+                "change you need in {owner} to the orchestrator.")
+WT_OUTSIDE_MSG = ("{who}: '{path}' is outside your task worktree ({mine}): it lies in a "
+                  "repository checkout (the trunk, or a run that has no tree of its own). "
+                  "Write only inside your worktree; report the change you need to the "
+                  "orchestrator.")
+WT_NONE_MSG = ("{who}: '{path}' is inside the worktree of {owner}, and your dispatch prompt "
+               "names no task worktree the gate can believe. It needs a 'Task worktree: "
+               "task-NNNN' line alone on its own line, for a task that holds a tree at an "
+               "editing stage. Report it to the orchestrator, who re-dispatches you with it.")
+WT_BROKEN_MSG = ("{who}: worktrees are in play and the gate cannot place this write ({why}), so "
+                 "it refuses rather than guess. Name the file with a literal path (no $ or "
+                 "backtick expansion); if it keeps happening, report the command to the "
+                 "orchestrator.")
+
+
+def worktree_flag(name: str) -> bool:
+    """pretool_gate.worktrees_on or worktrees_active, by `name`. An exception reads as 'in
+    play': a pretool_gate that lacks the function (a partial deploy) or fails must not turn
+    a subagent's write check into an allow."""
+    try:
+        return bool(getattr(pretool_gate, name)())
+    except Exception:
+        return True
+
+
+def worktree_places(tok: str, dirs: list) -> list:
+    """[(place, directory)] for every place the written path `tok` can name from each of
+    `dirs`, ready for worktree.owner_of(place, directory). Raises pretool_gate.Unplaceable
+    for an operand the shell expands."""
+    if "$" in tok or "`" in tok or tok.startswith("~"):
+        raise pretool_gate.Unplaceable(f"'{tok}'")
+    places = []
+    for d in dirs:
+        if pretool_gate.is_unc(tok):
+            # An extended-length path is a local spelling and a share is not. path_forms
+            # resolves neither (and mangles the drive colon), worktree.owner_of tells them apart.
+            places.append((strip_quotes(tok), d))
+            continue
+        places += [(form, d) for form in pretool_gate.path_forms(tok, d)[1:]]
+        if GLOB_RE.search(tok):
+            places += [(hit, d) for hit in glob_hits(os.path.join(d, strip_quotes(tok)))]
+    return places
+
+
+def worktree_targets(tool: str, ti: dict, cwd: str) -> list:
+    """[(shown, places)] for everything one tool call writes: the explicit write operands
+    the swarm zones read, the trunk freeze's extra writers, and every state-changing git
+    call, placed where it runs (its own -C and the cd in front of it)."""
+    out = []
+    for tok, dirs in zone_targets(tool, ti, cwd):
+        out.append((tok, worktree_places(tok, dirs)))
+    if tool != "Bash":
+        return out
+    command = str(ti.get("command", ""))
+    for tok, dirs in trunk_write_operands(command, cwd):
+        if tok.strip() and tok.strip().strip("'\"").lower() != "nul":
+            out.append((tok, worktree_places(tok, dirs)))
+    calls = pretool_gate.placed_git_calls(command, cwd, WORKTREE_GIT_WRITERS)
+    if calls:
+        hit = pretool_gate.repo_redirect(command) or next(
+            (pretool_gate.redirecting_option(opts) for _, _, opts, _ in calls
+             if pretool_gate.redirecting_option(opts)), "")
+        if hit:
+            raise pretool_gate.Unplaceable(f"{hit}, which moves the repository a git call runs in")
+    for sub, _, _, place in calls or []:
+        out.append((f"git {sub}", [(place, "")]))
+    return out
+
+
+def worktree_verdict(who: str, task: str | None, shown: str, places: list) -> str:
+    """'' when every (place, directory) lies where the agent (task `task`, or None) may
+    write."""
+    import worktree
+
+    for place, base in dict.fromkeys(places):
+        owner = worktree.owner_of(place, base)
+        if owner is not None and owner == task:
+            continue
+        if owner is not None:
+            template = WT_OTHER_MSG if task else WT_NONE_MSG
+            return template.format(who=who, path=shown, owner=owner, mine=task)
+        if task and worktree.in_checkout(place, base):
+            return WT_OUTSIDE_MSG.format(who=who, path=shown, mine=task)
+    return ""
+
+
+def worktree_denial(who: str, tool: str, ti: dict, cwd: str, payload: dict | None) -> str:
+    """The reason task-worktree confinement refuses this tool call, '' when it does not.
+    `payload` is the hook payload; None (a direct call without one) means no identity, no
+    check. Inactive unless worktrees are in play; then any failure of the check denies."""
+    if payload is None or not (tool == "Bash" or tool in pretool_gate.EDIT_TOOLS):
+        return ""
+    if not worktree_flag("worktrees_active"):
+        return ""
+    try:
+        import worktree
+
+        targets = worktree_targets(tool, ti, cwd)
+        if not targets:
+            return ""  # a read: nothing here for confinement to judge
+        task = agent_worktree_task(payload)
+        if task and not worktree.holds_tree(task):
+            task = None
+        for shown, places in targets:
+            reason = worktree_verdict(who, task, shown, places)
+            if reason:
+                return reason
+        return ""
+    except GlobDeadline:
+        raise
+    except pretool_gate.Unplaceable as exc:
+        return WT_BROKEN_MSG.format(who=who, why=f"it cannot place {exc}")
+    except Exception:
+        return WT_BROKEN_MSG.format(who=who, why="the check itself failed")
+
+
+def worktree_confinement(who: str, tool: str, ti: dict, cwd: str, payload: dict | None) -> int:
+    """worktree_denial as a verdict: deny(reason), else allow(). The one deny site of the
+    confinement, called by the dev and docs handlers."""
+    reason = worktree_denial(who, tool, ti, cwd, payload)
+    return deny(reason) if reason else allow()
+
+
 # --- HEAD-moving git in the trunk checkout (epic-0004) ---------------------------------
 # The trunk freeze reads "HEAD is on main". A subagent that moves HEAD off main (checkout -b,
 # switch -c, --detach, reset, rebase onto another branch, branch -M, symbolic-ref) would lift
@@ -2126,9 +2279,9 @@ def bash_prelude(who: str, command: str, cwd: str) -> int:
     if written:
         return deny(PROTECTED_STATE_MSG.format(who=who, path=written))
     layout = worktree_layout_change(command)
-    if layout and pretool_gate.worktrees_active():
+    if layout and worktree_flag("worktrees_active"):
         return deny(WORKTREE_LAYOUT_MSG.format(who=who, hit=layout))
-    moved = trunk_head_move(command, cwd) if pretool_gate.worktrees_on() else ""
+    moved = trunk_head_move(command, cwd) if worktree_flag("worktrees_on") else ""
     if moved:
         return deny(HEAD_MOVE_MSG.format(who=who, hit=moved))
     return memory_target_deny(who, command, cwd)
@@ -2149,6 +2302,9 @@ def handle_dev(tool: str, ti: dict, cwd: str = "", allow_scripts: tuple = (),
         zoned = zone_denial(tool, ti, cwd, payload)
         if zoned:
             return deny(zoned)
+        confined = worktree_confinement(DEV_WHO, tool, ti, cwd, payload)
+        if confined != allow():
+            return confined
         if is_force_push(command):
             return deny("Force push is forbidden for all agents (rules/git-workflow.md).")
         ref_write = dev_ref_write(command)
@@ -2171,6 +2327,9 @@ def handle_dev(tool: str, ti: dict, cwd: str = "", allow_scripts: tuple = (),
         zoned = zone_denial(tool, ti, cwd, payload)
         if zoned:
             return deny(zoned)
+        confined = worktree_confinement(DEV_WHO, tool, ti, cwd, payload)
+        if confined != allow():
+            return confined
         return pretool_gate.handle_edit(path, content, cwd=cwd)
     return allow()
 
@@ -2322,7 +2481,8 @@ def handle_readonly(tool: str, ti: dict, cwd: str = "", allow_scripts: tuple = (
     return allow()
 
 
-def handle_docs(tool: str, ti: dict, cwd: str = "", allow_scripts: tuple = ()) -> int:
+def handle_docs(tool: str, ti: dict, cwd: str = "", allow_scripts: tuple = (),
+                payload: dict | None = None) -> int:
     if tool in pretool_gate.EDIT_TOOLS:
         path, _ = pretool_gate.edit_target(tool, ti)
         # First, so the agent hears which tree this is (pretool_gate.is_live_harness covers
@@ -2336,7 +2496,8 @@ def handle_docs(tool: str, ti: dict, cwd: str = "", allow_scripts: tuple = ()) -
             return deny(f"Docs agent: writes allowed only under .claude/, .agentry/, docs/, "
                         f"README files or the root CLAUDE.md - '{path}' is outside that "
                         f"scope. Code changes belong to dev agents via the pipeline.")
-        return allow()
+        # handle_edit never runs for this profile, so the confinement is its only tree check
+        return worktree_confinement("Docs agent", tool, ti, cwd, payload)
     if tool == "Bash":
         return restricted_bash("docs", str(ti.get("command", "")), cwd, allow_scripts)
     return allow()
@@ -2410,7 +2571,7 @@ def evaluate() -> int:
         ti = payload.get("tool_input", {}) or {}
         if tool in WEB_TOOLS:
             return handle_web(args.profile, tool, ti)
-        extra = {"payload": payload} if args.profile == "dev" else {}
+        extra = {"payload": payload} if args.profile in ("dev", "docs") else {}
         return HANDLERS[args.profile](tool, ti, str(payload.get("cwd", "")),
                                       tuple(args.allow_script), **extra)
     except GlobDeadline:

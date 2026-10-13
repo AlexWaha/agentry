@@ -364,6 +364,11 @@ def _late_columns() -> list[tuple[str, str]]:
         # How many times the run was sent back to `test` because its tree lacked trunk
         # commits (advance.py); at the retry budget it blocks instead of looping.
         ("stale_sendbacks", "INTEGER DEFAULT 0"),
+        # The change-set binding of the tree the CEO read at the commit checkpoint
+        # (pretool_gate.tree_binding), '' when none is recorded (task-0134). Not a
+        # frozen field: only the commit park and the commit approval write it, and it
+        # is cleared wherever commit_approved is.
+        ("approved_tree", "TEXT DEFAULT ''"),
         # Task-file decisions frozen at registration (task-0124): the closure sweep,
         # the umbrella debt cover, the commit-tag branch rule and the repo scoping
         # read these columns, never the file, which the agent being judged can
@@ -536,7 +541,9 @@ def _journal_write(task: str, before: dict | None, fields: dict, event: str,
 
         for column, value in fields.items():
             if (column.endswith("_approved") and value and not old.get(column)):
-                put("approved", outcome=column[:-len("_approved")], detail={})
+                bound = str(fields.get("approved_tree") or "")[:12] if column == "commit_approved" else ""
+                put("approved", outcome=column[:-len("_approved")],
+                    detail={"tree": bound} if bound else {})
 
         count = fields.get("continuations")
         if count and int(count) > int(old.get("continuations") or 0):

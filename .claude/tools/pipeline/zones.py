@@ -44,6 +44,10 @@ TASK_RE = re.compile(r"^task-\d+$")
 ZONE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 AGENT_ID_RE = re.compile(r"^[A-Za-z0-9]{1,64}$")
 ZONE_LINE_RE = re.compile(r"^[ \t]*Swarm zone:[ \t]*([A-Za-z0-9][A-Za-z0-9._-]*)[ \t]*$", re.MULTILINE)
+# The identity line of a task that works in its own worktree (task-0134): a task id alone on
+# its line, the same grammar as the zone line. A path, a second value or a mid-line mention
+# does not match, so the line cannot be forged by text that merely mentions it.
+TASK_LINE_RE = re.compile(r"^[ \t]*Task worktree:[ \t]*(task-[0-9]+)[ \t]*$", re.MULTILINE)
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 FORBIDDEN_CHARS = set('*?[]:<>|"')
 MAX_TRANSCRIPT_LINE = 4 * 1024 * 1024
@@ -265,11 +269,11 @@ def owner_of(path, data: dict | None = None) -> str | None:
     return None
 
 
-def zone_for_agent(agent_id: str, transcript_dir) -> str | None:
-    """The `Swarm zone: <id>` of the dispatch prompt, read from line 1 of THIS
-    agent's own transcript, `<transcript_dir>/agent-<agent_id>.jsonl`. The
-    transcript_dir is `<parent transcript dir>/<session_id>/subagents`; the parent
-    transcript names every agent's zone and is never read. None on any doubt."""
+def dispatch_prompt(agent_id: str, transcript_dir) -> str | None:
+    """The dispatch prompt of ONE agent: the text of line 1 of its own transcript,
+    `<transcript_dir>/agent-<agent_id>.jsonl`. The transcript_dir is `<parent transcript
+    dir>/<session_id>/subagents`; the parent transcript names every agent's zone and task
+    and is never read. None on any doubt."""
     if not AGENT_ID_RE.match(str(agent_id or "")):
         return None
     try:
@@ -284,10 +288,26 @@ def zone_for_agent(agent_id: str, transcript_dir) -> str | None:
     if isinstance(content, list):
         content = "\n".join(b["text"] for b in content
                             if isinstance(b, dict) and isinstance(b.get("text"), str))
-    if not isinstance(content, str):
-        return None
-    found = set(ZONE_LINE_RE.findall(content))
+    return content if isinstance(content, str) else None
+
+
+def _single_line_value(pattern: re.Pattern, text: str | None) -> str | None:
+    """The one distinct value `pattern` finds in `text`; None for none or for several."""
+    found = set(pattern.findall(text or ""))
     return found.pop() if len(found) == 1 else None
+
+
+def zone_for_agent(agent_id: str, transcript_dir) -> str | None:
+    """The `Swarm zone: <id>` of the dispatch prompt (see dispatch_prompt). None on any
+    doubt."""
+    return _single_line_value(ZONE_LINE_RE, dispatch_prompt(agent_id, transcript_dir))
+
+
+def worktree_task_for_agent(agent_id: str, transcript_dir) -> str | None:
+    """The `Task worktree: <task-NNNN>` of the dispatch prompt (see dispatch_prompt): the
+    task whose worktree this agent works in. None on any doubt, and for two different
+    values."""
+    return _single_line_value(TASK_LINE_RE, dispatch_prompt(agent_id, transcript_dir))
 
 
 # --- commands ----------------------------------------------------------------

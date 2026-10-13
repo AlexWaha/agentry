@@ -107,7 +107,7 @@ class FlagOnTest(RegistrationCase):
         self.task_file()
         message = self.advance()["message"]
         line = worktree.dispatch_line(TASK)
-        self.assertTrue(line.startswith("Task worktree: "))
+        self.assertTrue(line.startswith("Worktree: "))
         self.assertTrue(message.endswith(line), message)
         self.assertIn(f'cd "{self.tree().as_posix()}"', message)
 

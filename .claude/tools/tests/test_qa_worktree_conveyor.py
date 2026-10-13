@@ -780,7 +780,7 @@ class DispatchLineTest(StopCase):
     def test_every_run_nag_ends_with_the_real_line(self):
         added = self.tree(TASK)
         line = worktree.dispatch_line(TASK)
-        self.assertTrue(line.startswith(f"Task worktree: {Path(added['abs']).as_posix()} "))
+        self.assertTrue(line.startswith(f"Worktree: {Path(added['abs']).as_posix()} "))
         cases = (
             ("drive", dict(stage="implement")),
             ("gate failed", dict(stage="test", stage_status=state.ST_GATE_FAILED)),
@@ -944,7 +944,7 @@ class FailClosedAndEdgesTest(StopCase):
     def test_the_line_is_separated_from_the_nag_by_one_space(self):
         self.tree(TASK)
         reason = self.stop()["reason"]
-        self.assertIn("whether to continue. Task worktree: ", reason)
+        self.assertIn("whether to continue. Worktree: ", reason)
 
     def test_a_line_reader_that_raises_leaves_the_nag_exactly_the_legacy_text(self):
         self.tree(TASK)

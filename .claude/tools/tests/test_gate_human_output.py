@@ -22,7 +22,7 @@ becomes an allow, least of all on a commit, a push or a plan. Every test below t
 says "keeps the deny" pins that for one gate.
 
 N of N: the table in DenySiteAccountingTest is every `deny(` call in pretool_gate.py
-(50) and agent_gate.py (25), classified. Five pretool_gate sites ask the CEO for
+(52) and agent_gate.py (27), classified. Five pretool_gate sites ask the CEO for
 something (a plan, a commit, a push, a merge's commit approval, a step left to the
 human by an unattended session); the rest are policy denies and say nothing to him.
 agent_gate asks nobody: its denies are role boundaries.
@@ -70,7 +70,7 @@ DASHES = tuple(chr(code) for code in (0x2014, 0x2013))
 # Every `deny(` call, by the function that holds it. A new deny anywhere changes a
 # number here and fails DenySiteAccountingTest until it is classified.
 PRETOOL_DENIES = {
-    "check_bare_nul": 1, "check_branch_base": 1, "check_branch_creation": 2,
+    "binding_deny": 1, "check_bare_nul": 1, "check_branch_base": 1, "check_branch_creation": 2,
     "check_commit_attribution": 1, "check_destructive_and_repl": 4,
     "check_merge_source": 5, "check_nul_redirect": 1, "check_piped_test_suite": 1,
     "check_push_target": 4, "check_trunk_merge": 2, "check_unattended": 1,
@@ -89,7 +89,8 @@ PLAN_DENY_CALLERS = {"handle_bash": 1, "handle_edit": 1}
 AGENT_DENIES = {"bash_prelude": 6, "check_program": 1, "evaluate": 2, "handle_dev": 7,
                 "handle_docs": 3, "handle_readonly": 1, "handle_web": 1,
                 "lexical_bash_checks": 1,
-                "memory_target_deny": 1, "git_target_deny": 1, "restricted_bash": 2}
+                "memory_target_deny": 1, "git_target_deny": 1, "restricted_bash": 2,
+                "worktree_confinement": 1}
 
 
 def deny_sites(path: Path) -> tuple:
@@ -188,7 +189,7 @@ class DenySiteAccountingTest(unittest.TestCase):
                          "a deny() was added or removed in pretool_gate.py: decide whether "
                          "it asks the CEO for something (then give it human=) and update "
                          "this table")
-        self.assertEqual(51, sum(every.values()))
+        self.assertEqual(52, sum(every.values()))
         self.assertEqual(PRETOOL_ASKING, asking)
         self.assertEqual(PLAN_DENY_CALLERS, via_plan)
 
@@ -198,7 +199,7 @@ class DenySiteAccountingTest(unittest.TestCase):
                          "a deny() was added or removed in agent_gate.py: a role boundary "
                          "asks the CEO for nothing; if this one does, it needs a human= "
                          "channel that agent_gate does not have yet")
-        self.assertEqual(26, sum(every.values()))
+        self.assertEqual(27, sum(every.values()))
         self.assertEqual({}, asking)
         self.assertEqual({}, via_plan)
 

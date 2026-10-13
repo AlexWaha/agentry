@@ -64,6 +64,9 @@ SHA_RE = re.compile(r"[0-9a-f]{40}")
 CONTROL_RE = re.compile(r"[\x00-\x1f]")
 # `\\?\E:\x`, `\\.\E:\x` and `//?/E:/x` are LOCAL spellings of `E:\x`.
 EXTENDED_RE = re.compile(r"^[\\/]{2}[?.][\\/](?=[A-Za-z]:)")
+# The branch name a dispatch line may print: a conservative charset on top of the work-branch
+# shape, so a name an agent chose in a tree cannot put prompt text in front of the next agent.
+SHOWN_BRANCH_RE = re.compile(r"[A-Za-z0-9._/-]+")
 
 
 class Doubt(Exception):
@@ -397,6 +400,25 @@ def is_trunk_checkout(path, cwd: str = "") -> bool:
         return False
 
 
+def in_checkout(path, cwd: str = "") -> bool:
+    """True when `path` lies inside a repo's own checkout (a repos{} entry other than the
+    workspace root): the trunk, or the repo of a run that has no tree. A task's tree is
+    `<repo>-wt/<task>`, beside the repo, so it is not inside it. Independent of the flag.
+    Raises Doubt when `path` cannot be placed."""
+    target = _real(path, cwd)
+    if target is None:
+        raise Doubt(f"cannot place {str(path)!r}")
+    for repo in git_state.repos():
+        try:
+            rel = Path(repo).relative_to(state.ROOT).as_posix()
+        except ValueError:
+            continue
+        here = _real(repo) if rel not in ("", ".") else None
+        if here and _inside(target, here):
+            return True
+    return False
+
+
 # --- what is in flight -------------------------------------------------------------
 
 def live() -> list[dict]:
@@ -475,9 +497,44 @@ def stale_message(n: int) -> str:
     return f"main moved {n} commits: `git merge main` in the worktree"
 
 
+def _shown_branch(tree: Path) -> str:
+    """The branch a tree has checked out, for the dispatch line: only a name of the work-branch
+    shape in a plain charset, else "detached". An agent can check out any branch in its tree,
+    and this text goes into the prompt of the next one."""
+    name = _branch_of(tree)
+    try:
+        from pretool_gate import valid_work_branch  # lazy: pretool_gate imports this module
+        shown = bool(SHOWN_BRANCH_RE.fullmatch(name)) and valid_work_branch(name)
+    except Exception:
+        shown = False
+    return name if shown else "detached"
+
+
+def identity_line(task: str) -> str:
+    """`Task worktree: <task>`: the line a dispatch prompt for this task opens with, alone
+    on its line. agent_gate reads it from the agent's own transcript, the way it reads
+    `Swarm zone:`. "" unless the task has a usable tree."""
+    try:
+        return f"Task worktree: {task}" if status(task) == STATUS_OK else ""
+    except Exception:
+        return ""
+
+
+def holds_tree(task: str) -> bool:
+    """True when `task` has a usable tree (status OK) and its run sits at a stage an agent
+    edits in: the only state in which a `Task worktree: <task>` line is believed. Raises
+    Doubt when the run store cannot be read."""
+    if status(task, strict=True) != STATUS_OK:
+        return False
+    rows = _need_rows(" WHERE task = ?", (task,))
+    return bool(rows) and str(rows[0].get("stage") or "") in state.editing_stages(state.load_pipeline())
+
+
 def dispatch_line(task: str) -> str:
     """The one line every implement, test and review dispatch carries. Byte-stable: no
-    clock, no counters. "" for a run with no tree of its own."""
+    clock, no counters. "" for a run with no tree of its own. The usable form starts with
+    the label `Worktree:` and holds the identity text only mid-line, so it can never read as
+    a second `Task worktree:` value next to the line the orchestrator puts on top."""
     try:
         st = status(task)
         if st == STATUS_LEGACY:
@@ -488,9 +545,11 @@ def dispatch_line(task: str) -> str:
         rel = recorded(task)
         tree = (state.ROOT / rel).as_posix()
         repo = rel.rsplit("/", 1)[0][:-len(SUFFIX)]
-        return (f"Task worktree: {tree} (branch {_branch_of(state.ROOT / rel) or 'detached'}). "
+        return (f"Worktree: {tree} (branch {_shown_branch(state.ROOT / rel)}). "
                 f'Begin every Bash call with cd "{tree}", give Edit and Write absolute paths '
-                f"under it, and do not touch {repo}/.")
+                f"under it, and do not touch {repo}/. Make the first line of the dispatch prompt "
+                f'exactly "{identity_line(task)}" (alone on that line), or the write gate '
+                f"refuses this agent's writes.")
     except Exception:
         return ""
 

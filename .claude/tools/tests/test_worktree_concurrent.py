@@ -242,7 +242,22 @@ class WorkspaceCase(unittest.TestCase):
         body = {"tool_name": tool, "tool_input": tool_input, "cwd": str(self.root)}
         if agent:
             body["agent_type"] = "senior-backend-dev"
+            body.update(self.agent_identity(tool_input))
         return body
+
+    def agent_identity(self, tool_input: dict) -> dict:
+        """The payload fields that let agent_gate read the agent's dispatch prompt. The agent
+        works for the task whose tree the call names (task A for a call that names neither)."""
+        text = " ".join(str(v) for v in tool_input.values())
+        task = B if f"src-wt/{B}" in text.replace("\\", "/") else A
+        agent_id = "a" + task.rsplit("-", 1)[1]
+        parent = self.root / "claude-projects" / "proj" / "e2e-session.jsonl"
+        sub = parent.parent / "e2e-session" / "subagents"
+        sub.mkdir(parents=True, exist_ok=True)
+        line = {"isSidechain": True, "type": "user",
+                "message": {"role": "user", "content": f"Task worktree: {task}\nWork in the tree."}}
+        (sub / f"agent-{agent_id}.jsonl").write_text(json.dumps(line) + "\n", encoding="utf-8")
+        return {"session_id": "e2e-session", "transcript_path": str(parent), "agent_id": agent_id}
 
     def edit(self, path: Path) -> tuple[int, str]:
         return self.dev_agent("Edit", file_path=str(path), old_string="old", new_string="new")
@@ -324,7 +339,10 @@ class TwoTasksSideBySideTest(WorkspaceCase):
             self.assertEqual("started", out["action"], out)
             self.assertTrue(out["message"].endswith(f'(branch feature/{task}). Begin every Bash call with '
                                                     f'cd "{self.tree(task).as_posix()}", give Edit and Write '
-                                                    f'absolute paths under it, and do not touch src/.'),
+                                                    f'absolute paths under it, and do not touch src/. '
+                                                    f'Make the first line of the dispatch prompt exactly '
+                                                    f'"Task worktree: {task}" (alone on that line), or the '
+                                                    f"write gate refuses this agent's writes."),
                             out["message"])
             self.assertTrue((self.tree(task) / ".git").is_file())
             self.assertEqual(f"src-wt/{task}", self.run_row(task)["worktree"])
@@ -342,28 +360,32 @@ class TwoTasksSideBySideTest(WorkspaceCase):
             self.assertEqual("advanced", self.advance(task)["action"])  # plan -> plan-approval
             parked = self.advance(task)
             self.assertEqual(("park", "plan"), (parked["action"], parked["awaiting_human"]), parked)
-        self.assertDenied(self.edit(self.tree(A) / FILE_A), "plan")
-        self.assertDenied(self.edit(self.tree(B) / FILE_B), "plan")
+        # A run parked at plan-approval is not at an editing stage, so no `Task worktree:` line
+        # is believed for it and the confinement refuses an edit in its tree.
+        no_line = "no task worktree"
+        self.assertDenied(self.edit(self.tree(A) / FILE_A), no_line)
+        self.assertDenied(self.edit(self.tree(B) / FILE_B), no_line)
 
         self.approve(A, "plan")
+        self.assertEqual("advanced", self.advance(A)["action"])
+        self.assertEqual("implement", self.run_row(A)["stage"])
         self.assertAllowed(self.edit(self.tree(A) / FILE_A))
-        self.assertDenied(self.edit(self.tree(B) / FILE_B), "plan")
+        self.assertDenied(self.edit(self.tree(B) / FILE_B), no_line)
 
         self.approve(B, "plan")
+        self.assertEqual("advanced", self.advance(B)["action"])
+        self.assertEqual("implement", self.run_row(B)["stage"])
         self.assertAllowed(self.edit(self.tree(B) / FILE_B))
-        for task in (A, B):
-            self.assertEqual("advanced", self.advance(task)["action"])
-            self.assertEqual("implement", self.run_row(task)["stage"])
 
     # --- 3. edits land in the tree, never in the trunk checkout -------------------
 
     def edit_in_separate_trees(self):
         self.assertDenied(self.dev_agent("Edit", file_path=str(self.src / "README.md"),
-                                         old_string="hello", new_string="changed"), "trunk checkout")
+                                         old_string="hello", new_string="changed"), "repository checkout")
         self.assertDenied(self.dev_agent("Write", file_path=str(self.src / "stray.txt"), content="x\n"),
-                          "trunk checkout")
+                          "repository checkout")
         self.assertDenied(self.dev_agent("Bash", command=f'cd "{self.src.as_posix()}" && echo x > stray.txt'),
-                          "trunk checkout")
+                          "repository checkout")
         remove = f'git worktree remove --force "{self.tree(B).as_posix()}"'
         self.assertDenied(self.dev_agent("Bash", command=remove), "worktree")
         for task, name in ((A, FILE_A), (B, FILE_B)):
@@ -420,14 +442,15 @@ class TwoTasksSideBySideTest(WorkspaceCase):
             return f'cd "{self.tree(task).as_posix()}" && git commit -m "[{task}] feat: work"'
 
         self.assertDenied(self.orchestrator(commit(A)), f"Commit for {A} is not approved")
-        self.assertDenied(self.dev_agent("Bash", command=commit(A)), f"Commit for {A} is not approved")
+        # At the commit checkpoint the run is not at an editing stage: an agent has no line to show.
+        self.assertDenied(self.dev_agent("Bash", command=commit(A)), "no task worktree")
         self.assertDenied(self.orchestrator(f'git commit -m "[{A}] feat: work"'), "Not on a feature branch")
         in_trunk = f'cd "{self.src.as_posix()}" && git commit -m "[{A}] feat: work"'
         self.assertDenied(self.orchestrator(in_trunk), "Not on a feature branch")
 
         self.approve(A, "commit")
         self.assertAllowed(self.orchestrator(commit(A)))
-        self.assertAllowed(self.dev_agent("Bash", command=commit(A)))
+        self.assertDenied(self.dev_agent("Bash", command=commit(A)), "no task worktree")
         # A's approval does not reach B's tree, by its own branch or by borrowing A's tag.
         self.assertDenied(self.orchestrator(commit(B)), f"Commit for {B} is not approved")
         borrowed = f'cd "{self.tree(B).as_posix()}" && git commit -m "[{A}] feat: work"'
