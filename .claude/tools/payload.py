@@ -298,14 +298,22 @@ class Harness:
         text = read(agent_file)
         front = frontmatter(text)
 
-        rows = [
-            Row("root CLAUDE.md", len(read(self.root / "CLAUDE.md")), COMPUTED),
-            Row(".claude/CLAUDE.md", len(read(self.root / ".claude" / "CLAUDE.md")), COMPUTED),
-        ]
-
-        core = self.core_rules()
-        rows.append(Row(f"core rules (always loaded, {len(core)} files)",
-                        sum(len(read(p)) for p in core), COMPUTED))
+        rows = []
+        if re.search(r"^omitClaudeMd: *true$", front, re.MULTILINE):
+            # task-0106: the agent runs without any CLAUDE.md or rules-walk file,
+            # so none of those three rows is in its context. The core set reaches
+            # it through its own `rules:` key, and that is counted as the
+            # inject_rules.py hook row below.
+            rows.append(Row("CLAUDE.md files and core rules", 0, COMPUTED,
+                            "omitClaudeMd: true - not loaded for this agent"))
+        else:
+            rows += [
+                Row("root CLAUDE.md", len(read(self.root / "CLAUDE.md")), COMPUTED),
+                Row(".claude/CLAUDE.md", len(read(self.root / ".claude" / "CLAUDE.md")), COMPUTED),
+            ]
+            core = self.core_rules()
+            rows.append(Row(f"core rules (always loaded, {len(core)} files)",
+                            sum(len(read(p)) for p in core), COMPUTED))
         rows.append(Row(f"agent file ({agent}.md)", len(text), COMPUTED))
 
         skills = list_key(front, "skills")

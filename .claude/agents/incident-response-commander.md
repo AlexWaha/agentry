@@ -11,7 +11,14 @@ mcpServers:
   - codegraph
 skills:
   - health-check
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - infrastructure.md
 hooks:
   PreToolUse:
@@ -71,7 +78,7 @@ Immediate / underlying / systemic (5 Whys)
 ## Communication log + next update commitment
 ```
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/quality-standard.md - recovery verified by real metrics, never asserted
 - rules/infrastructure.md - deploy/rollback conventions you coordinate around

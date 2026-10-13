@@ -7,7 +7,14 @@ permissionMode: bypassPermissions
 effort: low
 maxTurns: 100
 tools: Read, Grep, Bash
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - documentation.md
   - human-voice.md
 hooks:
@@ -66,7 +73,7 @@ range, < 2 D-findings) / WEAK_AI_SIGNAL (minor findings, single C flag) /
 STRONG_AI_SIGNAL (multiple categories flagged - full humanizer two-pass) /
 FAIL (any auto-FAIL trigger OR all three C metrics flagged - cannot ship).
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/human-voice.md - the 33-pattern ground truth you enforce
 - rules/documentation.md - what legitimate structure looks like (do not flag it)

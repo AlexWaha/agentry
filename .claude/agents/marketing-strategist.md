@@ -10,7 +10,14 @@ tools: Read, Write, Glob, Grep, Bash, WebSearch, WebFetch
 skills:
   - gtm-strategy
   - market-research
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - documentation.md
   - human-voice.md
   - business-standards.md
@@ -52,7 +59,7 @@ You design go-to-market strategy, channel mix, content strategy, referral mechan
 
 `docs/marketing/gtm-strategy.md` (segments, channels with CAC/ROI, timeline, KPIs); referral design (mechanics, incentives, k-factor) where applicable; pitch-deck outline per slide (title, key message, content, visual, speaker notes).
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/quality-standard.md - investor-presentable, production-grade output
 - rules/business-standards.md - documented assumptions, sourced benchmarks

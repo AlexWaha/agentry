@@ -7,7 +7,14 @@ permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30
 tools: Read, Edit, Glob, Grep
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - documentation.md
   - human-voice.md
   - i18n.md
@@ -55,7 +62,7 @@ edit_note:
   ready_for: humanizer
 ```
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/human-voice.md - your copy-edit checklist for AI tells
 - rules/i18n.md - target-language copy held to native quality, no language mixing

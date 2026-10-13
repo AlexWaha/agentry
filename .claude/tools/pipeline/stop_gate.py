@@ -138,35 +138,46 @@ STOP_REPEAT_CEILING_DEFAULT = 3
 # after this hook already blocked once in the current turn.
 #
 # Measured in the 2.1.269 binary rather than assumed, because four documented
-# harness behaviours in this project turned out to differ in the build:
+# harness behaviours in this project turned out to differ in the build. Re-verified
+# on 2.1.296 on 2026-10-13, in the binary and with a live Stop hook that dumped its
+# stdin and blocked on purpose (docs/technical/claude-code-2.1.296-delta.md,
+# section 4); every claim below held, and the binary offsets quoted in 2.1.269 are
+# replaced by strings you can search for, because offsets move with every build:
 #
-#   - The payload schema (offset 187320454) is `hook_event_name:"Stop",
-#     stop_hook_active:<bool>, last_assistant_message?, background_tasks?,
-#     session_crons?`. There is no count in it. The count exists internally as
-#     `stopHookBlockingCount` and is never sent, which is why the bound below
-#     has to persist its own - the same reason debt_nags() states.
-#   - Claude Code has a cap of its own (offset 193551378):
-#     `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP ?? 8`, after which it prints "A hook
-#     blocked the turn from ending N consecutive times, overriding and ending
-#     turn". DO NOT read that as "the loop is already bounded at 8, so this file
-#     need not be" - it is not, and deleting the backstop on that reading would
-#     leave nothing. The cap compares against `stopHookBlockingCount`, and the
-#     `next_turn` transition (offset 193561819, verbatim
-#     `transition:{reason:"next_turn"}`) re-enters with `stopHookBlockingCount:
-#     0` after every tool round. So the vendor cap counts only blocks with NO
-#     intervening tool use, and the conveyor's actual shape - block, the model
-#     runs advance.py, stop, block - zeroes it on every iteration and never
-#     approaches 8. The backstop below is therefore both the park AND the
-#     record, and the only boundary that fires on a real loop.
+#   - The payload schema is the object literal `hook_event_name:"Stop",
+#     stop_hook_active:<bool>, last_assistant_message, ...` after the session
+#     fields. A live hook received session_id, transcript_path, cwd, prompt_id,
+#     permission_mode, effort, hook_event_name, stop_hook_active,
+#     last_assistant_message, background_tasks and session_crons. There is no
+#     count in it. The count exists internally as `stopHookBlockingCount` and is
+#     never sent, which is why the bound below has to persist its own - the same
+#     reason debt_nags() states.
+#   - Claude Code has a cap of its own:
+#     `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP ?? 8`, tested as `count > cap`, after
+#     which it prints "A hook blocked the turn from ending N consecutive times,
+#     overriding and ending turn" (live: N = 9, on the ninth block). DO NOT read
+#     that as "the loop is already bounded at 8, so this file need not be" - it
+#     is not, and deleting the backstop on that reading would leave nothing. The
+#     cap compares against `stopHookBlockingCount`, and the `next_turn`
+#     transition (verbatim `transition:{reason:"next_turn"}`) re-enters with
+#     `stopHookBlockingCount: 0` after every tool round. So the vendor cap
+#     counts only blocks with NO intervening tool use, and the conveyor's actual
+#     shape - block, the model runs advance.py, stop, block - zeroes it on every
+#     iteration and never approaches 8. Live proof: a hook that blocked every
+#     Stop ran 15 times in one turn, because the model made one Read after the
+#     sixth block and the count started again from zero. The backstop below is
+#     therefore both the park AND the record, and the only boundary that fires
+#     on a real loop.
 #   - The flag is STICKIER than that internal count, and this is the fact that
 #     decides where it may be read. The same `next_turn` path, and the other
-#     non-block continuations (offsets 193546604, 193547939, 193548553,
-#     193549335, 193550215), all carry `stopHookActive: yo` through unchanged
+#     non-block continuations, all carry `stopHookActive` through unchanged
 #     while resetting the count. So once anything has blocked in a turn, the flag
 #     stays true for every later Stop in that turn even after the model has done
-#     real work in between - which is precisely the case the conveyor lives in.
-#     Treating it as "stay quiet" would mute this hook for the rest of every turn
-#     after its first nudge. It is a qualifier on parking, never a mute.
+#     real work in between (live: false on the first Stop, true on all fourteen
+#     after it, including the ones after the Read) - which is precisely the case
+#     the conveyor lives in. Treating it as "stay quiet" would mute this hook for
+#     the rest of every turn after its first nudge. It is a qualifier on
+#     parking, never a mute.
 STOP_HOOK_ACTIVE = False
 
 # What decide() is holding when block() is reached, so the backstop can park the
@@ -188,11 +199,13 @@ DONE_DIR = state.DONE_DIR
 # purpose - the agent is already retrying, so it is the one event that must not
 # ring.
 #
-# What Claude Code accepts, measured in the 2.1.295 binary (the hook schema
-# describes the field and the allowlist lives in the function that validates it):
-# a string of at most 4096 bytes made only of BEL and OSC sequences, OSC numbers
-# 0, 1, 2, 9, 99 and 777, each ended by BEL or ESC \, and an OSC 9 body that does
-# not start with a digit. Anything else is DROPPED WHOLE and logged at debug
+# What Claude Code accepts, measured in the 2.1.295 binary and re-verified in the
+# 2.1.296 binary (the hook schema describes the field and the allowlist lives in
+# the function that validates it): a string of at most 4096 characters made only
+# of BEL and OSC sequences, OSC numbers 0, 1, 2, 9, 99 and 777, each ended by BEL
+# or ESC \, and an OSC 9 body that does not start with a digit unless it is the
+# `9;4` progress form (`4;[0-4]` with an optional percentage), which none of the
+# four events below uses. Anything else is DROPPED WHOLE and logged at debug
 # level - never an error, never a failed hook. Colour is not in the list, so the
 # plan's "colour" is not available through this field.
 TERMINAL_EVENTS = {
@@ -289,7 +302,13 @@ def allow() -> int:
 
 
 # The exit code for "this hook crashed". NOT 0 and NOT 2, and both halves were
-# measured on build 2.1.269 rather than read off the documentation:
+# measured on build 2.1.269 rather than read off the documentation, and re-measured
+# unchanged on 2.1.296 on 2026-10-13 with a Stop hook that exited 0, exited 1,
+# raised a traceback and exited 2 (docs/technical/claude-code-2.1.296-delta.md,
+# section 4). One variant could not be re-observed: the `stop-hook-error`
+# notification was shown once across a run of fifteen failing Stops, so a crash on a
+# stop that already carried stop_hook_active showed no notification of its own (the
+# turn still ended `end_turn`):
 #
 #   0 - the stop is allowed and the harness shows NOTHING. Measured with a Stop
 #       hook that raised, caught its own exception and returned 0, which is

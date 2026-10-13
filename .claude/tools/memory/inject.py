@@ -22,7 +22,9 @@ Delivery is the JSON envelope, not plain stdout (task-0081):
 Claude Code DISCARDS plain stdout on SubagentStart - only
 `hookSpecificOutput.additionalContext` reaches the dispatched agent (binary
 2.1.269 declares exactly that key for this event, and the ponytail plugin's
-own hook carries the same comment). This file printed the block raw from the
+own hook carries the same comment; re-measured live on 2.1.296 on 2026-10-13:
+a probe agent held the envelope markers and not the plain-stdout marker, see
+docs/technical/claude-code-2.1.296-delta.md, section 4). This file printed the block raw from the
 day it was written, so retrieval delivered nothing to anybody: measured by a
 probe agent that reported `## Project memory:` absent from its own context
 while a sibling hook using the envelope was present. `json.dumps` runs with
@@ -33,7 +35,9 @@ main()'s blanket handler, recreating exactly this silent no-op.
 The QUERY IS THE ACTIVE TASK FILE(S), never the dispatch prompt. The live
 SubagentStart payload is {session_id, transcript_path, cwd, prompt_id?,
 permission_mode?, hook_event_name, agent_id, agent_type} - the binary builds
-it from the session fields plus those three, and there is no prompt,
+it from the session fields plus those three (a hook that dumped stdin on
+2.1.296 received exactly session_id, transcript_path, cwd, prompt_id,
+agent_id, agent_type, hook_event_name), and there is no prompt,
 description or task field in it at all. A previous `payload_text()` scanned
 eight candidate key spellings and therefore always returned "", falling
 through to the task file silently; it is gone rather than kept as

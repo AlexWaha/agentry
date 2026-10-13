@@ -30,17 +30,22 @@ payload is reported and then treated as the main thread, because refusing to
 deliver on a malformed payload is the silent non-delivery this hook exists to
 prevent.
 
-CHUNKING, and the number that forces it. Build 2.1.269 persists a hook's stdout
+CHUNKING, and the number that forces it. Claude Code persists a hook's stdout
 to a file and replaces it with a 2000-char preview whenever it exceeds a
-threshold: `Zhe(ms.stdout.trim(), hookId, "stdout")`, `if (e.length <= s) return
-e`, `s = NEr = 1e4`. So 10000 CHARACTERS (a JS string length, not bytes), applied
-per hook COMMAND's stdout, not per event. Delivering both files from one entry
-was 52514 chars and spilled - proof 2 of the design record caught it. Delivery is
-therefore split: one SessionStart entry per chunk, `--chunk N`, each chunk under
-CHUNK_BUDGET, plus a final `--index` entry printing one line so proof 2 can check
-completeness. Chunking is deterministic (split at `## ` headings, greedily packed,
-an oversized section split at line boundaries) so the same tree always yields the
-same N.
+threshold: `gce(Ro.stdout.trim(), hookId, "stdout", ...)`, `if (e.length <= s)
+return e`, `s = PCs = 1e4` (2.1.296 names; the same constant was `NEr` and the
+function `Zhe` in 2.1.269, so anchor on the strings and the value, not the
+minified names). So 10000 CHARACTERS (a JS string length, not bytes), applied
+per hook COMMAND's stdout, not per event. Re-measured live on 2.1.296 on
+2026-10-13: a SessionStart hook printing exactly 10000 characters arrived whole,
+one printing 10001 was replaced by a `<persisted-output>` preview (see
+docs/technical/claude-code-2.1.296-delta.md, section 4). Delivering both files
+from one entry was 52514 chars and spilled - proof 2 of the design record caught
+it. Delivery is therefore split: one SessionStart entry per chunk, `--chunk N`,
+each chunk under CHUNK_BUDGET, plus a final `--index` entry printing one line so
+proof 2 can check completeness. Chunking is deterministic (split at `## `
+headings, greedily packed, an oversized section split at line boundaries) so the
+same tree always yields the same N.
 """
 
 from __future__ import annotations
@@ -63,8 +68,9 @@ HEADER = ("## Orchestrator-only rules, delivered to the main thread by "
           ".claude/tools/hooks/main_thread_rules.py - these two are not in the "
           "core @import set and reach no agent dispatch.")
 
-# Chars, not bytes, and per hook command's stdout: build 2.1.269 spills anything
-# over 10000 (NEr) to a file and leaves a 2000-char preview. 10 percent margin.
+# Chars, not bytes, and per hook command's stdout: Claude Code spills anything
+# over 10000 (PCs in 2.1.296, NEr in 2.1.269) to a file and leaves a 2000-char
+# preview; re-verified on 2.1.296. 10 percent margin.
 CHUNK_BUDGET = 9000
 
 

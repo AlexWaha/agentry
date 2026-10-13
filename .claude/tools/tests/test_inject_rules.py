@@ -119,6 +119,20 @@ def shipped_rules() -> set[str]:
     return {p.relative_to(RULES_DIR).as_posix() for p in RULES_DIR.rglob("*.md")}
 
 
+def omit_claude_md_agents() -> set[str]:
+    """Agents whose frontmatter carries `omitClaudeMd: true` (task-0106).
+
+    Such an agent runs without any CLAUDE.md, so the core @rules/ set does not
+    reach it through the file walk and it has to declare the set itself.
+    """
+    found = set()
+    for path in sorted(AGENTS_DIR.glob("*.md")):
+        block = inject_rules.FRONTMATTER_RE.match(path.read_text(encoding="utf-8"))
+        if block and re.search(r"^omitClaudeMd: *true$", block.group(1), re.MULTILINE):
+            found.add(path.stem)
+    return found
+
+
 def declarations() -> dict[str, list[str]]:
     """Every agent's declared entries, read through the hook's own parser.
 
@@ -598,15 +612,68 @@ class RealTreeTest(unittest.TestCase):
                                          f"resolve under .claude/rules/")
 
     @unittest.skipUnless(AGENTS_DIR.is_dir(), "shipped agents directory not present")
-    def test_no_agent_declares_a_core_rule(self):
+    def test_no_agent_declares_a_core_rule_unless_it_omits_claude_md(self):
+        # The walk delivers the core set to an agent that loads CLAUDE.md, so
+        # declaring one there injects a second copy. An agent with
+        # `omitClaudeMd: true` loads none of it and gets the set only if it
+        # declares it - the opposite requirement, tested in the next method.
         core = set(core_rules())
+        omitting = omit_claude_md_agents()
         for agent, entries in declarations().items():
+            if agent in omitting:
+                continue
             with self.subTest(agent=agent):
                 overlap = sorted(set(entries) & core)
                 self.assertFalse(overlap,
                                  f"{agent} declares core rule(s) {overlap}: the "
                                  f".claude/rules/ walk already delivers them, so the "
                                  f"hook would inject a second copy")
+
+    @unittest.skipUnless(AGENTS_DIR.is_dir(), "shipped agents directory not present")
+    def test_an_agent_that_omits_claude_md_still_receives_every_core_rule(self):
+        # task-0106. Not a check on the frontmatter alone: the hook is run for
+        # each omitting agent and the real text of every core rule is looked for
+        # in what it delivers, chunk by chunk, so a core rule added to
+        # .claude/CLAUDE.md without being added here goes red.
+        core = core_rules()
+        self.assertTrue(core)
+        omitting = omit_claude_md_agents()
+        self.assertTrue(omitting, "no agent omits CLAUDE.md; the delivery is untested")
+        declared = declarations()
+        for agent in sorted(omitting):
+            with self.subTest(agent=agent):
+                self.assertLessEqual(set(core), set(declared[agent]),
+                                     f"{agent} omits CLAUDE.md but does not declare "
+                                     f"{sorted(set(core) - set(declared[agent]))}")
+                delivered = "\n".join(inject_rules.render_chunks(agent, AGENTS_DIR, RULES_DIR))
+                for rule in core:
+                    self.assertIn(f"Contents of .claude/rules/{rule}:", delivered)
+                    title = (RULES_DIR / rule).read_text(encoding="utf-8").splitlines()[0]
+                    self.assertIn(title, delivered)
+
+    @unittest.skipUnless(AGENTS_DIR.is_dir(), "shipped agents directory not present")
+    def test_a_real_dispatch_of_an_omitting_agent_delivers_the_core_set(self):
+        # The same claim through a real interpreter and the wired --chunk
+        # entries, which is how a dispatch actually receives it.
+        agent = "technical-writer"
+        self.assertIn(agent, omit_claude_md_agents())
+        hook = Path(inject_rules.__file__)
+        total = len(inject_rules.render_chunks(agent, AGENTS_DIR, RULES_DIR))
+        blocks = []
+        for n in range(1, total + 1):
+            result = subprocess.run(
+                [sys.executable, str(hook), "--chunk", str(n)],
+                input=json.dumps({"hook_event_name": "SubagentStart",
+                                  "agent_id": "agent-1", "agent_type": agent}),
+                capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            blocks.append(json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"])
+        delivered = "\n".join(blocks)
+        for rule in core_rules():
+            title = (RULES_DIR / rule).read_text(encoding="utf-8").splitlines()[0]
+            self.assertIn(title, delivered)
+            self.assertIn(f"Contents of .claude/rules/{rule}:", delivered)
 
     @unittest.skipUnless(RULES_DIR.is_dir(), "shipped rules directory not present")
     def test_rules_dir_is_covered_n_of_n(self):
@@ -680,10 +747,12 @@ class RealTreeTest(unittest.TestCase):
 
     @unittest.skipUnless(RULES_DIR.is_dir(), "shipped rules directory not present")
     def test_every_chunk_is_under_the_hook_stdout_persist_threshold(self):
-        # The number that forced chunking, read out of the 2.1.269 binary:
-        # `Zhe(ms.stdout.trim(), hookId, "stdout")` persists a hook command's
-        # stdout and replaces it with a 2000-char preview when
-        # `e.length > s`, `s = NEr = 1e4`. Characters, per hook command. One
+        # The number that forced chunking, read out of the 2.1.269 binary and
+        # re-verified on 2.1.296 (binary plus a live hook: 10000 characters
+        # arrive whole, 10001 are persisted): `gce(Ro.stdout.trim(), hookId,
+        # "stdout")` (`Zhe` in 2.1.269) persists a hook command's stdout and
+        # replaces it with a 2000-char preview when `e.length > s`,
+        # `s = PCs = 1e4` (`NEr` in 2.1.269). Characters, per hook command. One
         # entry carrying both files was 52514 and spilled, delivering a
         # fraction of the rules while reading like success. A rule that grows
         # past the budget must turn this red instead of repeating that.
@@ -732,8 +801,10 @@ class ChunkBudgetTest(unittest.TestCase):
 
     Build 2.1.269 runs a hook's additionalContext through the same persist path
     as its stdout (`Zhe(text, id, "additionalContext", {threshold: NEr})`,
-    `NEr = 1e4`), so anything over PERSIST_THRESHOLD chars reaches the agent as a
-    2000-char preview and a file path. Measured on the real tree: reviewer's
+    `NEr = 1e4`; `gce` and `PCs` in 2.1.296, where a live SubagentStart hook
+    confirmed it: 9900 characters arrived, 10100 did not), so anything over
+    PERSIST_THRESHOLD chars reaches the agent as a 2000-char preview and a file
+    path. Measured on the real tree: reviewer's
     block is 97187 chars and was never delivered between task-0014 and
     task-0091.
     """

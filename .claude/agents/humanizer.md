@@ -7,7 +7,14 @@ permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30
 tools: Read, Edit, Glob, Grep
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - documentation.md
   - human-voice.md
 hooks:
@@ -46,7 +53,7 @@ You rewrite prose deliverables so they read like a person wrote them on a normal
 
 No separate report file - edits land in place. Report: pattern categories hit, ~sentences rewritten, calibration source (sample/generic), word-count delta, anything flagged. Hand off to `ai-detector` to confirm the cleanup landed.
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/human-voice.md - the canonical pattern list, So-What rule, voice calibration, two-pass method - your entire procedure
 - rules/documentation.md - active-voice preference, structure preservation

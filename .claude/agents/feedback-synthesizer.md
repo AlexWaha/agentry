@@ -7,7 +7,14 @@ permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30
 tools: Read, Write, Glob, Grep
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - documentation.md
   - business-standards.md
 hooks:
@@ -47,7 +54,7 @@ You collect and synthesize user feedback from every channel - surveys, interview
 
 Report: theme, volume/source, sentiment, business-metric correlation (with statistical basis), representative verbatims, prioritized recommendation with framework score, impact, and effort.
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/quality-standard.md - production-grade, decision-ready synthesis
 - rules/business-standards.md - documented assumptions, statistically grounded correlations

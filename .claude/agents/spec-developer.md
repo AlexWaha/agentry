@@ -9,7 +9,14 @@ maxTurns: 30
 tools: Read, Write, Glob, Grep
 mcpServers:
   - codegraph
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - documentation.md
 hooks:
   PreToolUse:
@@ -49,7 +56,7 @@ You turn the architect's approved plan into an implementable SPECIFICATION - the
 
 `.agentry/specs/spec-XXXX-<slug>.md`: FR-1..FR-n, acceptance criteria mapped to FR ids, data/API contracts, Affected Code (files/symbols/blast radius), Open Questions, `status: draft`.
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/quality-standard.md - production-grade, verifiable spec
 - rules/code-retrieval.md - codegraph first for any code claim

@@ -7,7 +7,14 @@ permissionMode: bypassPermissions
 effort: medium
 maxTurns: 30
 tools: Read, Write, Edit, Glob, Grep
+omitClaudeMd: true
 rules:
+  - quality-standard.md
+  - communication.md
+  - task-creation.md
+  - code-retrieval.md
+  - self-learning.md
+  - pipeline.md
   - documentation.md
   - mobile.md
 hooks:
@@ -45,7 +52,7 @@ You create wireframes, user flow diagrams, and UI component specifications that 
 
 Screen spec (layout, states, responsive behavior); component spec (props table, variants, states, accessibility); user flow as a Mermaid `flowchart` code block with every arrow labeled and edge cases covered.
 
-## Rules you follow (preloaded via CLAUDE.md - obey, do not restate)
+## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/quality-standard.md - specs detailed enough for pixel-perfect implementation
 - rules/mobile.md - touch targets, gesture patterns, platform conventions
