@@ -28,6 +28,7 @@ sys.path.insert(0, str(TESTS_DIR))
 
 import advance
 import approve
+import pretool_gate
 import state
 import tmproot
 import worktree
@@ -390,7 +391,10 @@ class StaleAtMergeTest(MergeCase):
     def test_after_the_sync_merge_the_run_walks_back_to_the_checkpoint_and_merges(self):
         self.work()
         self.trunk_moves()
-        self.at("done", commit_approved=1)
+        # The sync merge does not touch the task's files, so the change set the commit
+        # was approved with survives it (task-0134).
+        self.at("done", commit_approved=1,
+                approved_tree=pretool_gate.tree_binding(self.tree, snapshot=True))
         self.assertEqual("stale", self.advance()["action"])
         self.git(self.tree, "merge", "main", "-m", "sync")
         self.passing_gate()

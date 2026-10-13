@@ -625,18 +625,37 @@ re-rooting and is a follow-up (D3).
   and `worktree.py --remove` / `--repair` while the flag is on or a not-done run
   records a tree. `worktree.py --list` and `--sweep` stay open. The orchestrator
   creates and removes trees through `advance.py` and the CLI, not by hand.
-- Not covered: one agent editing another task's tree. Agent identity per task
-  is not detected (D7, follow-up); the dispatch line below is the guard.
+- Confinement (task-0134; flag on, or a not-done run records a tree): a dev or
+  docs subagent writes only inside the tree of the task its dispatch prompt
+  names (`Task worktree: task-NNNN`, below), read from its own transcript like
+  `Swarm zone:`. Another recorded tree, or a repo checkout that is no tree (the
+  trunk), is denied; an agent with no valid line is denied every recorded tree
+  and nothing else. A line counts only for a task that holds a usable tree at an
+  editing stage. Judged: the writers of the trunk freeze plus `git add`, `commit`,
+  `checkout`, `reset`, `merge`, ..., placed per call. An operand with `$` or a
+  backtick, a path that cannot be placed, an unreadable store, a failing check:
+  denied. Not covered: interpreter writes (`python -c "open(...)"`).
 
-**The dispatch line (MANDATORY in every implement, test and review dispatch).**
-For a tree task, `advance.py` (the `started` message), the Stop hook nags, the
-supervisor relaunch prompt and `state._resume_text` print one byte-stable line:
+**The dispatch prompt (MANDATORY in every implement, test and docs dispatch).**
+Its FIRST line is exactly `Task worktree: <task>`, alone on its line (a path, a
+second value or a mid-line mention is no identity; an agent without it cannot
+write into any tree and reports it, then you re-dispatch). Below it goes the
+guidance line, which `advance.py` (the `started` message), the Stop hook nags,
+the supervisor relaunch prompt and `state._resume_text` print byte-stable:
 
 ```
-Task worktree: <abs path> (branch <type>/<task>). Begin every Bash call with cd "<abs path>", give Edit and Write absolute paths under it, and do not touch <repo path>/.
+Worktree: <abs path> (branch <type>/<task>). Begin every Bash call with cd "<abs path>", give Edit and Write absolute paths under it, and do not touch <repo path>/. Make the first line of the dispatch prompt exactly "Task worktree: <task>" (alone on that line), or the write gate refuses this agent's writes.
 ```
 
-Copy it into the dispatch prompt unchanged. It is strict because of what was
+The branch shows `detached` unless its name is a plain work-branch name. Copy
+the guidance line into the prompt unchanged.
+
+**Approval binding (task-0134).** For a tree task the commit approval is bound
+to a SHA-256 of the change set against its merge-base, recorded at the commit
+park and re-checked by `approve.py`, at the commit and at merge condition 3. Any
+byte changed after the park (formatting, an untracked file) voids it and the
+diff is shown again, so format before the park and keep commit-message files in
+an ignored directory such as `tmp/`. It is strict because of what was
 measured (M3, 2026-10-13): the Bash cwd does NOT persist between calls, and the
 hook payload's cwd follows that reset, not a `cd` made in an earlier call. A
 `cd` inside the SAME command is read from the command text, so every Bash call
@@ -645,7 +664,7 @@ Write path resolves against the primary directory, so those paths must be
 absolute under the tree. A bare `git commit` in a later call is judged from the
 workspace root and is refused ("Not on a feature branch"); the gate does not
 guess a tree. A `cd` target or `-C` value must be a literal path. For a MISSING or INVALID tree the line says to run
-`worktree.py --repair --task T` and not to edit. A LEGACY task gets no line.
+`worktree.py --repair --task T` and not to edit (it names no identity). A LEGACY task gets no line.
 
 **Freshness.** The tree is cut from the trunk at registration; a sibling may
 merge first. At the transition into the stage that asks for the commit approval

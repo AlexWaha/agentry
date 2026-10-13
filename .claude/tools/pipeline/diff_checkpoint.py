@@ -33,6 +33,7 @@ from __future__ import annotations
 import ctypes
 import os
 import sys
+from pathlib import Path
 
 import git_state
 import state
@@ -157,11 +158,11 @@ def inject_diff(task: str) -> bool:
     return _queue_keystrokes(DIFF_COMMAND)
 
 
-def _cap(text: str) -> str:
+def _cap(text: str, marker: str = TRUNCATED) -> str:
     if len(text) <= PREVIEW_MAX_CHARS:
         return text
-    cut = text[:PREVIEW_MAX_CHARS - len(TRUNCATED)]
-    return cut[:cut.rfind("\n")] + "\n" + TRUNCATED if "\n" in cut else cut + TRUNCATED
+    cut = text[:PREVIEW_MAX_CHARS - len(marker)]
+    return cut[:cut.rfind("\n")] + "\n" + marker if "\n" in cut else cut + marker
 
 
 def _changes(task: str, with_diff: bool) -> str:
@@ -178,7 +179,9 @@ def _changes(task: str, with_diff: bool) -> str:
         return (f"task worktree {broken}: no changes can be shown. Repair it: python "
                 f".claude/tools/pipeline/worktree.py --repair --task {task}")
     repos = git_state.work_trees_for_task(task)
+    in_tree = _in_tree(task)
     blocks = []
+    full = ""
     for repo in repos:
         # Colour forced off: a user config of color.status=always puts escape
         # codes into text meant for a card preview.
@@ -188,10 +191,22 @@ def _changes(task: str, with_diff: bool) -> str:
         if with_diff:
             _, diff = git_state._git(repo, "diff", "HEAD", "--no-color", "--no-ext-diff",
                                      timeout=GIT_TIMEOUT)
+            full = f'git -C "{Path(repo).as_posix()}" diff HEAD'
+            if in_tree and not status and not diff:
+                # A clean tree whose work is committed (a re-park after a sync merge):
+                # `diff HEAD` is empty, so the change set is what the branch holds
+                # beyond the trunk.
+                since = f"{git_state.trunk(repo)}...HEAD"
+                _, diff = git_state._git(repo, "diff", since, "--no-color", "--no-ext-diff",
+                                         timeout=GIT_TIMEOUT)
+                full = f'git -C "{Path(repo).as_posix()}" diff {since}'
         body = "\n".join(p for p in (status, diff) if p)
         if body:
             blocks.append(f"# {repo.name}\n{body}" if len(repos) > 1 else body)
-    return _cap("\n".join(blocks))
+    # The built-in /diff reads the session's checkout, which is not a task's tree.
+    marker = (f"... (truncated, run {full} for the full diff)"
+              if in_tree and full and len(repos) == 1 else TRUNCATED)
+    return _cap("\n".join(blocks), marker)
 
 
 def capped_diff(task: str) -> str:

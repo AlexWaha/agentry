@@ -481,6 +481,29 @@ def _stale_send_back(conn, task: str, run: dict, behind: int, back: str, budget:
                   f"{worktree.dispatch_line(task)}")
 
 
+def _commit_binding(task: str, run: dict) -> tuple[str, str]:
+    """(binding, "") of the change set a run in its own worktree shows at the commit
+    checkpoint, ("", why) when it cannot be read, ("", "") for a run with no tree of its
+    own (nothing to bind: it holds the checkout alone)."""
+    if not run.get("worktree"):
+        return "", ""
+    try:
+        return pretool_gate.task_binding(task), ""
+    except Exception as exc:
+        return "", str(exc) or type(exc).__name__
+
+
+def _tip_in_trunk(task: str) -> bool:
+    """The tip of the task's tree is already contained in the trunk: its work is merged
+    (the solo flow commits, merges and THEN re-runs advance.py at the commit stage), so
+    there is no unmerged change left for an approval to cover. False on any doubt."""
+    try:
+        tree = worktree.work_dir(task)
+        return tree is not None and git_state._is_ancestor(tree, "HEAD", git_state.trunk(tree))
+    except Exception:
+        return False
+
+
 def _stale_before_merge(task: str, run: dict) -> int | None:
     """A task that waits for its merge on a tree that lacks trunk commits cannot merge
     (the merge gate refuses it), and nothing else would ever re-test it: send it back
@@ -677,6 +700,7 @@ def main() -> int:
     if checkpoints:
         auto = {str(c).lower() for c in (stage_def.get("auto_approve") or [])}
         solo = pretool_gate.workflow_mode() == pretool_gate.WORKFLOW_SOLO
+        bound = refused_auto = unbound = ""
         # The first checkpoint still unapproved is the one to park on; none left
         # means the tail of the stage is complete, so route to the merge check -
         # in solo mode the local merge is what satisfies it, in pr mode the
@@ -685,6 +709,21 @@ def main() -> int:
         # stays pending (fail-closed) and the park message names it.
         pending = next((c for c in checkpoints
                         if not run.get(APPROVAL_FIELD.get(c, ""))), None)
+        if (pending is None and approvals.COMMIT in checkpoints and run.get("worktree")
+                and run.get("commit_approved")):
+            # The commit approval is bound to the change set the CEO read. A tree that
+            # no longer holds that change set (an overlapping sync, a late edit) or
+            # cannot be read voids the approval and parks the run again, so the diff
+            # is shown a second time.
+            current, why = _commit_binding(args.task, run)
+            # Merged and clean (the solo flow commits, merges and then re-runs this at the
+            # commit stage): the trunk carries the work, so nothing is left to cover.
+            merged = current == pretool_gate.EMPTY_BINDING and _tip_in_trunk(args.task)
+            if not merged and (why or current != str(run.get("approved_tree") or "")):
+                state.set_fields(conn, args.task, commit_approved=0, approved_tree="",
+                                 awaiting_human="")
+                run = state.get_run(conn, args.task)
+                pending = approvals.COMMIT
         nxt = state.next_stage(pipeline, cur, which) or "done"
         if pending is None:
             # The stage after the checkpoints: `done` for build's `ready`, the
@@ -698,6 +737,13 @@ def main() -> int:
         else:
             fresh_park = run.get("awaiting_human") != pending
             fields = {"awaiting_human": pending}
+            if pending == approvals.COMMIT and run.get("worktree"):
+                # What the CEO is shown is what the approval will be bound to: recorded
+                # at every park, and a park whose tree moved since the last one counts
+                # as fresh, so the diff is delivered again.
+                bound, unbound = _commit_binding(args.task, run)
+                fields["approved_tree"] = bound
+                fresh_park = fresh_park or bound != str(run.get("approved_tree") or "")
             # approvals.granted() answers the whole question: the level's GRANTS
             # set OR the stage list approves, and never_granted() refuses the
             # plan, the trunk push and (here) the push ahead of both. Do NOT
@@ -706,7 +752,11 @@ def main() -> int:
             # its own and manual/assisted/auto behaved identically at `ready`
             # with the shipped (empty) config.
             if pending in APPROVAL_FIELD and approvals.granted(pending, sorted(auto)):
-                fields[APPROVAL_FIELD[pending]] = 1
+                if pending == approvals.COMMIT and run.get("worktree") and not bound:
+                    # Fail closed: the level never grants an approval it cannot bind.
+                    refused_auto = unbound
+                else:
+                    fields[APPROVAL_FIELD[pending]] = 1
             state.set_fields(conn, args.task, **fields)
         run = state.get_run(conn, args.task)
         conn.close()
@@ -721,7 +771,8 @@ def main() -> int:
             "commit": ("Checkpoint 'commit' auto-approved (approvals level, or auto_approve "
                        "in pipeline.json). "
                        f"Stage files and perform the git commit now, then {after_commit}"
-                       if approvals.granted(approvals.COMMIT, sorted(auto)) else
+                       if approvals.granted(approvals.COMMIT, sorted(auto)) and not refused_auto
+                       else
                        "Review passed. Stage files, surface the full diff, and wait for "
                        "CEO commit approval (approve.py --gate commit). git commit is "
                        f"hook-blocked until then. After the commit: {after_commit}"),
@@ -744,6 +795,15 @@ def main() -> int:
             run["awaiting_human"],
             f"awaiting human: checkpoint '{pending}' has no approval field and cannot "
             f"be recorded - fix the stage's checkpoints in pipeline.json.")
+        if refused_auto:
+            message += (f" The level would approve this commit, but the change set of the "
+                        f"worktree could not be read ({refused_auto}), so it was NOT approved: "
+                        f"an approval is never recorded without the tree it covers. The CEO "
+                        f"approves it.")
+        elif run["awaiting_human"] == "commit" and bound:
+            message += (f" The approval binds change set {bound[:12]}: a byte changed after the "
+                        f"diff is shown (formatter, late edit) voids it, and advance.py parks "
+                        f"the task again.")
         # The one place the CEO is handed the commit diff (FR-53/54). deliver()
         # answers "" unless the run is genuinely parked on an unapproved commit,
         # so an auto-approved commit gets nothing here.

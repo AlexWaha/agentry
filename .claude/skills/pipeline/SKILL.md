@@ -72,8 +72,9 @@ applies to the `build` flow only. With `enabled` true, `advance.py` registers ea
 non-umbrella task into its own git worktree (`<repo path>-wt/<task>`, branch
 `<type>/<task>`), its gates run there, and up to `max_parallel` tasks hold an
 editing stage at once (the swarm dial's umbrellas and any run registered before the
-flag stay in `src/` and exclusive). Every dispatch for such a task carries the
-`Task worktree:` line that `advance.py` prints. Read the current state with
+flag stay in `src/` and exclusive). Every dispatch for such a task starts with
+`Task worktree: task-NNNN` and carries the `Worktree:` guidance line that
+`advance.py` prints. Read the current state with
 `python .claude/tools/pipeline/worktree.py --list`. Rules,
 rollout and rollback: "Parallel tasks in worktrees" in `rules/orchestration.md`.
 

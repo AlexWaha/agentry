@@ -2197,7 +2197,15 @@ def unc_operand(command: str, cwd: str) -> str | None:
 # placed by ITS OWN `-C` values and the `cd` walk (agent_gate.walk_segments) in front of it
 # and judged on its own; a call whose place the text does not give is refused.
 GUARDED_GIT = ("commit", "merge", "pull", "push")
-GIT_REPO_ENV_RE = re.compile(r"^GIT_(?:DIR|WORK_TREE|INDEX_FILE)=", re.IGNORECASE)
+# GIT_COMMON_DIR moves the object and ref store, GIT_CONFIG_COUNT (with its KEY_n / VALUE_n
+# pairs) sets any config key, core.worktree included.
+GIT_REPO_ENV_RE = re.compile(
+    r"^GIT_(?:DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|CONFIG_COUNT)=", re.IGNORECASE)
+# A program that changes directory before it runs what follows: `env -C dir git commit`,
+# `env --chdir=dir ...`, `make -C dir ...`. The text names the directory but the walk of
+# `cd` and `git -C` does not follow it, so such a call has no place the gate can read.
+CHDIR_WRAPPER_RE = re.compile(r"^(?:.*[\\/])?(?:env|make|gmake)(?:\.exe)?$", re.IGNORECASE)
+CHDIR_OPTION_RE = re.compile(r"^(?:-[A-Za-z]*C|--chdir|--directory)", re.IGNORECASE)
 GIT_REPO_OPTIONS = ("--git-dir", "--work-tree")
 CONFIG_WORKTREE_PREFIX = "core.worktree"
 
@@ -2238,6 +2246,18 @@ def cd_hazard(seg: list) -> str:
     return ""
 
 
+def chdir_wrapper(seg: list) -> str:
+    """`env -C` / `make -C` (and their long spellings) in front of the git call of one
+    simple command, else ''."""
+    git_at = next((n for n, tok in enumerate(seg) if GIT_TOKEN_RE.match(tok)), len(seg))
+    for n, tok in enumerate(seg[:git_at]):
+        if CHDIR_WRAPPER_RE.match(tok):
+            option = next((t for t in seg[n + 1:git_at] if CHDIR_OPTION_RE.match(t)), "")
+            if option:
+                return f"{tok} {option}"
+    return ""
+
+
 def is_dir_change(seg: list) -> bool:
     i = argv0_index(seg)
     return i is not None and re.split(r"[\\/]", seg[i])[-1].lower() in ("cd", "pushd", "popd")
@@ -2261,8 +2281,11 @@ def placed_git_calls(command: str, cwd: str, subs, _depth: int = 0) -> list | No
         dirs.append(cur)
         hazard = hazard or cd_hazard(seg)
         moves = moves or is_dir_change(seg)
-        out.extend((sub, args, opts, place_of(opts, cur))
-                   for sub, args, opts in git_calls_in(seg) if sub in subs)
+        here = [(sub, args, opts, place_of(opts, cur))
+                for sub, args, opts in git_calls_in(seg) if sub in subs]
+        if here:
+            hazard = hazard or chdir_wrapper(seg)
+        out.extend(here)
     for body in nested_command_bodies(command):
         if not git_invokes(body, *subs):
             continue
@@ -2346,7 +2369,7 @@ def judge_git_per_call(command: str, cwd: str, orch: bool) -> int | None:
         if not calls:
             return None
         for sub, args, _, place in calls:
-            verdict = judge_git(git_call_text(sub, args), place, orch)
+            verdict = judge_git(git_call_text(sub, args), place, orch, placed=True)
             if verdict != 0:
                 return verdict
     except Unplaceable as exc:
@@ -2379,17 +2402,18 @@ def end_push_budget() -> None:
     _push_deadline = None
 
 
-def git_run(argv: list, repo) -> subprocess.CompletedProcess:
+def git_run(argv: list, repo, env: dict | None = None) -> subprocess.CompletedProcess:
     """subprocess.run for one git call, capped at GIT_CALL_TIMEOUT and, while a push
     budget is running, at what is left of it. Raises PushBudgetExpired when none is
-    left or the call timed out inside the budget."""
+    left or the call timed out inside the budget. `env` replaces the environment."""
     timeout = GIT_CALL_TIMEOUT
     if _push_deadline is not None:
         timeout = min(timeout, _push_deadline - time.monotonic())
         if timeout <= 0:
             raise PushBudgetExpired()
     try:
-        return subprocess.run(argv, cwd=str(repo), capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(argv, cwd=str(repo), capture_output=True, text=True, timeout=timeout,
+                              env=env)
     except subprocess.TimeoutExpired:
         if _push_deadline is not None:
             raise PushBudgetExpired() from None
@@ -2771,6 +2795,188 @@ def merge_staleness(command: str, cwd: str, source: str, trunk: str) -> str:
     return wt.stale_message(count) if count else ""
 
 
+# --- Change-set binding of the commit approval (task-0134) ---------------------------------
+# A task in its own worktree stays writable after the CEO read its diff (the review freeze
+# ends at review and a parked task holds no queue), so the approval is bound to what was
+# read: the SHA-256 of the task's change set against its merge-base with the trunk, the
+# sorted `<new mode> <new blob> <path>` of every file the task adds, changes or deletes.
+# The change set and not the literal tree hash, because a sync merge of the trunk into the
+# branch (the stale send-back keeps the approval) changes the tree hash and leaves the
+# task's own change set byte-identical; any edit, add, delete or mode change, and a sync
+# that overlaps the task's files, changes it. Recorded at the commit park (advance.py),
+# verified when approve.py records the approval and at the auto-level grant, and checked at
+# the commit (judge_git) and at merge condition 3 (check_merge_source). A run with no
+# worktree of its own is edit-serialized already and is not bound.
+# The binding of a tree that holds no change against its merge-base (SHA-256 of nothing).
+EMPTY_BINDING = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+class TreeBindingError(Exception):
+    """The change set of a tree cannot be read, so an approval can be neither bound to it
+    nor checked against it. Every caller takes the fail-closed side."""
+
+
+def binding_git(args: list, repo, env: dict | None = None) -> str:
+    """Stdout of one git call through git_run (the push budget bounds it); raises
+    TreeBindingError for a failure to run, a timeout outside a budget or a non-zero exit.
+    PushBudgetExpired is not caught: it must reach handle_bash and deny."""
+    argv = ["git", *args]
+    try:
+        proc = git_run(argv, repo) if env is None else git_run(argv, repo, env=env)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        raise TreeBindingError(f"git {args[0]}: {type(exc).__name__}") from exc
+    if proc.returncode != 0:
+        raise TreeBindingError(f"git {args[0]} exited {proc.returncode}: "
+                               f"{(proc.stderr or '').strip()[:200]}")
+    return proc.stdout.strip()
+
+
+# `:<old mode> <new mode> <old blob> <new blob> <status>TAB<path>`; quotepath on keeps the
+# listing pure ASCII whatever the file names hold.
+DIFF_TREE_ARGS = ["-c", "core.quotepath=true", "diff-tree", "-r", "--raw", "--no-renames",
+                  "--no-abbrev"]
+
+
+def binding_entry(line: str) -> str:
+    meta, _, path = line.partition("\t")
+    fields = meta.split()
+    if len(fields) != 5 or not path:
+        raise TreeBindingError(f"unreadable diff-tree line {line[:80]!r}")
+    return f"{fields[1]} {fields[3]} {path}"
+
+
+def snapshot_listing(repo, base: str) -> str:
+    """diff-tree of `base` against what a `git add -A` would stage in the work tree `repo`
+    sits in: a throwaway copy of the real index is staged and written as a tree, so the
+    real index and every ref are left exactly as they were."""
+    import shutil
+    import tempfile
+
+    index = binding_git(["rev-parse", "--path-format=absolute", "--git-path", "index"], repo)
+    scratch = ""
+    try:
+        fd, scratch = tempfile.mkstemp(prefix="binding-index-")
+        os.close(fd)
+        shutil.copy2(index, scratch)  # the mtime too: git decides what is racily clean by it
+        env = {**os.environ, "GIT_INDEX_FILE": scratch}
+        binding_git(["add", "-A"], repo, env)
+        tree = binding_git(["write-tree"], repo, env)
+        return binding_git([*DIFF_TREE_ARGS, base, tree], repo)
+    except OSError as exc:
+        raise TreeBindingError(f"snapshot: {type(exc).__name__}") from exc
+    finally:
+        try:
+            if scratch:
+                os.unlink(scratch)
+        except OSError:
+            pass
+
+
+def tree_binding(repo, tip: str = "HEAD", snapshot: bool = False) -> str:
+    """The change-set binding of `tip` in `repo` (hex SHA-256). With `snapshot` the
+    work tree `repo` sits in is what is bound, uncommitted and untracked files included
+    (not ignored ones); without it the committed tree of `tip`. Raises TreeBindingError
+    on any git failure, so "cannot tell" is never a value that could match."""
+    import hashlib
+
+    import git_state
+
+    repo = Path(repo)
+    base = binding_git(["merge-base", git_state.trunk(repo), tip], repo)
+    listing = (snapshot_listing(repo, base) if snapshot
+               else binding_git([*DIFF_TREE_ARGS, base, f"{tip}^{{tree}}"], repo))
+    entries = sorted(binding_entry(line) for line in listing.splitlines() if line.startswith(":"))
+    return hashlib.sha256("\n".join(entries).encode("utf-8", "replace")).hexdigest()
+
+
+def task_binding(task: str) -> str:
+    """The snapshot binding of the task's recorded worktree. Raises TreeBindingError when
+    the tree is not usable (a MISSING or INVALID tree never falls back to another one)."""
+    wt = worktree_mod()
+    tree = wt.work_dir(task) if wt is not None else None
+    if tree is None:
+        raise TreeBindingError(f"the worktree of {task} is not usable")
+    return tree_binding(tree, snapshot=True)
+
+
+def binding_deny(reason: str) -> int:
+    return deny(reason)
+
+
+REAPPROVE = ("surface the diff again (python .claude/tools/pipeline/advance.py --task {task}) "
+             "and wait for a new approval")
+
+
+def check_commit_binding(task: str, run: dict, command: str, cwd: str, placed: bool) -> int:
+    """0, or a deny, for a commit of a task that works in a worktree: it must run in THAT
+    tree (a commit tagged for this task from another tree would spend its approval) and
+    the tree's change set must be the one the CEO approved. `placed` says `cwd` is the
+    directory this one call runs in; otherwise the command's own placement is read."""
+    try:
+        where = (cwd or str(state.ROOT)) if placed else str(repo_candidates(command, cwd)[0])
+        owner = worktree_mod().owner_of(where, cwd)
+    except Exception as exc:
+        return binding_deny(f"Commit for {task} refused: which worktree it runs in cannot be "
+                            f"told ({exc}). Name the tree with a literal path: "
+                            f"`cd <tree> && git commit ...`.")
+    if owner != task:
+        elsewhere = f"the worktree of {owner}" if owner else "a checkout that is not its worktree"
+        return binding_deny(f"Commit for {task} refused: it runs in {elsewhere}, and {task} "
+                            f"commits only in its own worktree, so another tree's approval "
+                            f"cannot be spent from there.")
+    stored = str(run.get("approved_tree") or "")
+    if not stored:
+        return binding_deny(f"Commit for {task} refused: its approval carries no tree binding "
+                            f"(it was recorded without the diff being surfaced). "
+                            f"{REAPPROVE.format(task=task).capitalize()}.")
+    try:
+        current = task_binding(task)
+    except PushBudgetExpired:
+        raise
+    except Exception as exc:
+        return binding_deny(f"Commit for {task} refused: the change set of its worktree "
+                            f"cannot be read ({exc}), so it cannot be shown to be the one "
+                            f"the CEO approved.")
+    if current != stored:
+        return binding_deny(f"Commit for {task} refused: the tree changed after the CEO "
+                            f"approved it (approved change set {stored[:12]}, now "
+                            f"{current[:12]}). Anything that changes a byte after the diff "
+                            f"was surfaced (a formatter, a late edit) needs a new approval: "
+                            f"{REAPPROVE.format(task=task)}.")
+    return 0
+
+
+def check_merge_binding(task: str, run: dict, source: str, trunk: str, command: str,
+                        cwd: str) -> int:
+    """0, or a deny, for the merge of a task that works in a worktree: the change set the
+    branch holds must be the one the CEO approved (merge condition 3)."""
+    head = f"Merge into protected branch '{trunk}' refused - condition 3 of 3 failed "
+    stored = str(run.get("approved_tree") or "")
+    if not stored:
+        return binding_deny(f"{head}(commit approval): the approval of {task} carries no tree "
+                            f"binding, so the branch cannot be shown to hold the approved "
+                            f"change set. {REAPPROVE.format(task=task).capitalize()}.")
+    current = None
+    for repo in repo_candidates(command, cwd):
+        try:
+            if Path(repo).is_dir():
+                current = tree_binding(repo, tip=source)
+                break
+        except PushBudgetExpired:
+            raise
+        except Exception:
+            continue
+    if current is None:
+        return binding_deny(f"{head}(commit approval): the change set of '{source}' could not "
+                            f"be read, so the merge is refused rather than guessed.")
+    if current != stored:
+        return binding_deny(f"{head}(commit approval): '{source}' holds a change set the CEO "
+                            f"did not approve (approved {stored[:12]}, branch {current[:12]}). "
+                            f"Take the unapproved changes off the branch, or "
+                            f"{REAPPROVE.format(task=task)}.")
+    return 0
+
+
 def check_merge_source(source: str, trunk: str, command: str = "", cwd: str = "") -> int:
     """The conditions a source branch must meet to reach the trunk: three for every task,
     plus a fourth (freshness) for a task that works in a worktree. Each failure names
@@ -2809,6 +3015,9 @@ def check_merge_source(source: str, trunk: str, command: str = "", cwd: str = ""
             f"{task} --gate commit.",
             human=human_notice("merge", task=task, trunk=trunk))
     if run.get("worktree"):
+        bound = check_merge_binding(task, run, source, trunk, command, cwd)
+        if bound != 0:
+            return bound
         stale = merge_staleness(command, cwd, source, trunk)
         if stale:
             return deny(
@@ -3764,11 +3973,18 @@ def owns_path(task: str, path: str, cwd: str = "") -> bool:
         return True
 
 
+# `\\?\E:\x`, `\\.\E:\x` and `//?/E:/x` are LOCAL spellings of `E:\x` (worktree.EXTENDED_RE,
+# which this module cannot import at load time: worktree imports it).
+EXTENDED_LOCAL_RE = re.compile(r"^[\\/]{2}[?.][\\/](?=[A-Za-z]:)")
+
+
 def in_trunk_checkout(path: str, cwd: str = "", strict: bool = False) -> bool:
     """Whether `path` lies in a trunk checkout and outside .agentry/ (bookkeeping is
     never frozen, as everywhere else in this file). The caller asks worktrees_on()
     first: the freeze exists only while the flag is on. `strict` (a subagent) reads a
-    failed lookup as 'trunk'."""
+    failed lookup as 'trunk'. The extended-length spelling of a local path is placed
+    like the plain one: only a real network path is outside."""
+    path = EXTENDED_LOCAL_RE.sub("", str(path or "").strip().strip("'\""))
     if not path or is_unc(path):
         return False
     low = normalize(path)
@@ -4105,9 +4321,10 @@ def unc_deny(command: str, cwd: str) -> int:
         f"a local clone instead.")
 
 
-def judge_git(command: str, cwd: str, orch: bool) -> int:
+def judge_git(command: str, cwd: str, orch: bool, placed: bool = False) -> int:
     """The verdict on the git calls of ONE command text run in `cwd`: a network path, a
     push target, a merge onto the trunk, and the run approvals of every commit and push.
+    `placed` says `command` is one call and `cwd` is where it runs (judge_git_per_call).
     handle_bash() sets up the push time budget and answers for its expiry."""
     is_commit = git_invokes(command, "commit")
     is_push = git_invokes(command, "push")
@@ -4243,6 +4460,10 @@ def judge_git(command: str, cwd: str, orch: bool) -> int:
                         f"for CEO approval, then: python .claude/tools/pipeline/approve.py "
                         f"--task {task} --gate commit.",
                         human=human_notice("commit", task=task))
+        if task in commit_ts and run.get("worktree"):
+            bound = check_commit_binding(task, run, command, cwd, placed)
+            if bound != 0:
+                return bound
         if task in push_tasks and push_needs_approval() and not run["push_approved"]:
             return deny(f"Push for {task} is not approved yet. Wait for CEO approval, then: "
                         f"python .claude/tools/pipeline/approve.py --task {task} --gate push.",

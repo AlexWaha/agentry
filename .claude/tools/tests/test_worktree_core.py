@@ -647,9 +647,11 @@ class DispatchLineTest(WorkspaceCase):
         self.make_tree()
         tree = (self.root / "src-wt" / TASK).as_posix()
         self.assertEqual(
-            f"Task worktree: {tree} (branch {BRANCH}). Begin every Bash call with "
+            f"Worktree: {tree} (branch {BRANCH}). Begin every Bash call with "
             f'cd "{tree}", give Edit and Write absolute paths under it, and do not '
-            f"touch src/.", worktree.dispatch_line(TASK))
+            f"touch src/. Make the first line of the dispatch prompt exactly "
+            f'"Task worktree: {TASK}" (alone on that line), or the write gate refuses '
+            f"this agent's writes.", worktree.dispatch_line(TASK))
 
     def test_the_line_is_one_line_and_byte_stable(self):
         self.make_tree()
@@ -673,8 +675,8 @@ class DispatchLineTest(WorkspaceCase):
 
     def test_the_branch_follows_what_the_tree_has_checked_out(self):
         self.make_tree()
-        self.git(self.root / "src-wt" / TASK, "checkout", "-b", "feature/renamed")
-        self.assertIn("(branch feature/renamed)", worktree.dispatch_line(TASK))
+        self.git(self.root / "src-wt" / TASK, "checkout", "-b", "feature/task-0130-renamed")
+        self.assertIn("(branch feature/task-0130-renamed)", worktree.dispatch_line(TASK))
 
 
 class ResumeTextTest(WorkspaceCase):

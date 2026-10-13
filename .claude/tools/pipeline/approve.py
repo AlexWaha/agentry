@@ -8,6 +8,12 @@ the commit checkpoint, to the plan step while the plan is still unapproved. It
 needs `--reason`: the reason is what the event journal records against the
 rejection, and a rejection nobody explained cannot be learned from.
 
+A commit approval for a run in its own worktree is bound to the change set the CEO was
+shown (pretool_gate.tree_binding, recorded by advance.py at the commit park): the tree is
+read again here, and an approval for a tree that moved since, or that cannot be read, is
+refused and nothing is recorded. The hook checks the same binding at the commit and at
+merge condition 3.
+
 Trust note: nothing binds this to a real user message; it prevents accidental
 skips and out-of-order commits, not a model that deliberately self-approves. The
 hard stop is the Stop hook surfacing the diff and parking the task.
@@ -256,6 +262,8 @@ def resume_run(conn, run: dict) -> tuple[str, str]:
     if (run["stage"] in state.editing_stages(pipeline, which)
             and run["stage"] not in state.checkpoint_stages(pipeline, which)):
         stale = {f: 0 for f in ("commit_approved", "push_approved") if run[f]}
+        if "commit_approved" in stale:
+            stale["approved_tree"] = ""
     state.set_fields(conn, task, stage_status=restored, paused_status="", pause_reason="",
                      pause_kind="", **stale)
     note = (f" Cleared {', '.join(stale)}: it was recorded before the checkpoint, so the "
@@ -302,7 +310,7 @@ def abandon_run(conn, run: dict, reason: str) -> tuple[str, str]:
                     f"there. Compare the two and remove one by hand, then abandon again.")
     state.set_fields(conn, task, stage="done", stage_status=state.ST_ABANDONED,
                      awaiting_human="", paused_status="", pause_reason="", pause_kind="",
-                     commit_approved=0, push_approved=0, plan_approved=0,
+                     commit_approved=0, push_approved=0, plan_approved=0, approved_tree="",
                      abandon_reason=reason, event="abandoned", reason=reason)
     dependents = live_dependents(task)
     after = (f"Dependents are ready at once: {', '.join(dependents)} (at the auto level they "
@@ -331,6 +339,33 @@ def reject_target(pipeline: dict, run: dict) -> tuple[str, bool]:
     if names.index(run["stage"]) <= gate:
         return names[0], True
     return (names[gate + 1] if gate + 1 < len(names) else names[0]), False
+
+
+def commit_binding(run: dict) -> tuple[dict, str]:
+    """({"approved_tree": binding}, "") to record with the commit approval of a run that
+    works in a worktree, ({}, "") for one that does not, ({}, refusal) when the approval
+    must not be recorded.
+
+    The binding is the change set the CEO is approving. advance.py recorded the one it
+    showed at the commit park; the tree is read again now, and an approval is recorded
+    only when it is still that one (a run approved with no park behind it, force majeure,
+    has nothing stored and takes the fresh value). A tree that cannot be read records
+    nothing: an unbound approval is never written."""
+    task = run["task"]
+    if not run.get("worktree"):
+        return {}, ""
+    try:
+        current = pretool_gate.task_binding(task)
+    except Exception as exc:
+        return {}, (f"the change set of the worktree of {task} cannot be read ({exc}), so the "
+                    f"approval was not recorded: an approval that is not bound to a tree is "
+                    f"never written. Repair the tree, then approve again.")
+    stored = str(run.get("approved_tree") or "")
+    if stored and stored != current:
+        return {}, (f"the tree of {task} changed after the diff was shown (change set "
+                    f"{stored[:12]}, now {current[:12]}), so the approval was not recorded. "
+                    f"Re-run advance.py --task {task} to surface the diff again, then approve.")
+    return {"approved_tree": current}, ""
 
 
 def main() -> int:
@@ -424,7 +459,8 @@ def main() -> int:
         first, clear_plan = reject_target(state.load_pipeline(), run)
         plan_reset = {"plan_approved": 0} if clear_plan else {}
         state.set_fields(conn, args.task, stage=first, stage_status=state.ST_IN_PROGRESS,
-                         awaiting_human="", commit_approved=0, push_approved=0, **plan_reset,
+                         awaiting_human="", commit_approved=0, push_approved=0, approved_tree="",
+                         **plan_reset,
                          retries=0, continuations=0,
                          paused_status="", pause_reason="", pause_kind="",
                          event="rejected", reason=reason)
@@ -434,8 +470,14 @@ def main() -> int:
         # approval cannot be mistaken for a second decision.
         msg = f"{args.gate} already approved for {args.task} - nothing to do."
     elif args.gate == "commit":
-        state.set_fields(conn, args.task, commit_approved=1)
-        msg = f"commit approved for {args.task} - git commit now permitted."
+        bound, refusal = commit_binding(run)
+        if refusal:
+            conn.close()
+            print(json.dumps({"error": refusal}))
+            return 2
+        state.set_fields(conn, args.task, commit_approved=1, **bound)
+        msg = (f"commit approved for {args.task} - git commit now permitted"
+               + (f", bound to change set {bound['approved_tree'][:12]}." if bound else "."))
     elif args.gate == "push":
         state.set_fields(conn, args.task, push_approved=1)
         msg = f"push approved for {args.task} - git push now permitted."

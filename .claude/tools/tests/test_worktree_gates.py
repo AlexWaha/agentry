@@ -127,11 +127,25 @@ class WorkspaceCase(unittest.TestCase):
 
     def register(self, task: str, stage: str, tree: bool = True, **fields) -> None:
         rel = f"src-wt/{task}" if tree else ""
+        if tree and fields.get("commit_approved") and "approved_tree" not in fields \
+                and (self.root / rel).is_dir():
+            # An approved task in a tree carries the binding of the tree as it stands
+            # (task-0134): the commit and the merge check it against the tree later.
+            fields["approved_tree"] = pretool_gate.tree_binding(self.root / rel, snapshot=True)
         conn = state.connect()
         try:
             state.create_run(conn, task, "feature", stage, worktree=rel)
             if fields:
                 state.set_fields(conn, task, **fields)
+        finally:
+            conn.close()
+
+    def bind(self, task: str) -> None:
+        """Record the tree as it stands now as the change set `task` was approved with."""
+        conn = state.connect()
+        try:
+            state.set_fields(conn, task, approved_tree=pretool_gate.tree_binding(
+                self.root / "src-wt" / task, snapshot=True))
         finally:
             conn.close()
 
@@ -487,10 +501,24 @@ class MergeFreshnessTest(WorkspaceCase):
         self.git(self.src, "worktree", "remove", "--force", str(self.tree))
         self.git(self.src, "branch", "-D", self.branch)
 
-        code, err = self.merge_verdict()
+        # Condition 3 would stop it first (the branch is gone, so its change set cannot be
+        # read); this test is about what condition 4 does on its own.
+        with unittest.mock.patch.object(pretool_gate, "check_merge_binding", return_value=0):
+            code, err = self.merge_verdict()
 
         self.assertEqual(2, code)
         self.assertIn("condition 4 failed", err)
+        self.assertIn("could not be read", err)
+
+    def test_an_unreadable_change_set_fails_closed_at_condition_3(self):
+        self.register(TASK_A, "ready", commit_approved=1)
+        self.git(self.src, "worktree", "remove", "--force", str(self.tree))
+        self.git(self.src, "branch", "-D", self.branch)
+
+        code, err = self.merge_verdict()
+
+        self.assertEqual(2, code)
+        self.assertIn("condition 3 of 3 failed", err)
         self.assertIn("could not be read", err)
 
     def test_the_recorded_tree_decides_not_the_flag(self):
@@ -504,20 +532,22 @@ class MergeFreshnessTest(WorkspaceCase):
         self.assertEqual(2, code)
         self.assertIn("condition 4", err)
 
-    def test_the_check_costs_exactly_one_extra_git_call(self):
+    def test_the_freshness_check_costs_exactly_one_extra_git_call(self):
         self.register(TASK_A, "ready", commit_approved=1)
         calls = []
         real = pretool_gate.git_run
 
-        def spy(argv, repo):
+        def spy(argv, repo, *rest, **kw):
             calls.append(argv)
-            return real(argv, repo)
+            return real(argv, repo, *rest, **kw)
 
         with unittest.mock.patch.object(pretool_gate, "git_run", spy):
             self.assertEqual(0, self.merge_verdict()[0])
 
         self.assertEqual(1, len([a for a in calls if "rev-list" in a]))
-        self.assertEqual(2, len(calls))
+        # the branch read, the two calls of the change-set binding (merge-base, diff-tree)
+        # and the freshness count
+        self.assertEqual(4, len(calls))
 
     def test_the_freshness_call_runs_under_the_push_budget(self):
         self.register(TASK_A, "ready", commit_approved=1)
@@ -793,6 +823,7 @@ class PerCallPlacementTest(WorkspaceCase):
             state.set_fields(conn, TASK_B, commit_approved=1)
         finally:
             conn.close()
+        self.bind(TASK_B)
 
         for command in (f"cd {self.a} && git commit -m a && cd {self.b} && git commit -m b",
                         f"git -C {self.a} commit -m a && git -C {self.b} commit -m b"):
@@ -802,6 +833,7 @@ class PerCallPlacementTest(WorkspaceCase):
 
     def test_a_dash_c_on_an_earlier_read_does_not_place_a_later_merge(self):
         self.commit(self.tree_a, "work")
+        self.bind(TASK_A)
         self.commit(self.src, "sibling merged")
         s = self.src.as_posix()
         for command in (f"git -C {self.b} status && git -C {s} merge --no-ff feature/{TASK_A}",
@@ -871,6 +903,7 @@ class PerCallPlacementTest(WorkspaceCase):
     def test_a_commit_message_file_is_read_from_the_place_of_the_call(self):
         (self.tree_b / "msg.txt").write_text(f"[{TASK_A}] feat: x\n", encoding="utf-8")
         (self.tree_a / "msg.txt").write_text(f"[{TASK_A}] feat: x\n", encoding="utf-8")
+        self.bind(TASK_A)
 
         code, err = self.verdict(f"cd {self.b} && git commit -F msg.txt")
         self.assertEqual(2, code)
