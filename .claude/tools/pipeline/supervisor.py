@@ -1034,7 +1034,9 @@ def progress_at(task: str) -> tuple[float | None, str]:
     2. the task file's mtime - the task was edited (criteria ticked, sections
        filled);
     3. the working tree - the newest mtime among the files the task's repo(s)
-       report as changed or untracked.
+       report as changed or untracked. A task living in a worktree is read from
+       that tree (F8); a MISSING or INVALID one yields no evidence, never the
+       evidence of `src/`, which would show another task's edits as this one's.
 
     Read-only throughout. `--no-optional-locks` keeps the status call from taking
     the index lock, which an agent's own repo command could collide with. A
@@ -1067,7 +1069,7 @@ def progress_at(task: str) -> tuple[float | None, str]:
     except Exception:
         pass
     try:
-        for repo in git_state.repos_for_task(task):
+        for repo in git_state.work_trees_for_task(task):
             code, out = git_state._git(repo, "--no-optional-locks", "status", "--porcelain",
                                        "-z", "-uall")
             # -z: NUL-separated and never quoted, so a path with a space or a
@@ -1417,7 +1419,10 @@ def spawn_argv(cfg: dict, task: str, stage: str, why: str) -> list[str]:
     """The exact argv for a relaunch. A headless `claude -p` run, because an
     external process cannot inject a turn into a running interactive session -
     the only lever that reaches a NEW session is starting one."""
-    prompt = RELAUNCH_PROMPT.format(task=task, stage=stage, why=why)
+    # A spawned session starts in the project root with no memory of the tree its
+    # task works in; the dispatch line is how it learns not to edit `src/`. The note
+    # is empty for a task without a worktree, so the prompt is then byte-identical.
+    prompt = RELAUNCH_PROMPT.format(task=task, stage=stage, why=why) + state._dispatch_note(task)
     raw = cfg.get("spawn_cmd") or DEFAULTS["spawn_cmd"]
     if isinstance(raw, str):
         raw = [raw]

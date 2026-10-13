@@ -1,9 +1,9 @@
 # Architecture
 
-**Date:** 2026-10-09
-**Author:** technical-writer (task-0052, swarm task-0118)
+**Date:** 2026-10-13
+**Author:** technical-writer (task-0052, swarm task-0118; task-0132)
 **Status:** Draft
-**Version:** 2.0
+**Version:** 2.1
 
 Agentry has no application layers (no controllers, services or models) and no
 request cycle. Its architecture is the set of scripts that sit between the
@@ -57,6 +57,24 @@ level up, with `"cwd": "src"` in its `pipeline.json` and `repos.agentry.path`
 set to `src`. The code lives in `src/`; the workspace copy is the harness the
 orchestrator session itself runs.
 
+### Worktree layout (when `worktrees.enabled`)
+
+```
+E:/Personal/Agenty/              # workspace root (not a git repo); live .claude/ and .agentry/
+├── src/                         # trunk checkout: stays on main, never edited, the solo merge runs here
+├── src-wt/                      # <repo path>-wt: one linked worktree per in-flight task
+│   ├── task-0130/               # branch feature/task-0130, its own tmp/, gates run here
+│   └── task-0131/
+└── .agentry/state/run.db        # run row per task; the `worktree` column holds "src-wt/task-0130"
+```
+
+Pipeline state stays at the workspace root, so a tree carries code only. Hooks run
+the live scripts at the root; the `.claude/tools` and `pipeline.json` copies inside
+a tree are inert for hooks and are what the exit gates test. Swarm umbrellas and
+runs registered before the flag keep working in `src/` and are exclusive. Codegraph
+indexes the trunk only (`.codegraph/` at the root), so a tree's unmerged symbols
+are not in the graph.
+
 ## Modules
 
 All code is under `.claude/tools/`. Each script is standard-library Python and
@@ -79,7 +97,8 @@ runs as its own process (a hook or a CLI). There are no packages and no
 | `pretool_gate.py` | PreToolUse hook: commit, push, merge, branch, plan and review-stage rules; main-thread write scope |
 | `agent_gate.py` | PreToolUse hook inside subagents: the `dev`, `docs` and `readonly` profiles |
 | `stop_gate.py` | Stop hook: keeps a session advancing in-flight work, reports owed handoff and memory debt |
-| `git_state.py` | Repo discovery from `repos{}`, merge detection, per-task branch reports |
+| `git_state.py` | Repo discovery from `repos{}` (a linked worktree, whose `.git` is a file, is never taken for a repo), merge detection, per-task branch reports, `work_trees_for_task` (where to read a task's changes) and `behind_trunk` (commits the trunk has that a ref lacks) |
+| `worktree.py` | Single owner of worktree facts: config (`enabled`, `max_parallel`), `add` and `remove` (the only functions that run git), `status` (OK, LEGACY, MISSING, INVALID), `work_dir`, `owner_of`, `is_trunk_checkout`, slot counting, the dispatch line, orphan report; CLI `--list`, `--sweep`, `--remove`, `--repair`. Read-only functions are subprocess-free so hooks can call them |
 | `handoff.py` | Validates, injects and indexes the handoff docs |
 | `diff_checkpoint.py` | Builds the diff preview shown at the commit checkpoint |
 | `mode.py`, `swarm.py`, `busy.py` | Session mode, the swarm dial, the busy marker |
@@ -152,6 +171,10 @@ denial does not depend on what the model remembers.
   environment.
 - Gates (`pretool_gate.py`, `agent_gate.py`, `stop_gate.py`) read state and
   config. They do not call `advance.py`.
+- `worktree.py` imports `state` and `git_state` only. `git_state` imports
+  `worktree` lazily inside the functions that need it, so there is no cycle;
+  `gate.py`, `advance.py` and the gates import `worktree`, never the reverse. A
+  read-only `worktree` function never starts a subprocess (hook budget).
 - `pretool_gate.normalize` is the one path normaliser; `agent_gate` re-exports
   it rather than keeping a copy.
 - Nothing in `.claude/tools/` imports a third-party package. `ruff` is a
@@ -182,7 +205,8 @@ folder under `.claude/tools/` without CEO approval.
 | `.agentry/state/events.db` (one per workspace) | The append-only event journal: transitions, gate runs, approvals, rejections, merges (history; only `supervisor.progress_at` reads it, and only to veto a relaunch; no gate reads it) | No |
 | `.agentry/memory/memory.db` | `lesson`, `pattern` and `module` rows with an FTS5 index | No |
 | `.agentry/tasks/` | Task files; the folder is the state | Yes |
-| `.agentry/pipeline.json` | Stage machine, gates, repos, lanes, supervisor limits | Yes |
+| `.agentry/pipeline.json` | Stage machine, gates, repos, lanes, supervisor limits, `worktrees` block | Yes |
+| `<repo path>-wt/<task>` (for example `src-wt/task-0130`) | A task's linked git worktree, created at registration and removed after the merge is confirmed; the relative path is the run row's `worktree` column (written only by `create_run`) | No (outside every repo) |
 
 Task state is the folder a task file sits in (`backlog/`, `active/`, `done/`),
 not a field. Agents never write under `.agentry/state/` or to `pipeline.json`;
@@ -214,4 +238,5 @@ the other is a defect in this file.
 
 | Version | Date | Change |
 |---|---|---|
+| 2.1 | 2026-10-13 | Added `worktree.py`, the worktree layout, the import rule and the `worktree` run column (task-0132, epic-0004). |
 | 2.0 | 2026-10-09 | Replaced the onboarding template (Laravel-style layers, module and database sections) with the real Agentry module layout (task-0052). |

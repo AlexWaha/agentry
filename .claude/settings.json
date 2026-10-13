@@ -78,85 +78,97 @@
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 1",
             "timeout": 20,
-            "statusMessage": "Orchestrator-only rules to the main thread, chunk 1 of 14..."
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 1 of 16..."
           },
           {
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 2",
             "timeout": 20,
-            "statusMessage": "Orchestrator-only rules to the main thread, chunk 2 of 14..."
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 2 of 16..."
           },
           {
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 3",
             "timeout": 20,
-            "statusMessage": "Orchestrator-only rules to the main thread, chunk 3 of 14..."
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 3 of 16..."
           },
           {
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 4",
             "timeout": 20,
-            "statusMessage": "Orchestrator-only rules to the main thread, chunk 4 of 14..."
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 4 of 16..."
           },
           {
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 5",
             "timeout": 20,
-            "statusMessage": "Orchestrator-only rules to the main thread, chunk 5 of 14..."
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 5 of 16..."
           },
           {
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 6",
             "timeout": 20,
-            "statusMessage": "Orchestrator-only rules to the main thread, chunk 6 of 14..."
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 6 of 16..."
           },
           {
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 7",
             "timeout": 20,
-            "statusMessage": "Orchestrator-only rules to the main thread, chunk 7 of 14..."
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 7 of 16..."
           },
           {
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 8",
             "timeout": 20,
-            "statusMessage": "Orchestrator-only rules to the main thread, chunk 8 of 14..."
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 8 of 16..."
           },
           {
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 9",
             "timeout": 20,
-            "statusMessage": "Orchestrator-only rules to the main thread, chunk 9 of 14..."
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 9 of 16..."
           },
           {
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 10",
             "timeout": 20,
-            "statusMessage": "Orchestrator-only rules to the main thread, chunk 10 of 14..."
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 10 of 16..."
           },
           {
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 11",
             "timeout": 20,
-            "statusMessage": "Orchestrator-only rules to the main thread, chunk 11 of 14..."
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 11 of 16..."
           },
           {
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 12",
             "timeout": 20,
-            "statusMessage": "Orchestrator-only rules to the main thread, chunk 12 of 14..."
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 12 of 16..."
           },
           {
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 13",
             "timeout": 20,
-            "statusMessage": "Orchestrator-only rules to the main thread, chunk 13 of 14..."
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 13 of 16..."
           },
           {
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 14",
             "timeout": 20,
-            "statusMessage": "Orchestrator-only rules to the main thread, chunk 14 of 14..."
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 14 of 16..."
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 15",
+            "timeout": 20,
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 15 of 16..."
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/tools/hooks/main_thread_rules.py\" --chunk 16",
+            "timeout": 20,
+            "statusMessage": "Orchestrator-only rules to the main thread, chunk 16 of 16..."
           },
           {
             "type": "command",

@@ -57,9 +57,10 @@ import git_state
 import mode
 import pretool_gate
 import state
+import worktree
 from gate import run_gate
 
-GATE_TIMEOUT = 900
+GATE_TIMEOUT = 1800
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 CRITERIA_RE = re.compile(r"##\s*Acceptance Criteria\s*\n(.*?)(\n##\s|\Z)", re.DOTALL)
@@ -195,6 +196,20 @@ def check_task_ready(task: str) -> str:
         return ""  # fail-open
 
 
+def _register_tree(task: str, task_type: str, which: str) -> dict | None:
+    """Cut the task's branch and worktree at registration: worktree.add()'s result, or
+    None when this task gets none - the flag is off, or it is not a build-flow task
+    or it is a swarm umbrella (umbrellas run in the repo itself, exclusive both ways).
+    The caller has already passed check_task_ready, so nothing is created for a task
+    that was going to be refused."""
+    if which != state.BUILD or not worktree.enabled():
+        return None
+    frozen = state.frozen_frontmatter(task)
+    if frozen["umbrella"] == "true":
+        return None
+    return worktree.add(task, task_type, frozen["repo"])
+
+
 def refusal_human(task: str, refusal: str) -> str:
     """The sentence for the CEO when a refusal waits on him, else "".
 
@@ -285,6 +300,9 @@ def finish_or_wait_for_merge(task: str, run: dict) -> int:
 
     unmerged = [r for r in report if r["in_main"] is not True]
     if unmerged:
+        stale = _stale_before_merge(task, run)
+        if stale is not None:
+            return stale
         where = ", ".join(f"{r['repo']} ({r['branch'] or 'no branch'})" for r in unmerged)
         run = _merge_wait(task, run, "merge")
         who = ("Merge the approved branch into the trunk locally (solo workflow mode)"
@@ -317,7 +335,24 @@ def finish_or_wait_for_merge(task: str, run: dict) -> int:
     repos = ", ".join(r["repo"] for r in report)
     run = _merge_wait(task, run, "")
     return result("done", task, run,
-                  f"Merged into main ({repos}). Task done - file {note}.")
+                  f"Merged into main ({repos}). Task done - file {note}."
+                  f"{_worktree_cleanup(task)}")
+
+
+def _worktree_cleanup(task: str) -> str:
+    """Remove the merged task's worktree and say what happened ('' when it had none).
+    Runs only after the merge is confirmed, the file moved and the run closed, so a
+    failed merge never touches the tree. A tree git refuses to remove stays where it
+    is and is reported; the task is done either way, and the branch is kept."""
+    try:
+        gone = worktree.remove(task)
+    except Exception as exc:
+        return f" Worktree cleanup failed ({type(exc).__name__}: {exc}); remove it by hand."
+    if gone["removed"]:
+        return " Worktree removed (the branch is kept)."
+    if gone["left"]:
+        return f" Worktree LEFT in place: {gone['reason']}"
+    return ""
 
 
 # Which run.db flag records each checkpoint's approval (one table, in approvals.py,
@@ -403,6 +438,68 @@ def result(action: str, task: str, run: dict, message: str) -> int:
     return 0
 
 
+def _commits_behind(pipeline: dict, nxt: str, task: str, which: str) -> int:
+    """How many trunk commits the task's worktree lacks when `nxt` is the stage that
+    asks for the commit approval; 0 everywhere else. Only a task with a usable tree of
+    its own is checked (a LEGACY run keeps today's behaviour), and "cannot tell" is
+    not stale - the merge gate repeats the check."""
+    try:
+        if approvals.COMMIT not in stage_checkpoints(state.get_stage(pipeline, nxt, which) or {}):
+            return 0
+        tree = worktree.work_dir(task)
+        return (git_state.behind_trunk(tree) or 0) if tree is not None else 0
+    except Exception:
+        return 0
+
+
+def _stale_send_back(conn, task: str, run: dict, behind: int, back: str, budget: int,
+                     was: str) -> int:
+    """The trunk moved on after this branch was cut: what the gates judged (or what
+    would merge) is not the code on the trunk. Send the run back to `back`, the stage
+    that runs the suite, keeping the commit approval (the CEO approved the work, not
+    the base). `was` says where the run stood. The sends are counted per run: an agent
+    that never merges the trunk would loop test, review and stale forever, so the
+    `retry_budget`-th one BLOCKS the run for the CEO. Closes `conn`."""
+    sent = int(run.get("stale_sendbacks") or 0) + 1
+    if sent >= budget:
+        state.set_fields(conn, task, stale_sendbacks=sent, stage_status=state.ST_BLOCKED,
+                         reason=f"trunk moved {behind} commits; sent back {sent}/{budget} times")
+        run = state.get_run(conn, task)
+        conn.close()
+        return result("blocked", task, run,
+                      f"{was}, but {worktree.stale_message(behind)}. The run was already sent "
+                      f"back {sent - 1} times for this and the worktree still lacks trunk "
+                      f"commits - BLOCKED, needs CEO. Do not auto-retry.")
+    state.set_fields(conn, task, stage=back, stage_status=state.ST_IN_PROGRESS,
+                     awaiting_human="", retries=0, continuations=0, stale_sendbacks=sent)
+    run = state.get_run(conn, task)
+    conn.close()
+    return result("stale", task, run,
+                  f"{was}, but {worktree.stale_message(behind)}. Commit or stash uncommitted "
+                  f"work in the worktree first, then merge the trunk there. Back to '{back}' "
+                  f"(send-back {sent}/{budget}); re-run advance.py --task {task} afterwards. "
+                  f"{worktree.dispatch_line(task)}")
+
+
+def _stale_before_merge(task: str, run: dict) -> int | None:
+    """A task that waits for its merge on a tree that lacks trunk commits cannot merge
+    (the merge gate refuses it), and nothing else would ever re-test it: send it back
+    to `test`, the same way review to ready does. None when it is not stale, cannot be
+    told, or the flow has no `test` stage."""
+    try:
+        tree = worktree.work_dir(task)
+        behind = (git_state.behind_trunk(tree) or 0) if tree is not None else 0
+        pipeline = state.load_pipeline()
+        which = state.run_pipeline(run)
+        if not behind or "test" not in state.stage_names(pipeline, which):
+            return None
+        budget = int(pipeline.get("retry_budget", 3))
+    except Exception:
+        return None
+    return _stale_send_back(state.connect(), task, run, behind, "test", budget,
+                            f"{task} is waiting for its merge")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Advance a task through the pipeline")
     parser.add_argument("--task", required=True)
@@ -484,8 +581,23 @@ def main() -> int:
                              indent=2))
             return 0
         begin = start_stage(pipeline, which, args.type)
-        run = state.create_run(conn, args.task, args.type, begin, which)
-        conn.close()
+        tree = _register_tree(args.task, args.type, which)
+        if tree is not None and not tree["ok"]:
+            conn.close()
+            print(json.dumps({"action": "refused", "task": args.task,
+                              "message": f"{args.task}: worktree not created - {tree['error']}"
+                                         + (f". Run by hand: {tree['manual']}" if tree["manual"] else "")},
+                             indent=2))
+            return 0
+        try:
+            run = state.create_run(conn, args.task, args.type, begin, which,
+                                   worktree=tree["path"] if tree else "")
+        except Exception:
+            if tree is not None:
+                worktree.discard(tree)
+            raise
+        finally:
+            conn.close()
         # Taking a task on IS the move out of the queue - there is no separate
         # status to flip, and nothing lands in active/ that is not really moving.
         state.move_task(args.task, "active")
@@ -501,7 +613,8 @@ def main() -> int:
                       f"(owner: {stage_owner(pipeline, begin, args.task, which)}). "
                       f"Task-file fields frozen at registration, read from the run row "
                       f"from now on ('-' = none): {frozen}. "
-                      f"Do the stage work, then re-run advance.py --task {args.task}.")
+                      f"Do the stage work, then re-run advance.py --task {args.task}."
+                      + (f" {worktree.dispatch_line(args.task)}" if tree else ""))
 
     cur = run["stage"]
 
@@ -666,6 +779,11 @@ def main() -> int:
                           f"stage after it and '{cur}' is not the terminal 'done' stage. Fix "
                           f"pipelines.{which}.stages in .agentry/pipeline.json (the list must "
                           f"end with 'done'), then re-run advance.py --task {args.task}.")
+        behind = _commits_behind(pipeline, nxt, args.task, which)
+        if behind:
+            return _stale_send_back(conn, args.task, run, behind,
+                                    "test" if "test" in names else cur, budget,
+                                    f"gate passed at '{cur}'")
         state.set_fields(conn, args.task, stage=nxt, stage_status=state.ST_IN_PROGRESS,
                          retries=0, continuations=0)
         run = state.get_run(conn, args.task)

@@ -247,7 +247,10 @@ umbrella task runs under [Swarm mode](#swarm-mode) instead.
 Autonomy is pipelined: while one task waits at a checkpoint, the orchestrator
 starts the next ready task instead of idling. But **at most one task occupies an
 editing stage (`plan`/`implement`/`test`/`review`) at a time** - parked tasks are frozen
-(no edits), so there are never concurrent edits to the working tree. A task is
+(no edits), so there are never concurrent edits to the working tree. This is the
+default and the whole story while `worktrees.enabled` is false; with it on, the
+rule becomes per-worktree, see [Parallel tasks in worktrees](#parallel-tasks-in-worktrees)
+below. A task is
 "ready to start" when its file sits in `.agentry/tasks/backlog/` and every
 `depends_on` task is done. There is no `status:` field to set - moving a file
 into or out of `backlog/` is the only way to queue or hold it. Below the `auto`
@@ -310,6 +313,17 @@ order and without improvising:
    there can only be the preempt-commit approval from step 1, and leaving it
    would let the finished work skip the CEO's read of the diff at `ready`; a run
    paused at a checkpoint stage keeps its approvals.
+
+**With worktrees on, force majeure shrinks.** A task that lives in its own
+worktree is not preempted at all: the urgent task registers while a free slot
+exists and gets its own tree, so steps 1-3 and 5 are not needed and nothing is
+paused. The sequence above is still the procedure when (a) no slot is free
+(`worktrees.max_parallel` tasks already hold one), (b) the preempted task is a
+LEGACY run or an umbrella, which hold `src/` and are exclusive, or (c) the flag
+is off. In case (a) pause one tree task the usual way (step 2; the step 1 commit
+is made inside its tree) - a paused run frees its slot, a parked or blocked one
+does not. Resuming a tree task is refused while every slot is in use
+(`approve.py --resume`); resuming a LEGACY run ignores tree rivals.
 
 If the preempted task has NO commits and no edits - nothing was written yet -
 step 1 is skipped, and that is the only case where it may be. Say so explicitly
@@ -503,6 +517,217 @@ charged by the Stop hook. Do not silence a preempted run with a busy marker any
 more - a signal you have to lie to is a missing state, and that state now
 exists.
 
+## Parallel tasks in worktrees
+
+Shipped dark (task-0129 to task-0132, epic-0004; design in
+`.agentry/plans/2026-10-13-task-0126-worktrees.md`). With `worktrees.enabled`
+false or the block absent, everything above this section holds unchanged and
+nothing below fires. With it on, the edit-serialization rule of the previous
+section is replaced by isolation: each task edits its own checkout, so two
+tasks can sit in editing stages at once.
+
+**The model.** `src/` becomes the TRUNK checkout: it stays on `main`, nobody
+edits it, and the solo merge runs there. Every task works in
+`<repo path>-wt/<task>` under the workspace root (for example
+`E:/Personal/Agenty/src-wt/task-0130`), cut from the trunk on branch
+`<type>/<task>`. Pipeline state (`run.db`, task files, plans, markers) already
+lives in the workspace-root `.agentry/`, outside every repo, so a worktree
+carries code and nothing else. Hooks always run the LIVE harness scripts under
+the workspace-root `.claude/`; the copies of `.claude/tools` and
+`.agentry/pipeline.json` inside a tree are inert for hooks and are exactly what
+the exit gates test. Each tree gets its own `tmp/`.
+
+**Config** (`pipeline.json`, top level; the CEO adds it, agents never write that file):
+
+```json
+"worktrees": {"enabled": false, "max_parallel": 2}
+```
+
+`enabled` counts only as a literal `true`. `max_parallel` is an integer of at
+least 1; anything else, or an absent block, reads as 1. The flag governs only
+creation (registration) and the trunk-checkout freeze. The PATH recorded in the
+run row drives every other behaviour, so setting `enabled` back to false is a
+safe rollback: trees already recorded keep working, their review freeze, their
+gate cwd and their freshness check stay on.
+
+**Registration creates the branch and the tree.** For a build-flow task that is
+not a swarm umbrella, `advance.py --task T --type <type>` runs `git worktree
+add -b <type>/<task> <path> <trunk>`, verifies branch and base, records the
+relative path in the run row's `worktree` column (written only at registration,
+never from the task file) and ends its `started` message with the dispatch line.
+The orchestrator does NOT run `git checkout -b` for such a task. The task's
+`repo:` must resolve to exactly one repo. Re-registering reuses a tree only when
+tree and branch are exactly the expected pair; any other state is refused with
+the git command for the CEO and nothing is created, the task file stays in
+`backlog/`.
+
+**Gates run in the tree.** `gate.run_gate` and `stack_gate.py` run a stage
+command with the tree as cwd when the stage's repo is the one the tree belongs
+to, so code-under-test commands (compileall, unittest, ruff) judge the task's own
+code. A LEGACY run (no recorded tree) runs in the repo as before. A recorded tree
+that is missing or invalid blocks the gate, it never falls back to `src/`: the
+output says `task worktree MISSING` or `INVALID` and names `worktree.py --repair
+--task T`. Commands that must come from the live harness use `{root}`, replaced
+by the workspace root as a forward-slash path (after `{task}`; a root containing
+whitespace or a quote refuses the gate). Only the plan-stage `artifact_gate.py`
+and the `ui_evidence.py` call inside the test stage use it; this is the CEO's
+config step (see the rollout below), because a tree holds its own copy of
+`.agentry/` that has no plans.
+
+**Slots replace "one task in an editing stage".** With the flag on and
+`max_parallel` N above 1, the Stop hook starts the next ready task when no
+LEGACY run, umbrella or plan-flow run holds `src/` and fewer than N runs hold a
+tree. A run holds its slot while it is in an editing stage, parked at a
+checkpoint, `blocked` or busy; a `paused` run and a finished one hold none. This
+also makes the old promise true that the queue pipelines past a task parked for
+the CEO. A queued umbrella waits until every slot is free, and while it runs
+nothing else starts; its start text is the unchanged one ("create its branch per
+git-workflow.md"). Doc-scaffold busy markers still silence the hook; markers
+of tree runs only count as slots. With `max_parallel` 1 or the flag off the old
+serial code path runs line for line. `worktree.Doubt` from the slot count (run
+store unreadable) means no free slot: no start, and `approve.py` refuses the
+resume.
+
+**What stays exclusive.** A LEGACY run (registered before the flag, no tree) and
+a swarm umbrella both live in `src/` and exclude every other run in both
+directions. Umbrellas get no worktree; a worktree per umbrella needs zone
+re-rooting and is a follow-up (D3).
+
+**Hook behaviour with trees.**
+
+- Review freeze, per tree: a `review` run with a recorded tree freezes only the
+  paths inside that tree (`worktree.owner_of`). A review run without one keeps
+  the global freeze of today. The recorded path drives it, not the flag. Doubt
+  keeps the freeze: `worktree.Doubt` (unreadable run store, unplaceable path, an
+  invalid or unresolvable recorded tree) freezes; only a clean "in no tree" or
+  another task's tree skips it.
+- Trunk-checkout freeze (flag on only): Edit/Write and shell write operands that
+  land in a repo whose `.git` is a directory with HEAD on the trunk branch are
+  denied for everyone, including `src/.claude/`; a directory named `.agentry`
+  stays exempt. Covered writers: redirect, tee, sed -i, cp, mv, rm, mkdir, ln,
+  chmod, truncate, touch, install, dd of=, rmdir, unlink, find -delete, patch,
+  and git checkout --, restore, apply, am, clean, rm, mv, stash pop. An operand
+  with `$` or a backtick is refused. A repo whose HEAD is on a feature branch (a
+  LEGACY run or an umbrella holds `src/`) is not trunk and stays editable. A
+  lookup that fails is read as trunk for a subagent and as not trunk for the
+  main thread.
+- HEAD-moving git (flag on, subagents): checkout, switch, reset, rebase,
+  symbolic-ref, update-ref and `branch -f/-m/-M` are denied in a primary
+  checkout that no feature branch holds. A linked task tree is free.
+- Placement per call (flag on, or a not-done run records a tree): each `git
+  commit`, merge, pull and push is judged in the directory its own `-C` values
+  and the `cd` walk before it name, nested bodies from every directory the
+  outer command visits. A `cd` target or `-C` value that is not a literal path
+  (`$`, `~`, none, `popd`) is refused. `--git-dir`, `--work-tree`, `-c
+  core.worktree=` and `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` on such a
+  call are refused.
+- Dev agents are denied `git worktree add|remove|move|prune|repair|lock|unlock`
+  and `worktree.py --remove` / `--repair` while the flag is on or a not-done run
+  records a tree. `worktree.py --list` and `--sweep` stay open. The orchestrator
+  creates and removes trees through `advance.py` and the CLI, not by hand.
+- Not covered: one agent editing another task's tree. Agent identity per task
+  is not detected (D7, follow-up); the dispatch line below is the guard.
+
+**The dispatch line (MANDATORY in every implement, test and review dispatch).**
+For a tree task, `advance.py` (the `started` message), the Stop hook nags, the
+supervisor relaunch prompt and `state._resume_text` print one byte-stable line:
+
+```
+Task worktree: <abs path> (branch <type>/<task>). Begin every Bash call with cd "<abs path>", give Edit and Write absolute paths under it, and do not touch <repo path>/.
+```
+
+Copy it into the dispatch prompt unchanged. It is strict because of what was
+measured (M3, 2026-10-13): the Bash cwd does NOT persist between calls, and the
+hook payload's cwd follows that reset, not a `cd` made in an earlier call. A
+`cd` inside the SAME command is read from the command text, so every Bash call
+must carry its own `cd "<tree>" &&` (or `git -C <tree>`), and a relative Edit or
+Write path resolves against the primary directory, so those paths must be
+absolute under the tree. A bare `git commit` in a later call is judged from the
+workspace root and is refused ("Not on a feature branch"); the gate does not
+guess a tree. A `cd` target or `-C` value must be a literal path. For a MISSING or INVALID tree the line says to run
+`worktree.py --repair --task T` and not to edit. A LEGACY task gets no line.
+
+**Freshness.** The tree is cut from the trunk at registration; a sibling may
+merge first. At the transition into the stage that asks for the commit approval
+(`review` to `ready`) and again at merge time (a run waiting at `done` with its
+branch unmerged), `advance.py` counts trunk commits the tree lacks
+(`git rev-list --count HEAD..<trunk>`). More than 0 sends the run back to `test`
+(action `stale`) with the exact text ``main moved <n> commits: `git merge main`
+in the worktree``, commit approval kept: the CEO approved the work, not the base
+(D4). The agent syncs inside the tree (commit or stash first), the test and
+review gates re-run, and the run returns to `ready`. Each send-back is counted
+(`stale_sendbacks`); when the count reaches `retry_budget` the run is parked
+`blocked`. A count that cannot be read counts as fresh here; merge condition 4
+repeats the check and fails closed (below).
+
+**Merge and cleanup.** The solo merge is run by the orchestrator from `src/`,
+after the commit approval, with the three existing conditions plus a fourth for
+a task with a recorded tree: the trunk has no commit the source branch lacks
+(one `git rev-list --count <source>..<trunk>` under the push budget; more than 0
+denies with the stale text, an unreadable count denies too). A failed or refused
+merge never touches the tree. Once git confirms the merge, `advance.py` moves the
+task file, closes the run and calls `worktree.remove`: plain `git worktree
+remove` without `--force`, up to three tries one second apart, after detaching
+any junction or symlink inside the tree (git follows a junction in an ignored
+path and deletes its target's files). It never deletes the branch and never
+clears the run's `worktree` column. The Stop hook removes nothing: its drift
+reconciler and idle check only report a merged task's tree or an orphan; removal
+belongs to `advance.py` and `worktree.py --remove`. The task is done either way;
+a tree left in place is reported with the command to retry it.
+
+Windows removal, measured (M2, git 2.51, this host): a clean tree, or one with
+ignored `__pycache__/` and `tmp/`, is removed (rc 0). Modified, staged or
+untracked files give rc 128 and delete nothing; a locked tree gives rc 128 and
+deletes nothing; neither is retried, both are reported as left. A native child
+process (python) holding the tree as cwd, or an open file inside it, gives rc
+255 with `failed to delete`, and the removal is NOT atomic: git has already
+dropped `.git/worktrees/<name>`, so the directory is half deleted and no longer
+a worktree, and a retry gives rc 128 `is not a working tree` forever. Inside the
+same `remove()` call that saw the 255, once the holder is gone, the clean
+leftover is cleared with `shutil.rmtree`; a leftover found by a LATER call is
+reported `left` and never deleted blind, since it could hold unregistered edits.
+A git-bash shell whose cwd is inside the tree does not block removal, and
+`remove()` first moves its own process out of the tree. Fix for a left tree: end
+whatever holds it, then `python .claude/tools/pipeline/worktree.py --remove --task T`.
+
+**`worktree.py` CLI** (orchestrator use, JSON on stdout):
+
+| Command | Does |
+|---|---|
+| `--list` | `{"enabled", "max_parallel", "trees": [{task, path, branch, status, stage}]}` |
+| `--sweep` | `{"orphans": [...]}`: `task-*` directories under `<repo>-wt/` that no in-flight run records (no run, run done, run abandoned, or recorded by its run as a different tree); reports only, removes nothing, exit 0 |
+| `--remove --task T` | `worktree.remove(T)`; exit 1 only when the tree was left |
+| `--repair --task T` | re-links an existing directory (`git worktree repair`), or when the directory is gone and the branch exists re-adds it; exit 1 on failure |
+
+Status values: `OK` (recorded, shape valid, directory and its `.git` link
+exist), `LEGACY` (no run, or nothing recorded), `MISSING` (recorded, directory
+or link gone), `INVALID` (recorded but the path fails the shape check, or
+`run.db` is unreadable: fail closed). `--abandon` leaves tree and branch in
+place; `--sweep` will list them.
+
+Codegraph indexes the trunk (`src/`) only, so a symbol a task has just added in
+its tree is not in the graph until it merges; read the tree with Grep and Read.
+
+**Rollout (task-0132; the flag stays false until the CEO flips it).**
+
+1. Merge dark. Deploy per the order in "Deploying a harness change" (the new
+   modules `worktree.py`, `state.py`, `git_state.py` first; hooks last).
+2. Verify live in a scratch lane with real git and real Windows removal; read
+   the output of the full suite, `ruff`, `compileall`, an import smoke of every
+   hook script and the dash scan.
+3. CEO config step: add the `worktrees` block with `enabled` false to both
+   `pipeline.json` copies, and change the plan-stage command to
+   `python {root}/.claude/tools/pipeline/artifact_gate.py --task {task} --kind plan`
+   and the `ui_evidence.py` call in the test stage to
+   `python {root}/.claude/tools/pipeline/ui_evidence.py --task {task}`. Verify
+   `advance.py` still passes both gates on a legacy run.
+4. Flip `enabled` to true only with `src/` on `main`, no LEGACY run in flight,
+   and task-0134 done. Do not enable worktrees before then.
+5. Watch the first two tasks end to end (registration, parallel gates, stale
+   send-back, merge, removal).
+6. Rollback: `enabled` back to false. Recorded trees keep working until their
+   tasks finish; new tasks register the old way.
+
 ## Steering a running agent (do not wait for the report)
 
 A dispatched agent can be messaged while it works, and it keeps its full
@@ -629,7 +854,9 @@ This project's specifics:
   `install`, `rsync`, `curl -o`, `wget -O`, `patch`, `perl -pi`, `awk -i inplace`,
   `ed`, `sed` with a `w` file, `sort -o`, `tar -x`, `unzip -d`, `find -delete` and
   `find -exec`, `git clone`, `git read-tree -u`, `git checkout-index -f -a`,
-  `git sparse-checkout`, `git worktree add` and `git diff --output`. Zones are a
+  `git sparse-checkout`, `git worktree add` (denied to every agent once
+  `worktrees.enabled` is true, see "Parallel tasks in worktrees") and `git diff
+  --output`. Zones are a
   tripwire against mistakes, not a boundary against a hostile dev agent.
   Agent identity (the `Swarm zone:` line read from the agent's own transcript)
   was measured only for a headless foreground dispatch. Before wave 1, dispatch
@@ -639,7 +866,8 @@ This project's specifics:
   --release --task T`. It is orchestrator-only: a dispatched agent cannot
   release the map that binds it.
 - **One agent per zone, one writer for the shared set (task-0060).** The
-  serialization rule above ("one task in an editing stage") exists because one
+  serialization rule above ("one task in an editing stage", relaxed per task
+  by worktrees when enabled; an umbrella itself never gets a tree) exists because one
   working tree gives no way to know two agents will not collide. A proven
   disjoint zone map replaces that guess with a check, so the rule relaxes
   exactly as far as the proof reaches: one agent per zone, and exactly one writer
@@ -841,8 +1069,9 @@ needs `state.emit_gate`, and `pretool_gate` denies every push without
 `leak_guard.py`. A hook that fails to import exits 1, which is non-blocking, so
 a wrong copy order silently switches the subagent gates off. Copy in this order:
 
-1. New modules first: `events.py`, `zones.py`, `leak_guard.py`.
-2. Then `state.py`.
+1. New modules first: `events.py`, `zones.py`, `leak_guard.py`, `worktree.py`.
+2. Then `state.py` and `git_state.py` (`worktree.py` imports both; `git_state`
+   imports `worktree` lazily).
 3. Then the other pipeline and memory scripts, except `approve.py`.
 4. Then `pretool_gate.py`, then `agent_gate.py`, then `agents/*.md`.
 5. Then `approve.py` (it reads `pretool_gate` at import), together with the

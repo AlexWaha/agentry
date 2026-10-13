@@ -21,15 +21,21 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 
 import state
+import worktree
 
 PLACEHOLDER = "{{"
-GATE_TIMEOUT = 900
+GATE_TIMEOUT = 1800
 OUTPUT_TAIL_BYTES = 4000
 KILL_WAIT = 10
 # The task id is spliced into a shell command, so only the registered shape passes.
 TASK_ID_RE = re.compile(r"task-[0-9]+")
+# `{root}` in a gate command is spliced into a shell command line too, so only a path
+# made of these characters passes (an allowlist: `$`, `;`, `&`, `(`, a backtick and
+# every other shell metacharacter are refused along with whitespace and quotes).
+SAFE_ROOT_RE = re.compile(r"[A-Za-z0-9_./:-]+")
 
 
 def taskkill_path() -> str:
@@ -99,6 +105,30 @@ def run_command(cmd: str, cwd: str, timeout: float) -> tuple[int, str]:
             pass  # a surviving grandchild still holds it open; the temp dir keeps it
 
 
+def task_cwd(task: str, stage_cwd: Path) -> tuple[Path | None, str]:
+    """(directory to run in, refusal). A task with a worktree of its own runs the stage
+    in it, at the same place relative to the repo as the stage's cwd was; a stage
+    whose cwd is not inside the repo the tree belongs to is none of the tree's
+    business. No recorded tree: `stage_cwd` unchanged. A recorded tree that is
+    missing or malformed refuses (None) - it never falls back to the trunk checkout,
+    which would judge code the task did not write."""
+    found = worktree.status(task)
+    if found == worktree.STATUS_LEGACY:
+        return stage_cwd, ""
+    rel = worktree.recorded(task)
+    if found != worktree.STATUS_OK:
+        return None, (f"task worktree {found}: {rel or 'unreadable'} - run python "
+                      f".claude/tools/pipeline/worktree.py --repair --task {task}; "
+                      f"no gate command was run")
+    repo = worktree.repo_dir(rel)
+    tree = worktree.work_dir(task)
+    try:
+        inside = stage_cwd.resolve().relative_to(repo.resolve())  # type: ignore[union-attr]
+    except (AttributeError, ValueError, OSError):
+        return stage_cwd, ""
+    return (tree / inside if tree is not None else None), ""
+
+
 def run_gate(pipeline: dict, stage_name: str, task: str | None = None,
              which: str = state.BUILD) -> dict:
     """Run the exit gate for a stage. Returns a result dict:
@@ -115,6 +145,16 @@ def run_gate(pipeline: dict, stage_name: str, task: str | None = None,
                 "cmd": str(gate["cmd"]), "exit": None, "passed": False,
                 "output": f"refusing task id {task!r}: it must look like task-0123"}
     cmd = str(gate["cmd"]).replace("{task}", task or "")
+    if "{root}" in cmd:
+        # The live harness: the gate scripts that read pipeline state must run from the
+        # workspace, not from the worktree's copy of them (epic-0004).
+        root = state.ROOT.as_posix()
+        if not SAFE_ROOT_RE.fullmatch(root):
+            return {"stage": stage_name, "has_gate": True, "configured": False,
+                    "cmd": cmd, "exit": None, "passed": False,
+                    "output": f"refusing {{root}}: {root!r} holds a character outside "
+                              f"[A-Za-z0-9_./:-]"}
+        cmd = cmd.replace("{root}", root)
     if PLACEHOLDER in cmd:
         return {"stage": stage_name, "has_gate": True, "configured": False,
                 "cmd": cmd, "exit": None, "passed": False,
@@ -124,10 +164,25 @@ def run_gate(pipeline: dict, stage_name: str, task: str | None = None,
     # repos): an exit_gate may set "cwd" to run inside its sub-repo.
     cwd = gate.get("cwd") or pipeline.get("cwd") or "."
     expect = gate.get("expect_exit", 0)
+    run_in: Path | None = state.ROOT / cwd if cwd != "." else state.ROOT
+    if task:
+        try:
+            worktree.status(task, strict=True)
+        except worktree.Doubt as exc:
+            # Not the task's fault and not a verdict on its tree: the run store could
+            # not be read (twice). A failed gate, so advance.py retries it, instead of
+            # the BLOCKED a MISSING or INVALID tree earns.
+            return {"stage": stage_name, "has_gate": True, "configured": True,
+                    "cmd": cmd, "exit": None, "passed": False,
+                    "output": f"task worktree state unreadable ({exc}); no gate command was "
+                              f"run - re-run advance.py to retry"}
+        run_in, refusal = task_cwd(task, run_in)
+        if run_in is None:
+            return {"stage": stage_name, "has_gate": True, "configured": False,
+                    "cmd": cmd, "exit": None, "passed": False, "output": refusal}
     started = time.monotonic()
     try:
-        exit_code, output = run_command(
-            cmd, str(state.ROOT / cwd if cwd != "." else state.ROOT), GATE_TIMEOUT)
+        exit_code, output = run_command(cmd, str(run_in), GATE_TIMEOUT)
     except OSError as exc:
         exit_code, output = 127, f"gate command failed to start: {exc}"
 

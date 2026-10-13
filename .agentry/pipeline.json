@@ -22,6 +22,11 @@
     "mode": "solo",
     "push_needs_approval": true
   },
+  "worktrees": {
+    "_comment": "task-0133 (epic-0004). When enabled is literally true, advance.py registers each non-umbrella build task in its own git worktree <repo>-wt/<task>, exit gates run there, and up to max_parallel tasks may sit in an editing stage at once; legacy runs and swarm umbrellas stay exclusive. Ships false (dark). Before enabling, switch the artifact_gate.py and ui_evidence.py gate commands to python {root}/.claude/tools/pipeline/X.py. Enabling is a CEO decision. See .claude/rules/orchestration.md, Parallel tasks in worktrees.",
+    "enabled": false,
+    "max_parallel": 2
+  },
   "memory": {
     "_comment": "Post-task memory review gate (tools/memory/update.py): every done task above baseline must be distilled into .agentry/memory/ (lessons/patterns/codebase rows) and stamped before the next task starts. Enforced by advance.py (registration refusal, beside the handoff gate - task-0066 added it, before which this line named an enforcer that did not exist) and stop_gate.py (blocks the stop while the debt stands, whatever is in flight). baseline semantics match handoff.baseline; '' = every done task covered. enabled=false disables the gate.",
     "enabled": true,

@@ -38,6 +38,7 @@ import leak_guard
 import pretool_gate
 import state
 import stop_gate
+import worktree
 
 REASON_MAX = 500
 # Control, format, line and paragraph separator, private use, unassigned and
@@ -130,9 +131,18 @@ def assess_pause(task: str) -> tuple[str, str]:
     show the tree is clean would be a guess). Otherwise `kind` is PAUSE_COMMITTED
     when the task's branch already carries commits beyond the trunk, and
     PAUSE_CLEAN when it carries none - the two cases a later reader must be able
-    to tell apart ("nothing to commit" versus "forgot to commit")."""
+    to tell apart ("nothing to commit" versus "forgot to commit").
+
+    A task that lives in a worktree is read THERE (F8). Its tree being MISSING or
+    INVALID is a refusal, never a fall back to `src/`: the clean `src/` checkout
+    would answer "nothing to commit" for work it cannot see."""
     kind = PAUSE_CLEAN
-    for repo in git_state.repos_for_task(task) or [state.ROOT]:
+    broken = worktree.status(task)
+    if broken in (worktree.STATUS_MISSING, worktree.STATUS_INVALID):
+        return "", (f"the worktree of {task} is {broken}, so it cannot be shown that {task} "
+                    f"has no uncommitted work. Repair it first: python "
+                    f".claude/tools/pipeline/worktree.py --repair --task {task}")
+    for repo in git_state.work_trees_for_task(task) or [state.ROOT]:
         code, out = _git(repo, "status", "--porcelain")
         if code != 0:
             return "", (f"the git state of {repo} could not be read, so it cannot be shown "
@@ -195,8 +205,42 @@ def resume_run(conn, run: dict) -> tuple[str, str]:
         return "", f"{task} is not paused (stage_status={run['stage_status']})."
     pipeline = state.load_pipeline()
     which = state.run_pipeline(run)
-    if run["stage"] in state.editing_stages(pipeline, which):
+    slots = stop_gate.parallel_slots()
+    umbrella = run.get("umbrella") == "true"
+    in_tree = slots > 1 and bool(run.get("worktree"))
+    if slots > 1 and (in_tree or umbrella):
+        # A run in its own worktree takes a SLOT back, whatever its stage, and the
+        # slots are the limit (F7); it never competes for the `src/` checkout. An
+        # umbrella has no tree and holds `src/` itself, so it is exclusive in both
+        # directions (plan 2.12): it does not resume beside a tree run, and a tree
+        # run does not resume beside it. Doubt about the live set is "not now".
+        try:
+            rows = worktree.live()
+            used = stop_gate.slots_in_use(slots)
+        except Exception:
+            return "", (f"the task slots could not be read, so {task} was not resumed. "
+                        f"Retry once the run store is readable.")
+        trees = ", ".join(r["task"] for r in rows if r.get("worktree") and not r.get("umbrella"))
+        if umbrella and used > 0:
+            return "", (f"{task} is an umbrella and runs in the checkout itself, so it cannot "
+                        f"resume while task worktrees are in use ({trees or 'unknown'}). "
+                        f"Finish or pause them first, then resume {task}.")
+        if not umbrella:
+            others = ", ".join(r["task"] for r in rows if r.get("umbrella"))
+            if others:
+                return "", (f"{others} is a swarm umbrella running in the checkout itself, so "
+                            f"{task} cannot take a slot beside it. Finish or pause {others} "
+                            f"first, then resume {task}.")
+            if used >= slots:
+                return "", (f"all {slots} task slots are in use ({trees or 'unknown'}), so {task} "
+                            f"cannot take one back. Finish or pause one of them first, then "
+                            f"resume {task}.")
+    if not in_tree and run["stage"] in state.editing_stages(pipeline, which):
         for other in state.all_runs(conn):
+            # With several slots a task in its own worktree is no rival for the
+            # checkout a legacy run takes; with one slot, every task is.
+            if slots > 1 and other.get("worktree"):
+                continue
             if (other["task"] != task and other["stage"] != "done"
                     and not state.is_paused(other)
                     and other["stage"] in state.editing_stages(pipeline, state.run_pipeline(other))):
