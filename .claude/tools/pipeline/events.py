@@ -29,6 +29,7 @@ Row vocabulary. `kind` is a closed set (KINDS). Conventions the writers follow:
   approved     outcome = checkpoint name (plan, commit, push, trunk_push)
   blocked / parked / continued / paused / resumed / merged / closed
                stage = stage at the time, detail = {reason} where one exists
+  abandoned    stage = done, from_stage = the stage left, detail = {reason}
 `via` is the stem of the writing script (`approve` = the CEO, `advance` = a
 level grant). `at` is UTC, second resolution, written by this module.
 
@@ -60,6 +61,7 @@ TIMEOUT_SECONDS = 2
 KINDS = frozenset({
     "registered", "transition", "gate", "blocked", "parked", "approved",
     "rejected", "continued", "merged", "closed", "paused", "resumed",
+    "abandoned",
 })
 
 GATE_PASS = "pass"
@@ -289,7 +291,7 @@ def task_report(task: str) -> dict:
 
     entries = [r for r in rows if r["kind"] in ("registered", "transition")]
     last_event = rows[-1]["at"]
-    ended = any(r["kind"] in ("merged", "closed") for r in rows)
+    ended = any(r["kind"] in ("merged", "closed", "abandoned") for r in rows)
     report["merged"] = any(r["kind"] == "merged" for r in rows)
     for index, entry in enumerate(entries):
         is_last = index + 1 == len(entries)

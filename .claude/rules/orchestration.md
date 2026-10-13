@@ -327,6 +327,41 @@ The drift reconciler (`stop_gate` step 4) is deliberately not reachable while a
 run needs driving; a task file moved by hand does not stop the hook, pausing
 does.
 
+### Abandon: retiring a task without a merge
+
+When the CEO drops a task for good (the work is cancelled, not preempted), the
+only way to close it cleanly is `python .claude/tools/pipeline/approve.py --task
+task-XXXX --abandon --reason "<why>"`. Like every approve.py action it is the
+orchestrator's alone and runs only after the CEO has decided, in an
+`AskUserQuestion` card; the gate denies it to every subagent profile. It:
+
+- sets the run to stage `done` with `stage_status=abandoned` and stores the reason
+  (`abandon_reason`; control characters become spaces, 500 characters at most),
+  journals one `abandoned` row, and clears `commit_approved`, `push_approved` and
+  `plan_approved` so the commit, push and solo-merge gates hold no standing
+  permission for it;
+- moves the task file to `tasks/done/` although nothing merged, stamped
+  `abandoned: "<reason>"` and without a `completed:` date; dependents
+  (`depends_on`) therefore see the task as met, become ready at once, and at the
+  `auto` approvals level start unattended - the command prints the backlog tasks
+  that depend on it so the CEO knows before they run;
+- never touches git: the branch, its commits and the working tree stay as they
+  were, so clean the tree before the next task starts. `advance.py` on an
+  abandoned run reports it done without reading git or parking for a merge;
+- is refused, before any write, for an unknown task, a task already merged or
+  abandoned, a missing or blank `--reason`, and a `done/` file that already holds
+  different text. A run parked at `done` awaiting its merge (`awaiting_human=merge`,
+  file still in `active/`) can be abandoned. It stands alone: combined with
+  `--gate`, `--reject`, `--pause` or `--resume` it exits 2, and `--gate` or
+  `--reject` on an abandoned run exits 2 too.
+
+The handoff and memory debt readers (`handoff.uncovered_done_tasks`,
+`update.unstamped_done_tasks`) skip an abandoned task, so it owes no doc and no
+stamp. An abandoned umbrella does not cover its subtasks' debt either
+(`state.covering_umbrella`) and sweeps none of them (`state.move_swarm_subtasks`).
+The drift reconciler (`stop_gate` step 4) is not changed: it works from the
+folder and the run row as before, and an abandoned run is a `done` run to it.
+
 ### The busy marker is a choice between two failures, not a discipline problem
 
 Until `task-0064` lands, both options are still broken and you should know
@@ -848,7 +883,7 @@ History lives in `.agentry/state/events.db` (SQLite, WAL), written by
 `approve.py`, `stop_gate.py` and `supervisor.py`. One row per registration,
 stage transition, gate result (command, exit status, duration; never the gate
 output), park, block, approval, rejection (with its reason), continuation,
-pause, resume, merge and close. Read it with
+pause, resume, abandon, merge and close. Read it with
 `python .claude/tools/pipeline/events.py --task T` (one task) or `--summary
 [--since DATE]` (all tasks); both print JSON. Handoff authors run the `--task`
 form instead of reconstructing a task's history by hand.

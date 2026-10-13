@@ -84,8 +84,9 @@ PRETOOL_DENIES = {
 PRETOOL_ASKING = {"check_merge_source": 1, "check_unattended": 1, "handle_bash": 2,
                   "plan_deny": 1}
 PLAN_DENY_CALLERS = {"handle_bash": 1, "handle_edit": 1}
-AGENT_DENIES = {"check_program": 1, "evaluate": 2, "handle_dev": 11, "handle_docs": 3,
-                "handle_readonly": 1, "handle_web": 1, "lexical_bash_checks": 5,
+AGENT_DENIES = {"bash_prelude": 4, "check_program": 1, "evaluate": 2, "handle_dev": 7,
+                "handle_docs": 3, "handle_readonly": 1, "handle_web": 1,
+                "lexical_bash_checks": 1,
                 "memory_target_deny": 1, "git_target_deny": 1, "restricted_bash": 2}
 
 
@@ -195,7 +196,7 @@ class DenySiteAccountingTest(unittest.TestCase):
                          "a deny() was added or removed in agent_gate.py: a role boundary "
                          "asks the CEO for nothing; if this one does, it needs a human= "
                          "channel that agent_gate does not have yet")
-        self.assertEqual(28, sum(every.values()))
+        self.assertEqual(24, sum(every.values()))
         self.assertEqual({}, asking)
         self.assertEqual({}, via_plan)
 

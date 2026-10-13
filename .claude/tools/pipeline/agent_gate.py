@@ -148,6 +148,8 @@ MUTATING_BASH = [
 HANDOFF_SCRIPT_RE = re.compile(r"(?:^|[\\/])handoff\.py[. )]*$", re.IGNORECASE)
 
 runs_approve_script = pretool_gate.runs_approve_script
+# One git option-abbreviation rule for both gates (task-0125).
+is_long_option_prefix = pretool_gate.is_long_option_prefix
 
 
 # task-0097: approvals.py and mode.py write .agentry/state/approvals and
@@ -310,15 +312,25 @@ def sets_pipeline_state(command: str, _depth: int = 0) -> str:
     return ""
 
 
+WAIVE_OPTION = "--waive"
+
+
+def has_waive_option(seg: list) -> bool:
+    """True when a word of `seg` is `--waive`, `--waive=T` or an abbreviation of it: handoff.py
+    reads its options with argparse, which accepts any unambiguous prefix (`--wai`, `--waiv=T`)."""
+    return any(tok.startswith("--") and is_long_option_prefix(tok.partition("=")[0], WAIVE_OPTION)
+               for tok in seg)
+
+
 def runs_waive(command: str, _depth: int = 0) -> bool:
-    """True when handoff.py is invoked WITH --waive in the same simple command.
-    Fail-closed on text that cannot be tokenised."""
+    """True when handoff.py is invoked WITH --waive (or an abbreviation) in the same simple
+    command. Fail-closed on text that cannot be tokenised."""
     segments = pretool_gate.command_segments(command)
     if segments is None:
         return True
     for seg in segments:
-        if "--waive" in seg and any(HANDOFF_SCRIPT_RE.search(n)
-                                    for n in pretool_gate.exec_names_of(seg)):
+        if has_waive_option(seg) and any(HANDOFF_SCRIPT_RE.search(n)
+                                         for n in pretool_gate.exec_names_of(seg)):
             return True
     if pretool_gate.unscannable_depth(command, _depth):
         return True
@@ -391,7 +403,8 @@ def symbolic_ref_writes_remote_ref(args: list) -> bool:
     """True for `git symbolic-ref` that sets or deletes a ref under refs/remotes/, or points
     another symbolic ref at one (a single operand without -d is a read)."""
     operands = [tok for tok in args if not tok.startswith("-")]
-    deleting = any(tok in ("-d", "--delete") for tok in args)
+    deleting = any(tok == "-d" or (tok.startswith("--") and is_long_option_prefix(
+        tok.partition("=")[0], "--delete")) for tok in args)
     return any(is_remote_ref(op) for op in operands) and (deleting or len(operands) >= 2)
 
 
@@ -645,9 +658,10 @@ def base_name(token: str) -> str:
 
 
 def in_place_sed(args: list) -> bool:
-    """`sed -i`, `sed -i.bak`, a cluster ending in it (`sed -ni`), `--in-place`."""
+    """`sed -i`, `sed -i.bak`, a cluster ending in it (`sed -ni`), `--in-place`, `--in-place=.bak`
+    and every abbreviation of it (getopt_long: `--i`, `--in`, `--in-pl=.bak`)."""
     for tok in args:
-        if tok.startswith("--in-place"):
+        if tok.startswith("--") and is_long_option_prefix(tok.partition("=")[0], "--in-place"):
             return True
         if tok.startswith("-") and not tok.startswith("--") and "i" in tok[1:]:
             return True
@@ -710,12 +724,6 @@ def bash_mutates(command: str, _depth: int = 0) -> str:
 # `--suf x`), and an ambiguous one is an error, so a prefix of any of these counts.
 CP_TARGET_OPTION = "--target-directory"
 CP_VALUE_OPTIONS = (CP_TARGET_OPTION, "--suffix", "--sparse", "--no-preserve")
-
-
-def is_long_option_prefix(name: str, option: str) -> bool:
-    """True when `name` (`--target`, `--t`) abbreviates `option`; a bare `--` ends the
-    options and abbreviates nothing."""
-    return len(name) > 2 and option.startswith(name)
 
 
 def target_directory(args: list) -> list:
@@ -908,9 +916,13 @@ def sed_files(args: list) -> list:
         elif tok == "--":
             continue
         elif tok.startswith("-") and len(tok) > 1:
-            if tok.startswith(("-e", "-f", "--expression", "--file")):
+            name = tok.partition("=")[0]
+            long_form = tok.startswith("--") and any(
+                is_long_option_prefix(name, o) for o in ("--expression", "--file"))
+            if long_form or (not tok.startswith("--") and tok.startswith(("-e", "-f"))):
                 script_given = True
-                skip = tok in ("-e", "-f", "--expression", "--file")
+                # a bare option takes the next word as its value; `-e1d` and `--exp=1d` do not
+                skip = name == tok and (long_form or tok in ("-e", "-f"))
         else:
             plain.append(tok)
     return plain if script_given else plain[1:]
@@ -1891,28 +1903,46 @@ def zone_denial(tool: str, ti: dict, cwd: str, payload: dict | None) -> str:
         return ZONE_BROKEN_MSG.format(why="the check itself failed")
 
 
+DEV_WHO = "Dev agent"
+# What a dev agent is told on top of the shared orchestrator-only sentence; the readonly
+# and docs profiles get the sentence alone.
+PRELUDE_TAILS = {DEV_WHO: {
+    "approve": " Recording CEO approval from a dev agent is self-approval - report readiness "
+               "to the orchestrator instead.",
+    "waive": " Report the handoff problem to the orchestrator instead.",
+}}
+
+
+def bash_prelude(who: str, command: str, cwd: str) -> int:
+    """The Bash refusals every profile shares, in order: approve.py, handoff --waive, a state
+    setter, a protected-state write, a memory target. The one place a new boundary check of
+    this kind is added for dev, readonly and docs alike. `who` is the label the agent is
+    addressed by."""
+    tails = PRELUDE_TAILS.get(who, {})
+    if runs_approve_script(command):
+        return deny("approve.py is orchestrator-only." + tails.get("approve", ""))
+    if runs_waive(command):
+        return deny("handoff.py --waive is orchestrator-only - it records a CEO waiver."
+                    + tails.get("waive", ""))
+    setter = sets_pipeline_state(command)
+    if setter:
+        return deny(STATE_SETTER_MSG.format(script=setter))
+    written = writes_protected_state(command, cwd=cwd)
+    if written:
+        return deny(PROTECTED_STATE_MSG.format(who=who, path=written))
+    return memory_target_deny(who, command, cwd)
+
+
 def handle_dev(tool: str, ti: dict, cwd: str = "", allow_scripts: tuple = (),
                payload: dict | None = None) -> int:
     if tool == "Bash":
         command = str(ti.get("command", ""))
         if unparseable(command):
-            return deny(unparseable_msg("Dev agent", command))
-        if runs_approve_script(command):
-            return deny("approve.py is orchestrator-only. Recording CEO approval from a "
-                        "dev agent is self-approval - report readiness to the orchestrator instead.")
-        if runs_waive(command):
-            return deny("handoff.py --waive is orchestrator-only - it records a CEO waiver. "
-                        "Report the handoff problem to the orchestrator instead.")
-        setter = sets_pipeline_state(command)
-        if setter:
-            return deny(STATE_SETTER_MSG.format(script=setter))
-        written = writes_protected_state(command, cwd=cwd)
-        if written:
-            return deny(PROTECTED_STATE_MSG.format(who="Dev agent", path=written))
-        target = memory_target_deny("Dev agent", command, cwd)
-        if target != allow():
-            return target
-        target = git_target_deny("Dev agent", command, cwd)
+            return deny(unparseable_msg(DEV_WHO, command))
+        prelude = bash_prelude(DEV_WHO, command, cwd)
+        if prelude != allow():
+            return prelude
+        target = git_target_deny(DEV_WHO, command, cwd)
         if target != allow():
             return target
         zoned = zone_denial(tool, ti, cwd, payload)
@@ -1936,7 +1966,7 @@ def handle_dev(tool: str, ti: dict, cwd: str = "", allow_scripts: tuple = (),
         # handle_edit allows anything under .agentry/ as bookkeeping, which would
         # let a dev agent write the approvals level or the mode directly.
         if is_protected(path, cwd):
-            return deny(PROTECTED_STATE_MSG.format(who="Dev agent", path=path))
+            return deny(PROTECTED_STATE_MSG.format(who=DEV_WHO, path=path))
         zoned = zone_denial(tool, ti, cwd, payload)
         if zoned:
             return deny(zoned)
@@ -2048,22 +2078,12 @@ def lexical_bash_checks(profile: str, command: str, cwd: str) -> int:
     """The spelling-based refusals for a readonly or docs Bash call, in order. Each is a
     second wall behind the allowlist; see restricted_bash()."""
     who, advice = RESTRICTED_BASH[profile]
-    if runs_approve_script(command):
-        return deny("approve.py is orchestrator-only.")
-    if runs_waive(command):
-        return deny("handoff.py --waive is orchestrator-only - it records a CEO waiver.")
-    setter = sets_pipeline_state(command)
-    if setter:
-        return deny(STATE_SETTER_MSG.format(script=setter))
+    prelude = bash_prelude(who, command, cwd)
+    if prelude != allow():
+        return prelude
     piped = pretool_gate.check_piped_test_suite(command)
     if piped != allow():
         return piped
-    written = writes_protected_state(command, cwd=cwd)
-    if written:
-        return deny(PROTECTED_STATE_MSG.format(who=who, path=written))
-    target = memory_target_deny(who, command, cwd)
-    if target != allow():
-        return target
     frag = bash_mutates(command)
     if frag:
         return deny(f"{who}: mutating Bash denied (matched: '{frag}'). {advice}"
@@ -2122,7 +2142,7 @@ def handle_docs(tool: str, ti: dict, cwd: str = "", allow_scripts: tuple = ()) -
 
 
 FAIL_CLOSED_PROFILES = ("readonly", "docs")
-PROFILE_LABELS = {"readonly": "Read-only agent", "docs": "Docs agent", "dev": "Dev agent"}
+PROFILE_LABELS = {"readonly": "Read-only agent", "docs": "Docs agent", "dev": DEV_WHO}
 FAIL_CLOSED_MSG = ("{who}: the gate failed while checking this {tool} call, so it refuses it rather "
                    "than guess. Retry with a simpler command; if it keeps failing, report the "
                    "command to the orchestrator.")

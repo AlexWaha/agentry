@@ -105,6 +105,9 @@ ST_BLOCKED = "blocked"
 # not driven, not holding the working tree. `stage` is left where it was and the
 # prior stage_status is kept in `paused_status`, so resume restores it exactly.
 ST_PAUSED = "paused"
+# Dropped on the CEO's decision (task-0122): `stage` is `done` although nothing
+# merged, and `abandon_reason` carries why. Set only by approve.py --abandon.
+ST_ABANDONED = "abandoned"
 
 EDITING_STAGES = ("implement", "test", "review")
 
@@ -350,6 +353,9 @@ def _late_columns() -> list[tuple[str, str]]:
         ("paused_status", "TEXT DEFAULT ''"),
         ("pause_reason", "TEXT DEFAULT ''"),
         ("pause_kind", "TEXT DEFAULT ''"),
+        # Why the CEO dropped the task (task-0122). Not a frozen field: it comes
+        # from the abandon command, never from the task file.
+        ("abandon_reason", "TEXT DEFAULT ''"),
         # Task-file decisions frozen at registration (task-0124): the closure sweep,
         # the umbrella debt cover, the commit-tag branch rule and the repo scoping
         # read these columns, never the file, which the agent being judged can
@@ -497,6 +503,11 @@ def _journal_write(task: str, before: dict | None, fields: dict, event: str,
             put("transition", from_stage=old_stage, detail={})
             return
 
+        if event == "abandoned":
+            # One row, no transition row: the run did not advance, it left.
+            put("abandoned", from_stage=old_stage)
+            return
+
         old_status = old.get("stage_status") or ""
         status = fields.get("stage_status")
         if status is not None:
@@ -549,6 +560,13 @@ def is_paused(run: dict | None) -> bool:
     """True for a run set aside by the pause command. A paused run is not driven
     and does not hold the working tree."""
     return (run or {}).get("stage_status") == ST_PAUSED
+
+
+def is_abandoned(task: str) -> bool:
+    """True when the CEO dropped the task (approve.py --abandon). Never raises: a
+    missing or unreadable row answers False, the direction in which the debt
+    readers still demand a doc and a stamp."""
+    return _run_row(task).get("stage_status") == ST_ABANDONED
 
 
 def is_parked(run: dict | None) -> bool:
@@ -709,12 +727,14 @@ def task_branch(task: str) -> str:
     return _run_row(task).get("branch") or ""
 
 
-def move_task(task: str, to: str) -> bool:
+def move_task(task: str, to: str, abandoned: str = "") -> bool:
     """Move the task file into one of backlog/active/done.
 
     The folder is the state, so this single move IS the status change - there is
     no frontmatter field to keep in step with it. Only `done` stamps a date,
-    because that is the one transition worth reading off the file itself.
+    because that is the one transition worth reading off the file itself. A task
+    abandoned instead of merged (`abandoned` = the reason) gets an `abandoned:`
+    line carrying the reason, and no `completed:` date: nothing was completed.
 
     Returns False and moves nothing when the destination file already exists:
     `done/<task>.md` is the record of a finished task and a move must not replace
@@ -729,7 +749,9 @@ def move_task(task: str, to: str) -> bool:
             return False
         src = TASK_DIRS[src_name] / f"{task}.md"
         text = src.read_text(encoding="utf-8", errors="replace")
-        if to == "done":
+        if to == "done" and abandoned:
+            text = _stamp_abandoned(text, abandoned)
+        elif to == "done":
             stamp = today()  # local date - the CEO reads this in the task file
             if re.search(r"(?m)^completed:", text):
                 text = re.sub(r"(?m)^completed:.*$", f"completed: {stamp}", text, count=1)
@@ -754,10 +776,26 @@ def move_task(task: str, to: str) -> bool:
         return False
 
 
+def _stamp_abandoned(text: str, reason: str) -> str:
+    """`text` with an `abandoned: "<reason>"` line in its frontmatter (replacing
+    one already there). The reason is a JSON string, which is also a valid YAML
+    double-quoted scalar, so a colon or a quote in it cannot break the head."""
+    line = f"abandoned: {json.dumps(reason, ensure_ascii=False)}"
+    if re.search(r"(?m)^abandoned:", text):
+        return re.sub(r"(?m)^abandoned:.*$", lambda _: line, text, count=1)
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            return f"{text[:end]}\n{line}{text[end:]}"
+    return f"{line}\n{text}"
+
+
 def _same_task_text(a: str, b: str) -> bool:
-    """Equal task-file text, ignoring the `completed:` stamp a retry on another
-    day would write differently."""
-    return re.sub(r"(?m)^completed:.*$", "", a) == re.sub(r"(?m)^completed:.*$", "", b)
+    """Equal task-file text, ignoring the `completed:` and `abandoned:` stamps a
+    retry on another day, or with another reason, would write differently."""
+    def bare(text: str) -> str:
+        return re.sub(r"(?m)^(?:completed|abandoned):.*$", "", text)
+    return bare(a) == bare(b)
 
 
 def move_conflicts() -> list[str]:
@@ -802,7 +840,8 @@ def move_swarm_subtasks(task: str, conn: sqlite3.Connection | None = None) -> li
     try:
         row = _run_row(task, conn)
         epic = row.get("epic") or ""
-        if row.get("umbrella") != "true" or not epic or not row.get("commit_approved"):
+        if (row.get("umbrella") != "true" or not epic or not row.get("commit_approved")
+                or row.get("stage_status") == ST_ABANDONED):
             return moved
         for sub in re.findall(r"task-\d+", row.get("subtasks") or ""):
             if (sub != task and task_dir(sub) in ("backlog", "active")
@@ -827,7 +866,9 @@ def covering_umbrella(task: str) -> str | None:
     row as recorded at registration, not from its file: editing the file later
     cancels no debt. The row must also be at stage `done` with the commit approved:
     a registered umbrella whose file was merely moved to done/ by hand has been
-    through neither the pipeline nor the CEO's diff, and covers nothing.
+    through neither the pipeline nor the CEO's diff, and covers nothing. An
+    abandoned umbrella (task-0122) covers nothing either: abandon leaves the
+    approval flags as they were, and work that never merged is documented by no one.
 
     Never raises: None means "not covered", the safe answer for a debt check."""
     try:
@@ -838,8 +879,9 @@ def covering_umbrella(task: str) -> str | None:
         try:
             rows = conn.execute(
                 "SELECT task, subtasks FROM runs WHERE umbrella = 'true' AND epic = ? "
-                "AND stage = 'done' AND commit_approved = 1 ORDER BY task",
-                (epic,)).fetchall()
+                "AND stage = 'done' AND commit_approved = 1 "
+                "AND COALESCE(stage_status, '') != ? ORDER BY task",
+                (epic, ST_ABANDONED)).fetchall()
         finally:
             conn.close()
         for umb, subtasks in rows:

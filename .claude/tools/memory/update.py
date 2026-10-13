@@ -106,6 +106,9 @@ def unstamped_done_tasks() -> list:
                 umbrella = state.covering_umbrella(task)
                 if umbrella and covered_required(umbrella):
                     continue
+                # A task the CEO dropped (approve.py --abandon) leaves nothing to review.
+                if state.is_abandoned(task):
+                    continue
                 out.append({"task": task,
                             "reason": "memory layers not reviewed after completion"})
         return out

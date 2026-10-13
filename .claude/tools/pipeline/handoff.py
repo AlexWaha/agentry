@@ -299,6 +299,9 @@ def uncovered_done_tasks() -> list[dict]:
             umbrella = state.covering_umbrella(task)
             if umbrella and covered_required(umbrella):
                 continue
+            # A task the CEO dropped (approve.py --abandon) merged nothing to document.
+            if state.is_abandoned(task):
+                continue
             out.append({"task": task, "reason": reason})
         drop_scaffold_markers({d["task"] for d in out})
         return out
