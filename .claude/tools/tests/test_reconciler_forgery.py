@@ -58,6 +58,8 @@ class ReconcilerForgeryTest(unittest.TestCase):
                 (state, "ROOT", self.root), (state, "PIPELINE_PATH", config),
                 (state, "TASK_DIRS", self.dirs), (stop_gate, "ACTIVE_DIR", self.dirs["active"]),
                 (state, "all_runs", lambda conn: self.runs),
+                (state, "get_run", lambda conn, task: next(
+                    (r for r in self.runs if r["task"] == task), None)),
                 (state, "set_fields", self.set_fields)):
             patcher = unittest.mock.patch.object(target, name, value)
             patcher.start()
@@ -88,7 +90,8 @@ class ReconcilerForgeryTest(unittest.TestCase):
 
     def run_row(self, stage: str, awaiting: str = "", commit_approved: int = 0) -> None:
         self.runs.append({"task": TASK, "stage": stage, "awaiting_human": awaiting,
-                          "commit_approved": commit_approved})
+                          "commit_approved": commit_approved,
+                          **state.frozen_frontmatter(TASK)})
 
     def reconcile(self) -> tuple[list, list]:
         return stop_gate.reconcile_status_drift(object())

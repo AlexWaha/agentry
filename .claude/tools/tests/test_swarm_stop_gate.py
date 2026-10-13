@@ -354,11 +354,13 @@ class UmbrellaDoneMovesSubtasksTest(unittest.TestCase):
                    f"id: 100\nepic: {EPIC}\numbrella: true\nsubtasks: [task-0028]\ncompleted:")
         self.write("backlog", "task-0028", f"id: 28\nepic: {EPIC}")
         self.write("backlog", "task-0030", f"id: 30\nepic: {EPIC}")
-        umbrella_run = run(task="task-0100", stage="done", commit_approved=1)
+        umbrella_run = run(task="task-0100", stage="done", commit_approved=1,
+                           **state.frozen_frontmatter("task-0100"))
         with unittest.mock.patch.object(stop_gate, "ACTIVE_DIR", self.dirs["active"]), \
                 unittest.mock.patch.object(
                     stop_gate.git_state, "task_tagged_in_main", return_value=True), \
                 unittest.mock.patch.object(state, "all_runs", return_value=[umbrella_run]), \
+                unittest.mock.patch.object(state, "get_run", return_value=umbrella_run), \
                 unittest.mock.patch.object(state, "set_fields"):
             moved, _ = stop_gate.reconcile_status_drift(object())
         self.assertEqual(["task-0100", "task-0028"], moved)

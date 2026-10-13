@@ -36,6 +36,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import unittest
 import unittest.mock
 from contextlib import contextmanager, redirect_stdout
@@ -982,7 +983,8 @@ class MergeEvidenceTest(unittest.TestCase):
         buf = io.StringIO()
         with unittest.mock.patch.object(git_state, "repos", return_value=[Path("repo")]), \
                 unittest.mock.patch.object(git_state, "_git", self._fake_git(**git)), \
-                unittest.mock.patch.object(advance, "_task_frontmatter", return_value=frontmatter), \
+                unittest.mock.patch.object(state, "task_branch",
+                                           return_value=frontmatter.get("branch", "")), \
                 unittest.mock.patch.object(advance, "_merge_wait",
                                            side_effect=lambda t, r, w: {**r, "awaiting_human": w}), \
                 unittest.mock.patch.object(state, "move_task", return_value=True), \
@@ -2356,43 +2358,32 @@ class CrashIsReportedTest(unittest.TestCase):
 # never mutated by the tests that read it.
 GATE_TIMEOUT_PIPELINE = {"pipelines": {"build": {"stages": [
     {"name": "test", "owner": "qa-engineer",
-     "exit_gate": {"cmd": "sleep 999999", "expect_exit": 0}},
+     "exit_gate": {"cmd": f'"{sys.executable}" -c "import time; time.sleep(30)"',
+                   "expect_exit": 0}},
 ]}}}
 
 
 class GateNeverReturnsTest(unittest.TestCase):
     """task-0022, loop shape 4: a stage exit-gate command that never returns.
 
-    gate.run_gate() bounds the subprocess call with `timeout=900` and catches
-    subprocess.TimeoutExpired. If either half were missing, a hung gate
-    command would hang gate.py, which hangs advance.py, which hangs the
-    orchestrator turn that called it - nothing downstream (not stop_gate.py,
-    not the supervisor) can see a process that never returns, only a stage
-    that never advances. No sleeping: the timeout is proven by mocking
-    subprocess.run to raise the exception the real timeout raises after
-    900 seconds, not by waiting for one."""
+    gate.run_gate() bounds the command with GATE_TIMEOUT and, through
+    gate.run_command(), kills the process tree and reports exit 124 when the
+    bound is hit. If either half were missing, a hung gate command would hang
+    gate.py, which hangs advance.py, which hangs the orchestrator turn that
+    called it - nothing downstream (not stop_gate.py, not the supervisor) can
+    see a process that never returns, only a stage that never advances. The
+    bound is shrunk to one second and a real sleeper is run against it."""
 
     def test_a_hung_gate_command_degrades_to_a_failed_gate_not_a_hang(self):
-        timeout_exc = subprocess.TimeoutExpired(cmd="sleep 999999", timeout=900)
-        with unittest.mock.patch.object(gate_module.subprocess, "run",
-                                        side_effect=timeout_exc):
+        started = time.monotonic()
+        with unittest.mock.patch.object(gate_module, "GATE_TIMEOUT", 1):
             result = gate_module.run_gate(GATE_TIMEOUT_PIPELINE, "test", task=None)
+        elapsed = time.monotonic() - started
 
         self.assertEqual(124, result["exit"])
         self.assertFalse(result["passed"])
         self.assertIn("timed out", result["output"])
-
-    def test_the_subprocess_call_itself_asks_for_a_bound(self):
-        # The other half: gate.py must ASK for a timeout, not merely survive
-        # one. Without `timeout=` in the call, subprocess.run blocks for real
-        # and the except clause above never has anything to catch.
-        calls = unittest.mock.MagicMock(
-            return_value=unittest.mock.MagicMock(returncode=0, stdout="", stderr=""))
-        with unittest.mock.patch.object(gate_module.subprocess, "run", calls):
-            gate_module.run_gate(GATE_TIMEOUT_PIPELINE, "test", task=None)
-
-        self.assertIn("timeout", calls.call_args.kwargs)
-        self.assertGreater(calls.call_args.kwargs["timeout"], 0)
+        self.assertLess(elapsed, 20, "the gate returned only after the sleeper's own 30s")
 
 
 class CrossMechanismInteractionTest(unittest.TestCase):

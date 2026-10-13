@@ -75,7 +75,7 @@ PRETOOL_DENIES = {
     "check_merge_source": 4, "check_nul_redirect": 1, "check_piped_test_suite": 1,
     "check_push_target": 4, "check_trunk_merge": 2, "check_unattended": 1,
     "evaluate": 1, "finish": 1,
-    "handle_bash": 11, "handle_edit": 5, "orch_check_bash": 4, "orch_check_edit": 1,
+    "handle_bash": 13, "handle_edit": 5, "orch_check_bash": 4, "orch_check_edit": 1,
     "plan_deny": 1,
 }
 # The subset that asks the human: it passes `human=`. handle_bash holds the commit
@@ -84,7 +84,7 @@ PRETOOL_DENIES = {
 PRETOOL_ASKING = {"check_merge_source": 1, "check_unattended": 1, "handle_bash": 2,
                   "plan_deny": 1}
 PLAN_DENY_CALLERS = {"handle_bash": 1, "handle_edit": 1}
-AGENT_DENIES = {"check_program": 1, "evaluate": 1, "handle_dev": 10, "handle_docs": 3,
+AGENT_DENIES = {"check_program": 1, "evaluate": 2, "handle_dev": 11, "handle_docs": 3,
                 "handle_readonly": 1, "handle_web": 1, "lexical_bash_checks": 5,
                 "memory_target_deny": 1, "git_target_deny": 1, "restricted_bash": 2}
 
@@ -185,7 +185,7 @@ class DenySiteAccountingTest(unittest.TestCase):
                          "a deny() was added or removed in pretool_gate.py: decide whether "
                          "it asks the CEO for something (then give it human=) and update "
                          "this table")
-        self.assertEqual(46, sum(every.values()))
+        self.assertEqual(48, sum(every.values()))
         self.assertEqual(PRETOOL_ASKING, asking)
         self.assertEqual(PLAN_DENY_CALLERS, via_plan)
 
@@ -195,7 +195,7 @@ class DenySiteAccountingTest(unittest.TestCase):
                          "a deny() was added or removed in agent_gate.py: a role boundary "
                          "asks the CEO for nothing; if this one does, it needs a human= "
                          "channel that agent_gate does not have yet")
-        self.assertEqual(26, sum(every.values()))
+        self.assertEqual(28, sum(every.values()))
         self.assertEqual({}, asking)
         self.assertEqual({}, via_plan)
 

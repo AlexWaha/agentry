@@ -54,11 +54,13 @@ from __future__ import annotations
 
 import argparse
 import glob
+import itertools
 import json
 import os
 import re
 import shlex
 import sys
+import threading
 from collections import Counter
 from pathlib import Path
 
@@ -347,6 +349,71 @@ def is_force_push(command: str, _depth: int = 0) -> bool:
                for body in pretool_gate.nested_command_bodies(command))
 
 
+# Refs a dev agent may not write by hand. refs/remotes/ holds what the gates compare HEAD
+# against (`git merge-base --is-ancestor origin/main HEAD`, the leak guard's range), and
+# `git update-ref refs/remotes/origin/main HEAD` or `git fetch . +HEAD:refs/remotes/origin/main`
+# makes any branch look up to date with main. A plain `git fetch origin` is how the real
+# remote updates them and stays allowed.
+# git expands a destination `remotes/x` to `refs/remotes/x`, so both spellings land there.
+REMOTE_REFS_PREFIXES = ("refs/remotes", "remotes")
+# Subcommands whose refspec destination writes a ref: fetch and pull into the local
+# repository (`git fetch . X:refs/remotes/..`), push to a path (`git push . X:refs/remotes/..`).
+REFSPEC_WRITERS = ("fetch", "pull", "push")
+DEV_REF_MSG = ("Dev agent: {hit} writes a ref by hand. refs/remotes/ is what the branch-base and "
+               "leak checks trust, so it is updated only by a plain `git fetch <remote>`. Report "
+               "the ref change you need to the orchestrator.")
+
+
+def is_remote_ref(name: str) -> bool:
+    """True for a ref name under refs/remotes/ in either spelling, any case."""
+    low = strip_quotes(name).casefold()
+    return any(low == prefix or low.startswith(prefix + "/") for prefix in REMOTE_REFS_PREFIXES)
+
+
+def refspec_writes_remote_refs(args: list) -> bool:
+    """True when a fetch/pull/push refspec (or a --refmap value) has a destination under
+    refs/remotes/: `+src:refs/remotes/origin/main`, `HEAD:remotes/*`."""
+    words, n = [], 0
+    while n < len(args):
+        tok, n = args[n], n + 1
+        if tok == "--refmap" and n < len(args):
+            words.append(args[n])
+            n += 1
+        elif tok.startswith("--refmap="):
+            words.append(tok.partition("=")[2])
+        elif not tok.startswith("-"):
+            words.append(tok)
+    return any(":" in word and is_remote_ref(strip_quotes(word).rpartition(":")[2])
+               for word in words)
+
+
+def symbolic_ref_writes_remote_ref(args: list) -> bool:
+    """True for `git symbolic-ref` that sets or deletes a ref under refs/remotes/, or points
+    another symbolic ref at one (a single operand without -d is a read)."""
+    operands = [tok for tok in args if not tok.startswith("-")]
+    deleting = any(tok in ("-d", "--delete") for tok in args)
+    return any(is_remote_ref(op) for op in operands) and (deleting or len(operands) >= 2)
+
+
+def dev_ref_write(command: str, _depth: int = 0) -> str:
+    """The git call in `command` that writes a ref by hand ('git update-ref', a refspec
+    fetch/pull/push whose destination is under refs/remotes/, or 'git symbolic-ref' on such
+    a ref), else ''. Nested shell bodies count."""
+    for sub, args in pretool_gate.git_invocations(command):
+        if sub == "update-ref":
+            return "git update-ref"
+        if sub in REFSPEC_WRITERS and refspec_writes_remote_refs(args):
+            return f"git {sub} into refs/remotes/"
+        if sub == "symbolic-ref" and symbolic_ref_writes_remote_ref(args):
+            return "git symbolic-ref on refs/remotes/"
+    if _depth < pretool_gate.MAX_SHELL_DEPTH:
+        for body in pretool_gate.nested_command_bodies(command):
+            hit = dev_ref_write(body, _depth + 1)
+            if hit:
+                return hit
+    return ""
+
+
 # Redirect detection is shared with the main-thread gate - single source of truth.
 redirect_write_target = pretool_gate.redirect_write_target
 
@@ -401,6 +468,15 @@ def unparseable_msg(who: str, command: str) -> str:
     return template.format(who=who)
 
 
+# A word that starts with TWO OR MORE separators (either slash) and then a host character is a
+# network path: Git Bash collapses `///host/share` to `//host/share`, and `\\host\share` is the
+# native spelling, so neither a third separator nor a backslash is an escape. unc_argument uses
+# this instead of pretool_gate.is_unc because the host character must not be whitespace, which
+# keeps a search pattern like '// TODO' out of it.
+UNC_WORD_RE = re.compile(r"^[\\/]{2,}[^\\/\s]")
+GLUED_SHORT_OPTION_RE = re.compile(r"^-[A-Za-z]+")
+
+
 def deny(reason: str) -> int:
     sys.stderr.write(reason + "\n")
     return 2
@@ -452,7 +528,7 @@ def resolves_into_state(form: str) -> bool:
     the same file as the live pipeline.json. The regex only knows the NAME
     `.agentry/state/`; this follows a junction or symlink at either end, and a
     hard link to pipeline.json (samefile compares the file identity)."""
-    if not os.path.isabs(form):
+    if not os.path.isabs(form) or pretool_gate.is_unc(form):
         return False
     try:
         real = normalize(os.path.realpath(form))
@@ -688,6 +764,43 @@ def destination_operand(args: list) -> list:
 
 GLOB_RE = re.compile(r"[*?\[]")
 MAX_GLOB_HITS = 64
+# A glob walk is bounded by time as well as by hits: a pattern with many wildcard levels
+# over a big tree (`C:/Windows/*/*/*/*/*/zz?`) yields nothing for minutes, and the hook's
+# own timeout is an allow. Past this deadline glob_hits() raises and the caller denies.
+GLOB_DEADLINE_SECONDS = 2.0
+
+
+class GlobDeadline(Exception):
+    """A glob expansion ran past GLOB_DEADLINE_SECONDS. Deliberately NOT an OSError or
+    ValueError: the callers that skip an unreadable glob must not swallow this one."""
+
+
+def glob_hits(pattern: str) -> list:
+    """At most MAX_GLOB_HITS matches of `pattern`, taken lazily: glob.glob would
+    expand every match of a broad pattern before the slice cut it down, which is
+    time an attacker chooses, inside a hook whose timeout is an allow. A UNC
+    pattern is never expanded (it would walk a network share). The walk runs in a
+    daemon thread and is abandoned after GLOB_DEADLINE_SECONDS (GlobDeadline): a
+    generator that finds nothing never yields, so the clock cannot be checked from
+    the consuming side."""
+    if pretool_gate.is_unc(pattern):
+        return []
+    hits, failure = [], []
+
+    def walk() -> None:
+        try:
+            hits.extend(itertools.islice(glob.iglob(pattern), MAX_GLOB_HITS))
+        except BaseException as exc:  # handed to the caller below, never lost in the thread
+            failure.append(exc)
+
+    worker = threading.Thread(target=walk, daemon=True)
+    worker.start()
+    worker.join(GLOB_DEADLINE_SECONDS)
+    if worker.is_alive():
+        raise GlobDeadline(pattern)
+    if failure:
+        raise failure[0]
+    return list(hits)
 
 
 def base_dir(cwd: str) -> str:
@@ -777,7 +890,7 @@ def protected_operand(tok: str, dirs: list) -> bool:
             return True
         if GLOB_RE.search(tok):
             try:
-                hits = glob.glob(os.path.join(d, strip_quotes(tok)))[:MAX_GLOB_HITS]
+                hits = glob_hits(os.path.join(d, strip_quotes(tok)))
             except (OSError, ValueError):
                 continue
             if any(is_protected(h, d) for h in hits):
@@ -1049,7 +1162,8 @@ def memory_target_denied(command: str, cwd: str = "", _depth: int = 0) -> tuple:
         for i, word in pretool_gate.exec_tokens(seg):
             if i < 0 or script_label(word) != MEMORY_SCRIPT:
                 continue
-            tool = normalize(os.path.realpath(os.path.join(cur, pretool_gate.msys_to_win(word))))
+            tool = normalize(pretool_gate.safe_realpath(
+                os.path.join(cur, pretool_gate.msys_to_win(word))))
             if not tool.endswith(MEMORY_TOOL_TAIL):
                 continue  # not the harness script: a profile that may not run it is refused elsewhere
             for option, value in memory_options(real_arguments(seg[i + 1:])):
@@ -1453,11 +1567,44 @@ def codegraph_denied(args: list) -> str:
     return "" if args[0] in CODEGRAPH_READ | CODEGRAPH_GLOBALS else args[0]
 
 
+# Programs that print or compare their words and open no path. Every other allowed program
+# reads or stats the files it is given, and a UNC operand makes the host contact a server of
+# the agent's choosing (credentials go with the connection), so one is refused for them all.
+NO_PATH_PROGRAMS = frozenset({"echo", "printf", "expr", "true", "false", "sleep", "exit", "seq",
+                              "basename", "dirname"})
+
+
+PATTERN_PROGRAMS = frozenset({"grep", "egrep", "fgrep", "rg"})
+
+
+def unc_argument(name: str, args: list) -> str:
+    """The first argument that is a network path, bare or as the value of `--option=VALUE`.
+    For grep and rg the word after a bare `-e` / `--regexp` is a search pattern, not a path
+    (`grep -e '//TODO'`); for `test -e` it is the file."""
+    pattern_next = False
+    for tok in args:
+        if pattern_next:
+            pattern_next = False
+            continue
+        pattern_next = name in PATTERN_PROGRAMS and tok in ("-e", "--regexp")
+        word = strip_quotes(tok)
+        # The word itself, the value of `--option=VALUE`, and the operand glued to a short
+        # option (`grep -f//host/share/p`).
+        for form in (word, word.partition("=")[2], GLUED_SHORT_OPTION_RE.sub("", word)):
+            if UNC_WORD_RE.match(form.strip()):
+                return tok
+    return ""
+
+
 def unsafe_args(name: str, args: list) -> str:
     """The argument that gives an allowed program a write or exec mode, or that the
     program's allowlist does not name, else ''. Fails closed for a program on
     READ_ONLY_PROGRAMS that has no entry above."""
     args = real_arguments(args)
+    if name not in NO_PATH_PROGRAMS:
+        hit = unc_argument(name, args)
+        if hit:
+            return f"{hit} (a network path: the gate never touches one)"
     if name in DYNAMIC_REFUSED:
         hit = dynamic_arg(args, name in DYNAMIC_ANYWHERE)
         if hit:
@@ -1492,6 +1639,8 @@ def planted_binary(token: str, cur: str) -> bool:
     have written under the name of an allowed program. System binaries live outside."""
     if not re.search(r"[\\/]", token):
         return False
+    if pretool_gate.is_unc(token) or pretool_gate.is_unc(os.path.join(cur, token)):
+        return True
     real = normalize(os.path.realpath(os.path.join(cur, token)))
     root = normalize(os.path.realpath(state.ROOT))
     return real == root or real.startswith(root + "/")
@@ -1516,6 +1665,8 @@ def interpreter_script_denied(seg: list, i: int, cur: str, extra: set, project_d
     if project_dir:
         word = PROJECT_DIR_VAR_RE.sub(lambda _: str(state.ROOT), word)
     tools = normalize(os.path.realpath(state.ROOT / ".claude" / "tools"))
+    if pretool_gate.is_unc(os.path.join(cur, word)):
+        return f"python {word}"
     real = normalize(os.path.realpath(os.path.join(cur, word)))
     if name in ALLOWED_SCRIPTS and real.startswith(tools + "/"):
         return ""
@@ -1660,12 +1811,14 @@ def zone_path_denial(path: str, dirs: list, zone: str, data: dict) -> str:
     swarm = zones.swarm_dir(data.get("task"))
     if swarm is not None:  # the board and QA reports of THIS swarm, no other task folder
         shared.append(pretool_gate.normalize(os.path.realpath(swarm)))
+    if pretool_gate.is_unc(path):
+        return ZONE_MSG.format(path=path, zone=zone, owner="it is a network path, outside the project")
     places = []
     for d in dirs:
         # [0] is the path as written; only where it resolves counts here
         places += pretool_gate.path_forms(path, d)[1:]
         if GLOB_RE.search(path):
-            places += glob.glob(os.path.join(d, strip_quotes(path)))[:MAX_GLOB_HITS]
+            places += glob_hits(os.path.join(d, strip_quotes(path)))
     if not places:
         return ZONE_MSG.format(path=path, zone=zone, owner="the path could not be resolved")
     failures = []
@@ -1767,6 +1920,9 @@ def handle_dev(tool: str, ti: dict, cwd: str = "", allow_scripts: tuple = (),
             return deny(zoned)
         if is_force_push(command):
             return deny("Force push is forbidden for all agents (rules/git-workflow.md).")
+        ref_write = dev_ref_write(command)
+        if ref_write:
+            return deny(DEV_REF_MSG.format(hit=ref_write))
         hit = unnarrowed_test_cmd(command)
         if hit:
             return deny(f"Dev agents do not run the FULL test suite ('{hit}'). Run only the "
@@ -1971,6 +2127,10 @@ FAIL_CLOSED_MSG = ("{who}: the gate failed while checking this {tool} call, so i
                    "than guess. Retry with a simpler command; if it keeps failing, report the "
                    "command to the orchestrator.")
 
+GLOB_DEADLINE_MSG = ("The gate could not expand a wildcard in this command within its time limit, "
+                     "so it refuses the call rather than guess what the wildcard names. Use a "
+                     "narrower pattern or an explicit path.")
+
 HANDLERS = {
     "dev": handle_dev,
     "readonly": handle_readonly,
@@ -1978,9 +2138,27 @@ HANDLERS = {
 }
 
 
+# The hook line carries `timeout: 20`, and a hook that times out is an ALLOW. So the gate
+# answers for itself first: at WATCHDOG_SECONDS a timer thread writes the deny and ends the
+# process, which works while the main thread sits in a syscall (a glob walk, a stat on a
+# dead share, a git call). Every profile, because the timeout reads as an allow for all.
+WATCHDOG_SECONDS = 14.0
+WATCHDOG_MSG = ("The gate did not finish checking this call in time, so it refuses it rather than "
+                "let the hook timeout read as an allow. Retry with a simpler command; if it keeps "
+                "happening, report the command to the orchestrator.")
+
+
+def watchdog_fire() -> None:
+    pretool_gate.watchdog_deny_and_exit(WATCHDOG_MSG)
+
+
 def main() -> int:
     del pretool_gate.PENDING_HUMAN[:]
-    code = evaluate()
+    watchdog = pretool_gate.start_watchdog_timer(watchdog_fire, WATCHDOG_MSG, WATCHDOG_SECONDS)
+    try:
+        code = evaluate()
+    finally:
+        watchdog.cancel()
     if code == 2:
         pretool_gate.emit_human()  # a dev agent's commit/push deny is pretool_gate's
     return code
@@ -2014,6 +2192,10 @@ def evaluate() -> int:
         extra = {"payload": payload} if args.profile == "dev" else {}
         return HANDLERS[args.profile](tool, ti, str(payload.get("cwd", "")),
                                       tuple(args.allow_script), **extra)
+    except GlobDeadline:
+        # A glob that ran out of time is not a crash: the walk is the attacker's, and its
+        # result is unknown, so every profile refuses (dev included - this is no bug of ours).
+        return deny(GLOB_DEADLINE_MSG)
     except Exception:
         # Fail-open is right for the dev profile: its job is running code, a bug here must
         # not brick the agent that builds the harness, and its writes have the approval

@@ -157,12 +157,12 @@ commit and push approvals are enforced by the `PreToolUse` hook, not by goodwill
   through once; `pipeline.json` `allow_push_to_main` (default `false`, and `false`
   here) would let a plain trunk push through without it, but never a force or
   delete push.
-- Every `git push` is also checked by the leak guard (`tools/pipeline/leak_guard.py`): a pushed ref that adds a path under `.agentry/` that `origin/main` does not have is refused, and a check that cannot run counts as a leak. The same check runs as the `.githooks/pre-push` hook; `git config core.hooksPath .githooks` (once per clone, a CEO deploy action, not set by any script) covers pushes made from a terminal. By hand: `python .claude/tools/pipeline/leak_guard.py --ref HEAD` (exit 0 clean, 1 leaked paths on stderr, 2 error).
+- Every `git push` is also checked by the leak guard (`tools/pipeline/leak_guard.py`): a pushed ref that adds a path under `.agentry/` that `<remote>/<trunk>` does not have (`origin/main` unless `pipeline.json` sets `remote` / `main_branch`) is refused, and a check that cannot run counts as a leak. The whole push check has a 12 s budget; a slow git call denies. The same check runs as the `.githooks/pre-push` hook; `git config core.hooksPath .githooks` (once per clone, a CEO deploy action, not set by any script) covers pushes made from a terminal. By hand: `python .claude/tools/pipeline/leak_guard.py --ref HEAD` (exit 0 clean, 1 leaked paths on stderr, 2 error).
 
 Run `approve.py` **only after the CEO explicitly approves in chat**. To send a task
 back for rework instead of approving, use `approve.py --task task-XXXX --reject
 --reason "<why>"` (the reason is required, a bare `--reject` is refused, and it is
-journaled; returns it to `implement`; before the plan approval it stays at `plan`). The
+journaled; capped at 500 characters, control characters become spaces; returns it to `implement`; before the plan approval it stays at `plan`). The
 plan approval (`--gate plan`) is a third checkpoint, ahead of any code, for
 every task type except those in `skip_for_types` (`bugfix`, `techdebt`). These approvals are the only points where the CEO
 re-engages during execution, and in `solo` mode the push one does not arise

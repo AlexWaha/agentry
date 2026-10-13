@@ -70,6 +70,8 @@ import shlex
 import sqlite3
 import subprocess
 import sys
+import threading
+import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -1409,6 +1411,8 @@ def is_root_claude_md(path: str) -> bool:
     """The repository-root CLAUDE.md, resolved against the project root. Root only:
     a CLAUDE.md inside an application tree is not the document the technical-writer
     owns."""
+    if is_unc(path):
+        return False
     p = Path(path)
     if not p.is_absolute():
         p = state.ROOT / p
@@ -1440,6 +1444,26 @@ def msys_to_win(path: str) -> str:
     return MSYS_DRIVE_RE.sub(lambda m: m.group(1).upper() + ":", path)
 
 
+# A UNC path (`\\server\share`, `//server/share`, `\\?\UNC\server\share`) is a network
+# location: realpath() on it opens a connection to a host the agent named, which can
+# stall a hook past its timeout (and a timeout is an allow) and leaks credentials to
+# that host. The gates never resolve one; a caller that must judge it denies.
+UNC_RE = re.compile(r"^[\\/]{2,}[^\\/]")
+
+
+def is_unc(path: str) -> bool:
+    """True for a path that starts with two or more separators (either slash), which
+    on Windows is a UNC share, an extended-length path or a device path. Three or
+    more still count: `///host/share` resolves to the share on Windows."""
+    return bool(UNC_RE.match(str(path).strip().strip("'\"")))
+
+
+def safe_realpath(path: str) -> str:
+    """os.path.realpath, except that a UNC path is only normalised lexically, so
+    no network host is contacted."""
+    return os.path.normpath(path) if is_unc(path) else os.path.realpath(path)
+
+
 def path_forms(path: str, cwd: str = "") -> list:
     """Every spelling of `path` a gate has to judge: as written (stream suffixes
     removed) and its real location. realpath folds `..`, case, 8.3 short names,
@@ -1450,10 +1474,15 @@ def path_forms(path: str, cwd: str = "") -> list:
     if not raw:
         return []
     forms = [raw]
+    if is_unc(raw) or is_unc(msys_to_win(raw)):
+        return forms  # never resolved; see UNC_RE
     base = cwd if cwd and os.path.isabs(cwd) else str(state.ROOT)
     for spelling in dict.fromkeys([raw, msys_to_win(raw)]):
+        joined = os.path.join(base, spelling)
+        if is_unc(joined):
+            continue  # a UNC cwd makes even a relative path a network path
         try:
-            forms.append(os.path.realpath(os.path.join(base, spelling)))
+            forms.append(os.path.realpath(joined))
         except (OSError, ValueError):
             pass
     return forms
@@ -1479,6 +1508,8 @@ def is_live_harness(path: str, cwd: str = "") -> bool:
     """True when `path` resolves to <ROOT>/.claude/{tools,rules,skills,commands}/**,
     <ROOT>/.claude/settings*.json, <ROOT>/.claude/agents/*.md, <ROOT>/.mcp.json, or
     to anything inside a `.git` directory of any repo."""
+    if is_unc(path):
+        return True  # a network path cannot be judged, so no subagent may write it
     root = normalize(os.path.realpath(state.ROOT))
     for form in path_forms(path, cwd):
         p = normalize(form)
@@ -1529,6 +1560,8 @@ def orch_allowed_path(file_path: str) -> bool:
     .claude/: task files, plans, specs and run state are exactly what the
     orchestrator is supposed to write, so leaving it out denied the main
     thread its own job."""
+    if is_unc(file_path):
+        return False
     try:
         low = normalize(file_path)
         for prefix in ORCH_ALLOW_PREFIXES:
@@ -2008,9 +2041,9 @@ def git_invokes(command: str, *subcommands: str, _depth: int = 0) -> bool:
                for body in nested_command_bodies(command))
 
 
-def repo_candidates(command: str, cwd: str) -> list:
-    """Directories to try for the branch check, most specific first."""
-    base = Path(cwd) if cwd else state.ROOT
+def repo_dir_operands(command: str) -> list:
+    """The directories a command names for its git call, as written: the `git -C`
+    target and the last `cd` before the git call."""
     dirs = []
     m = GIT_C_RE.search(command)
     if m:
@@ -2019,11 +2052,24 @@ def repo_candidates(command: str, cwd: str) -> list:
     cds = CD_RE.findall(command if git_at < 0 else command[:git_at])
     if cds:
         dirs.append(_unquote(cds[-1]))
+    return dirs
+
+
+def repo_candidates(command: str, cwd: str) -> list:
+    """Directories to try for the branch check, most specific first. A UNC
+    directory is never a candidate: every caller stats its candidates, and a stat
+    of a network host the agent named can stall the hook past its timeout, which
+    is an allow (handle_bash refuses such a command before it gets here)."""
+    base = Path(cwd) if cwd and not is_unc(cwd) else state.ROOT
     resolved = []
-    for d in dirs:
+    for d in repo_dir_operands(command):
+        if is_unc(d):
+            continue
         try:
             p = Path(d)
-            resolved.append(p if p.is_absolute() else base / p)
+            joined = p if p.is_absolute() else base / p
+            if not is_unc(str(joined)):
+                resolved.append(joined)
         except (OSError, ValueError):
             pass
     resolved.append(base)
@@ -2032,15 +2078,95 @@ def repo_candidates(command: str, cwd: str) -> list:
     return resolved
 
 
+# A UNC path as the operand of an option that names a directory or a file: `-C`,
+# `-F`/`--file` (a cluster such as `-aF` counts), `--git-dir`, `--work-tree`.
+UNC_OPTION_RE = re.compile(
+    r"""(?<![\w-])(?:-[A-Za-z]*[CF]|--file|--git-dir|--work-tree)"""
+    r"""(?:=|\s+|(?=[\\/]))["']?[\\/]{2,}[^\\/\s"']""")
+UNC_CHECKED_GIT = ("commit", "push", "merge", "pull")
+
+
+def unc_operand(command: str, cwd: str) -> str | None:
+    """A UNC path a git commit / push / merge / pull command would stat, open or run
+    in, as written, or None. Such a command is refused outright: the gate never
+    touches a network host the agent named, and git itself would. Commit message
+    values (-m / --message) are skipped, so a message that starts with `//` is
+    not mistaken for a path."""
+    if cwd and is_unc(cwd):
+        return cwd
+    for operand in repo_dir_operands(command):
+        if is_unc(operand):
+            return operand
+    found = UNC_OPTION_RE.search(command)
+    if found:
+        return found.group(0).strip()
+    for sub, args in git_invocations(command):
+        if sub not in UNC_CHECKED_GIT:
+            continue
+        i = 0
+        while i < len(args):
+            tok = args[i]
+            i += 1
+            letters = re.match(r"-[A-Za-z]*m", tok) if not tok.startswith("--") else None
+            if tok in ("--message", "-m") or (letters and len(tok) == letters.end()):
+                i += 1  # the message is the next token
+                continue
+            if tok.startswith("--message=") or letters:
+                continue
+            for spelling in (tok, tok.partition("=")[2], re.sub(r"^-[A-Za-z]*", "", tok)):
+                if is_unc(spelling):
+                    return spelling
+    return None
+
+
+# One time budget for the whole push path (branch, branch list, repo, remote config,
+# and the leak guard per pushed ref). A hook that outlasts its timeout is an allow,
+# and the sum of the per-call git timeouts used to exceed it, so the push path
+# shares ONE deadline instead and running out of it DENIES the push.
+PUSH_BUDGET = 12.0
+GIT_CALL_TIMEOUT = 10
+_push_deadline: float | None = None
+
+
+class PushBudgetExpired(Exception):
+    """The push path's shared time budget ran out. Deliberately not a
+    SubprocessError: the git helpers swallow those and move on to the next
+    candidate, and an exhausted budget must reach handle_bash and deny."""
+
+
+def start_push_budget(budget: float | None = None) -> None:
+    global _push_deadline
+    _push_deadline = time.monotonic() + (PUSH_BUDGET if budget is None else budget)
+
+
+def end_push_budget() -> None:
+    global _push_deadline
+    _push_deadline = None
+
+
+def git_run(argv: list, repo) -> subprocess.CompletedProcess:
+    """subprocess.run for one git call, capped at GIT_CALL_TIMEOUT and, while a push
+    budget is running, at what is left of it. Raises PushBudgetExpired when none is
+    left or the call timed out inside the budget."""
+    timeout = GIT_CALL_TIMEOUT
+    if _push_deadline is not None:
+        timeout = min(timeout, _push_deadline - time.monotonic())
+        if timeout <= 0:
+            raise PushBudgetExpired()
+    try:
+        return subprocess.run(argv, cwd=str(repo), capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if _push_deadline is not None:
+            raise PushBudgetExpired() from None
+        raise
+
+
 def current_branch(command: str = "", cwd: str = "") -> str:
     for repo in repo_candidates(command, cwd):
         try:
             if not Path(repo).is_dir():
                 continue
-            proc = subprocess.run(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                cwd=str(repo), capture_output=True, text=True, timeout=10,
-            )
+            proc = git_run(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo)
             if proc.returncode == 0 and proc.stdout.strip():
                 return proc.stdout.strip()
         except (OSError, subprocess.SubprocessError, ValueError):
@@ -2070,13 +2196,13 @@ def read_message_file(path: str, cwd: str) -> str:
     """Text of a `git commit -F <path>` message file, '' when it cannot be read
     (stdin, a missing file, a directory). Unreadable means untagged, which falls
     back to the branch's task - the stricter reading, never a looser one."""
-    if not path or path == "-":
-        return ""
+    if not path or path == "-" or is_unc(path):
+        return ""  # a UNC file is never opened: that contacts a host the agent named
     candidate = Path(path)
     if candidate.is_absolute():
         bases = [candidate]
     else:
-        bases = ([Path(cwd) / path] if cwd else []) + [state.ROOT / path]
+        bases = ([Path(cwd) / path] if cwd and not is_unc(cwd) else []) + [state.ROOT / path]
     for base in bases:
         try:
             if base.is_file():
@@ -2449,13 +2575,20 @@ def check_unattended(command: str) -> int:
 
 
 def push_trunk_names() -> set:
-    """The trunk: main + master always, plus the configured main_branch.
-    Unresolved `{{PLACEHOLDER}}` values are ignored."""
-    names = set(PUSH_PROTECTED_ALWAYS)
-    trunk = str(state.load_pipeline().get("main_branch") or "main")
-    if not trunk.startswith("{{"):
-        names.add(trunk)
-    return names
+    """The trunk: main + master always, plus the configured main_branch (read by
+    leak_guard.trunk_name(), the one reader of that key; an unresolved `{{PLACEHOLDER}}`
+    value reads as the default)."""
+    try:
+        import leak_guard
+
+        trunk = leak_guard.trunk_name()
+    except Exception:
+        # A broken leak_guard must not raise out of the push path (an uncaught
+        # exception in the hook reads as allow): read the key directly so the
+        # protected set stays complete, and push_leak_reason() denies the push.
+        value = state.load_pipeline().get("main_branch")
+        trunk = value.strip() if isinstance(value, str) and not value.startswith("{{") else ""
+    return set(PUSH_PROTECTED_ALWAYS) | ({trunk} if trunk else set())
 
 
 def push_protected_branches() -> set:
@@ -2614,10 +2747,7 @@ def local_branches(command: str, cwd: str) -> list | None:
         try:
             if not Path(repo).is_dir():
                 continue
-            proc = subprocess.run(
-                ["git", "for-each-ref", "--format=%(refname:short)", "refs/heads"],
-                cwd=str(repo), capture_output=True, text=True, timeout=10,
-            )
+            proc = git_run(["git", "for-each-ref", "--format=%(refname:short)", "refs/heads"], repo)
             if proc.returncode == 0:
                 return proc.stdout.split()
         except (OSError, subprocess.SubprocessError, ValueError):
@@ -2828,7 +2958,7 @@ def leak_check(ref: str, repo) -> tuple:
     a test can stand in for the git lookups."""
     import leak_guard
 
-    return leak_guard.check(ref, repo)
+    return leak_guard.check(ref, repo, deadline=_push_deadline)
 
 
 def push_repo(command: str, cwd: str) -> str | None:
@@ -2838,10 +2968,7 @@ def push_repo(command: str, cwd: str) -> str | None:
         try:
             if not Path(repo).is_dir():
                 continue
-            proc = subprocess.run(
-                ["git", "rev-parse", "--is-inside-work-tree"],
-                cwd=str(repo), capture_output=True, text=True, timeout=10,
-            )
+            proc = git_run(["git", "rev-parse", "--is-inside-work-tree"], repo)
             if proc.returncode == 0 and proc.stdout.strip() == "true":
                 return str(repo)
         except (OSError, subprocess.SubprocessError, ValueError):
@@ -2862,8 +2989,7 @@ def implicit_push_remote(command: str, cwd: str, branch: str) -> str | None:
     keys = [f"branch.{branch}.pushRemote", "remote.pushDefault", f"branch.{branch}.remote"]
     try:
         for key in keys:
-            proc = subprocess.run(["git", "config", "--get", key], cwd=repo,
-                                  capture_output=True, text=True, timeout=10)
+            proc = git_run(["git", "config", "--get", key], repo)
             if proc.returncode == 0 and proc.stdout.strip():
                 return proc.stdout.strip()
             if proc.returncode not in (0, 1):  # 1 is "key not set"
@@ -2888,10 +3014,14 @@ def push_leak_reason(command: str, cwd: str, sources: list) -> str:
                 continue
             shown = ", ".join(str(line) for line in lines[:LEAK_PATHS_SHOWN])
             if code == 1:
-                return (f"'{ref}' would publish project-internal files that origin/main "
+                import leak_guard
+
+                return (f"'{ref}' would publish project-internal files that {leak_guard.base_ref()} "
                         f"does not have: {shown}")
             return f"'{ref}' could not be checked ({shown})"
         return ""
+    except PushBudgetExpired:
+        return f"the push checks did not finish within their {PUSH_BUDGET:g}s time budget"
     except Exception as exc:  # any failure here must deny, not allow
         return f"the check itself failed ({type(exc).__name__})"
 
@@ -3001,22 +3131,13 @@ def repo_bootstrap(command: str, cwd: str, main_branch: str) -> bool:
             # (same fall-through discipline as current_branch/staged_files),
             # instead of granting a bootstrap exemption for a path that has
             # no repo here (e.g. the workspace root in a multi-repo layout).
-            is_repo = subprocess.run(
-                ["git", "rev-parse", "--is-inside-work-tree"],
-                cwd=str(repo), capture_output=True, text=True, timeout=10,
-            )
+            is_repo = git_run(["git", "rev-parse", "--is-inside-work-tree"], repo)
             if is_repo.returncode != 0 or is_repo.stdout.strip() != "true":
                 continue
-            head = subprocess.run(
-                ["git", "rev-parse", "--verify", "-q", "HEAD"],
-                cwd=str(repo), capture_output=True, text=True, timeout=10,
-            )
+            head = git_run(["git", "rev-parse", "--verify", "-q", "HEAD"], repo)
             if head.returncode != 0:
                 return True  # unborn HEAD - zero commits
-            branch = subprocess.run(
-                ["git", "rev-parse", "--verify", "-q", f"refs/heads/{main_branch}"],
-                cwd=str(repo), capture_output=True, text=True, timeout=10,
-            )
+            branch = git_run(["git", "rev-parse", "--verify", "-q", f"refs/heads/{main_branch}"], repo)
             return branch.returncode != 0
         except (OSError, subprocess.SubprocessError, ValueError):
             continue
@@ -3053,10 +3174,7 @@ def staged_files(command: str, cwd: str) -> list:
             # for a detected rename (e.g. `git mv real/code.py .agentry/plans/x.md`
             # shows as one line, `.agentry/plans/x.md`), which would let renamed
             # code slip through the C-2 exemption undetected (FR-22).
-            proc = subprocess.run(
-                ["git", "diff", "--cached", "--name-only", "--no-renames"],
-                cwd=str(repo), capture_output=True, text=True, timeout=10,
-            )
+            proc = git_run(["git", "diff", "--cached", "--name-only", "--no-renames"], repo)
             if proc.returncode == 0:
                 return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
         except (OSError, subprocess.SubprocessError, ValueError):
@@ -3235,6 +3353,8 @@ def under_home_claude(file_path: str) -> bool:
     ~/.claude/plans/ is the harness's own plan-mode scratch area (Claude Code
     forces the plan file there); denying it bricks plan mode, and the final
     plan is copied into <project>/.agentry/plans/ anyway."""
+    if is_unc(file_path):
+        return False
     try:
         p = Path(file_path).resolve()
         home_claude = (Path.home() / ".claude").resolve()
@@ -3370,6 +3490,8 @@ def plan_write_allowed(path: str) -> bool:
     project's .agentry/ (plans, task files, specs) and the harness plan scratch
     ~/.claude/plans/. `.claude/` and docs/ are NOT on the list - in this
     repository the code itself lives under .claude/tools."""
+    if is_unc(path):
+        return False
     try:
         p = Path(path)
         if not p.is_absolute():
@@ -3394,10 +3516,11 @@ def plan_blocked_task(path: str = "", command: str = "", cwd: str = "") -> str:
         if not pending:
             return ""
         if path:
-            here = Path(path) if Path(path).is_absolute() else state.ROOT / path
-            while not here.is_dir() and here != here.parent:
-                here = here.parent
-            cwd = str(here)
+            if not is_unc(path):  # a network path is never probed (see UNC_RE): the caller's cwd stands
+                here = Path(path) if Path(path).is_absolute() else state.ROOT / path
+                while not here.is_dir() and here != here.parent:
+                    here = here.parent
+                cwd = str(here)
         return plan_pending_task(current_branch(command, cwd), pending)
     except Exception:
         return ""
@@ -3491,178 +3614,205 @@ def handle_bash(command: str, cwd: str = "", orch: bool = False) -> int:
     # timeout (task-0112), and a hook that times out is an allow.
     if too_complex(command):
         return deny(TOO_COMPLEX_MSG.format(budget=SCAN_BUDGET))
-    low = " ".join(command.lower().split())
+    # A command that mentions git runs under the push time budget from its first git
+    # call: the branch-base check, the bootstrap check, the staged-files read and the
+    # push checks all draw on it, so none of them can outlast the hook timeout, which is
+    # an allow. The test is the git word alone: a subcommand spelled `pu""sh` or hidden
+    # behind an alias would slip past any word list, and the cost of over-arming is only
+    # that a slow git call denies where it would have waited.
+    if MENTIONS_GIT_RE.search(command):
+        start_push_budget()
+    try:
+        low = " ".join(command.lower().split())
 
-    # Parse failure gates, but it must say WHY: this used to fall through to the
-    # commit/push block and deny an unparseable heredoc with "Commit for task-XXXX
-    # is not approved yet", which names the wrong cause entirely.
-    if git_unparseable(command):
-        return deny(UNPARSEABLE_GIT_MSG)
+        # Parse failure gates, but it must say WHY: this used to fall through to the
+        # commit/push block and deny an unparseable heredoc with "Commit for task-XXXX
+        # is not approved yet", which names the wrong cause entirely.
+        if git_unparseable(command):
+            return deny(UNPARSEABLE_GIT_MSG)
 
-    for check in (
-        check_unattended(command),                 # supervisor-spawned session
-        check_branch_creation(command, cwd),      # 4 (naming) + C (base)
-        check_destructive_and_repl(command, low),  # A + B + G
-        check_bare_nul(command),                    # NUL is a real file
-        check_piped_test_suite(command),            # H
-        check_commit_attribution(command),         # D
-        orch_check_bash(command) if orch else allow(),  # orchestrator profile
-    ):
-        if check != 0:
-            return check
+        for check in (
+            check_unattended(command),                 # supervisor-spawned session
+            check_branch_creation(command, cwd),      # 4 (naming) + C (base)
+            check_destructive_and_repl(command, low),  # A + B + G
+            check_bare_nul(command),                    # NUL is a real file
+            check_piped_test_suite(command),            # H
+            check_commit_attribution(command),         # D
+            orch_check_bash(command) if orch else allow(),  # orchestrator profile
+        ):
+            if check != 0:
+                return check
 
-    # A write while the plan is unapproved. Text first (cheap), run store second.
-    written = plan_bash_write(command)
-    if written:
-        blocked = plan_blocked_task(command=command, cwd=cwd)
-        if blocked:
-            return plan_deny(blocked, written)
+        # A write while the plan is unapproved. Text first (cheap), run store second.
+        written = plan_bash_write(command)
+        if written:
+            blocked = plan_blocked_task(command=command, cwd=cwd)
+            if blocked:
+                return plan_deny(blocked, written)
 
-    is_commit = git_invokes(command, "commit")
-    is_push = git_invokes(command, "push")
-    # Not git_invokes(command, "merge"): its substring safety net would match
-    # `git merge-base --is-ancestor main HEAD`, the read-only base check every
-    # task runs. Argv resolution tells the two subcommand tokens apart.
-    # A pull merges too, and carries no `merge` token: without it here a
-    # `git pull . <branch>` on the trunk never reaches check_trunk_merge().
-    is_merge = bool(merge_invocations(command) or pull_invocations(command))
-    if not (is_commit or is_push or is_merge):
-        return allow()
+        is_commit = git_invokes(command, "commit")
+        is_push = git_invokes(command, "push")
+        # Not git_invokes(command, "merge"): its substring safety net would match
+        # `git merge-base --is-ancestor main HEAD`, the read-only base check every
+        # task runs. Argv resolution tells the two subcommand tokens apart.
+        # A pull merges too, and carries no `merge` token: without it here a
+        # `git pull . <branch>` on the trunk never reaches check_trunk_merge().
+        is_merge = bool(merge_invocations(command) or pull_invocations(command))
+        if not (is_commit or is_push or is_merge):
+            return allow()
 
-    pipeline = state.load_pipeline()
-    main_branch = str(pipeline.get("main_branch", "main"))
-    if main_branch.startswith("{{"):
-        main_branch = "main"
-
-    # FR-1: checked before current_branch() - a repo with no commits has an
-    # unborn HEAD, which makes `git rev-parse --abbrev-ref HEAD` fail there and
-    # would otherwise fall through repo_candidates() to an unrelated repo.
-    if is_commit and repo_bootstrap(command, cwd, main_branch):
-        return allow()
-
-    branch = current_branch(command, cwd)
-
-    spend_trunk_push = False
-    local = local_branches(command, cwd) if is_push else None
-    if is_push:
-        verdict, spend_trunk_push = check_push_target(command, branch, local, cwd, orch)
-        if verdict != 0:
-            return verdict
-
-    def finish() -> int:
-        """Allow, spending the trunk-push approval if this push earned it. Every
-        deny between here and the end leaves the marker for the push the CEO
-        actually approved."""
-        # Spent BEFORE the allow, and a spend that fails is a deny: allowing on a
-        # marker that could not be taken out of the way would leave the one-shot
-        # approval standing for the next push (task-0120 SEC-B M1).
-        if spend_trunk_push and not consume_trunk_push_marker():
+        unc = unc_operand(command, cwd)
+        if unc:
             return deny(
-                f"The trunk-push approval ({trunk_push_marker_path().name}) could not be "
-                f"spent, so this push is refused: it was already spent by another push, or "
-                f"the state directory is not writable. Ask the CEO to record a new "
-                f"approval (approve.py --trunk-push) once the cause is fixed.")
-        return allow()
+                f"This git command names a network path ({unc}). The gate never contacts a "
+                f"host the command names - that can stall the hook past its timeout, and a "
+                f"timeout is an allow - so it refuses rather than look. Run the command in "
+                f"a local clone instead.")
 
-    # A merge onto a protected branch commits there, which is exactly what the
-    # trunk rule refuses - unless solo mode allows it for an approved task. A
-    # merge while HEAD is a work branch (pulling main into a feature branch) is
-    # untouched, as is a merge the gate cannot place (branch unreadable).
-    if is_merge and branch in push_protected_branches():
-        verdict = check_trunk_merge(command, branch)
-        if verdict != 0:
-            return verdict
+        pipeline = state.load_pipeline()
+        main_branch = str(pipeline.get("main_branch", "main"))
+        if main_branch.startswith("{{"):
+            main_branch = "main"
 
-    # A commit is judged by the checked-out branch; a push by the refs it pushes
-    # (task-0111). A merge-only command needs no run row: check_trunk_merge above
-    # is the whole check.
-    head_task = task_from_branch(branch)
-    planning = False
-    if is_commit and not head_task:
-        if not planning_only_commit(command, cwd):  # FR-21, FR-22
-            return deny("Not on a feature branch (no task-XXXX). Create the task branch first "
-                        "per .claude/rules/git-workflow.md.")
-        # The exemption is for the commit only. A push chained to it still goes
-        # through the checks below and still spends the trunk marker (task-0113).
-        planning = True
-    # A commit is judged as the task its message tags (task-0059), the branch's
-    # task only when it carries no tag. A tag naming another task is a request to
-    # borrow that task's approval, so it is checked below (R3).
-    commit_ts = ([t for t in commit_tasks(command, branch, cwd) if t]
-                 if is_commit and not planning else [])
-    push_tasks = pushed_tasks(command, branch, local) if is_push else []
-    if push_tasks is None:
-        return deny(
-            "This push sends a ref that names no task (a sha, HEAD~n or an untracked "
-            "branch) to a protected branch, so there is no task approval to check it "
-            "against. Push the task branch by name, merge it first, or publish the "
-            "trunk itself: git push origin main.")
-    borrowed = []
-    for task in dict.fromkeys([t for t in [*commit_ts, *push_tasks] if t]):
-        tagged_elsewhere = task in commit_ts and task != head_task
-        # The commit and push checks fail CLOSED, following check_merge_source()
-        # rather than inventing a second style for the same question. Both failure
-        # modes below were silent exit 0 before, and a lane mismatch (the session
-        # that registered the task is not the session committing it) reaches the
-        # second one as an ordinary, expected event - not an exotic one.
-        try:
-            conn = state.connect()
+        spend_trunk_push = False
+        # FR-1: checked before current_branch() - a repo with no commits has an
+        # unborn HEAD, which makes `git rev-parse --abbrev-ref HEAD` fail there and
+        # would otherwise fall through repo_candidates() to an unrelated repo.
+        if is_commit and repo_bootstrap(command, cwd, main_branch):
+            return allow()
+        branch = current_branch(command, cwd)
+        local = local_branches(command, cwd) if is_push else None
+        if is_push:
+            verdict, spend_trunk_push = check_push_target(command, branch, local, cwd, orch)
+            if verdict != 0:
+                return verdict
+
+        def finish() -> int:
+            """Allow, spending the trunk-push approval if this push earned it. Every
+            deny between here and the end leaves the marker for the push the CEO
+            actually approved."""
+            # Spent BEFORE the allow, and a spend that fails is a deny: allowing on a
+            # marker that could not be taken out of the way would leave the one-shot
+            # approval standing for the next push (task-0120 SEC-B M1).
+            if spend_trunk_push and not consume_trunk_push_marker():
+                return deny(
+                    f"The trunk-push approval ({trunk_push_marker_path().name}) could not be "
+                    f"spent, so this push is refused: it was already spent by another push, or "
+                    f"the state directory is not writable. Ask the CEO to record a new "
+                    f"approval (approve.py --trunk-push) once the cause is fixed.")
+            return allow()
+
+        # A merge onto a protected branch commits there, which is exactly what the
+        # trunk rule refuses - unless solo mode allows it for an approved task. A
+        # merge while HEAD is a work branch (pulling main into a feature branch) is
+        # untouched, as is a merge the gate cannot place (branch unreadable).
+        if is_merge and branch in push_protected_branches():
+            verdict = check_trunk_merge(command, branch)
+            if verdict != 0:
+                return verdict
+
+        # A commit is judged by the checked-out branch; a push by the refs it pushes
+        # (task-0111). A merge-only command needs no run row: check_trunk_merge above
+        # is the whole check.
+        head_task = task_from_branch(branch)
+        planning = False
+        if is_commit and not head_task:
+            if not planning_only_commit(command, cwd):  # FR-21, FR-22
+                return deny("Not on a feature branch (no task-XXXX). Create the task branch first "
+                            "per .claude/rules/git-workflow.md.")
+            # The exemption is for the commit only. A push chained to it still goes
+            # through the checks below and still spends the trunk marker (task-0113).
+            planning = True
+        # A commit is judged as the task its message tags (task-0059), the branch's
+        # task only when it carries no tag. A tag naming another task is a request to
+        # borrow that task's approval, so it is checked below (R3).
+        commit_ts = ([t for t in commit_tasks(command, branch, cwd) if t]
+                     if is_commit and not planning else [])
+        push_tasks = pushed_tasks(command, branch, local) if is_push else []
+        if push_tasks is None:
+            return deny(
+                "This push sends a ref that names no task (a sha, HEAD~n or an untracked "
+                "branch) to a protected branch, so there is no task approval to check it "
+                "against. Push the task branch by name, merge it first, or publish the "
+                "trunk itself: git push origin main.")
+        borrowed = []
+        for task in dict.fromkeys([t for t in [*commit_ts, *push_tasks] if t]):
+            tagged_elsewhere = task in commit_ts and task != head_task
+            # The commit and push checks fail CLOSED, following check_merge_source()
+            # rather than inventing a second style for the same question. Both failure
+            # modes below were silent exit 0 before, and a lane mismatch (the session
+            # that registered the task is not the session committing it) reaches the
+            # second one as an ordinary, expected event - not an exotic one.
             try:
-                run = state.get_run(conn, task)
-            finally:
-                conn.close()
-        except Exception:
-            return deny(
-                f"The pipeline run state ({state.DB_PATH}) could not be read, so the "
-                f"checkpoint approval for {task} cannot be verified. This path fails "
-                f"closed on purpose. Check PIPELINE_LANE"
-                f"{f'={state.LANE!r}' if state.LANE else ' (unset)'} and that the state "
-                f"directory is writable.")
-        if tagged_elsewhere:
-            # R3: the tag must not let a commit pick another task's approval. The
-            # branch and the tag disagree, so say so, and accept the tag only for a
-            # task that is registered, unfinished, and declares (`branch:` in its
-            # frontmatter, the field merge detection already resolves) that it
-            # rides on THIS branch.
-            clash = (f"This commit is tagged [{task}] but the checked-out branch "
-                     f"'{branch}' belongs to {head_task}.")
+                conn = state.connect()
+                try:
+                    run = state.get_run(conn, task)
+                finally:
+                    conn.close()
+            except Exception:
+                return deny(
+                    f"The pipeline run state ({state.DB_PATH}) could not be read, so the "
+                    f"checkpoint approval for {task} cannot be verified. This path fails "
+                    f"closed on purpose. Check PIPELINE_LANE"
+                    f"{f'={state.LANE!r}' if state.LANE else ' (unset)'} and that the state "
+                    f"directory is writable.")
+            if tagged_elsewhere:
+                # R3: the tag must not let a commit pick another task's approval. The
+                # branch and the tag disagree, so say so, and accept the tag only for a
+                # task that is registered, unfinished, and declares (`branch:` in its
+                # frontmatter, frozen into the run row at registration - the field
+                # merge detection already resolves) that it rides on THIS branch.
+                clash = (f"This commit is tagged [{task}] but the checked-out branch "
+                         f"'{branch}' belongs to {head_task}.")
+                if run is None:
+                    return deny(f"{clash} {task} has no run row in {state.DB_PATH}, so there is no "
+                                f"approval to judge the commit by. Tag the commit with {head_task}, "
+                                f"or register {task} first.")
+                if run["stage"] == "done":
+                    return deny(f"{clash} {task} is already done, so it cannot approve a new "
+                                f"commit. Tag it with {head_task}.")
+                if state.task_branch(task) != branch:
+                    return deny(f"{clash} {task} did not declare, when it was registered, that it "
+                                f"rides on '{branch}', so its approval cannot cover work on this "
+                                f"branch. Tag the commit {head_task}, which owns this branch. If "
+                                f"{task} really shares it, ask the orchestrator: the declaration "
+                                f"('branch:' in the task file) is frozen into the run row at "
+                                f"registration, so editing the file now changes nothing and only "
+                                f"the CEO can have the task registered again with it.")
+                borrowed.append(f"{task} (branch is {head_task}'s)")
             if run is None:
-                return deny(f"{clash} {task} has no run row in {state.DB_PATH}, so there is no "
-                            f"approval to judge the commit by. Tag the commit with {head_task}, "
-                            f"or register {task} first.")
-            if run["stage"] == "done":
-                return deny(f"{clash} {task} is already done, so it cannot approve a new "
-                            f"commit. Tag it with {head_task}.")
-            if state.task_branch(task) != branch:
-                return deny(f"{clash} {task} does not declare that it rides on '{branch}', so "
-                            f"its approval cannot cover work on this branch. Either tag the "
-                            f"commit {head_task}, or - if {task} really shares this branch - "
-                            f"add 'branch: {branch}' to {task}'s task-file frontmatter.")
-            borrowed.append(f"{task} (branch is {head_task}'s)")
-        if run is None:
-            return deny(
-                f"{task} has no row in the run store ({state.DB_PATH}), so the "
-                f"checkpoint approval cannot be verified and the gate refuses rather "
-                f"than assuming approval. Either register the task - python "
-                f".claude/tools/pipeline/advance.py --task {task} --type <type> - or, if "
-                f"it IS registered, this session is in the wrong lane: PIPELINE_LANE"
-                f"{f'={state.LANE!r}' if state.LANE else ' is unset'} selects the store "
-                f"above, and a lane holds its own runs.")
-        if task in commit_ts and not run["commit_approved"]:
-            via = (f" (the commit is tagged [{task}]; the branch '{branch}' belongs to "
-                   f"{head_task})" if tagged_elsewhere else "")
-            return deny(f"Commit for {task} is not approved yet{via}. Surface the diff and wait "
-                        f"for CEO approval, then: python .claude/tools/pipeline/approve.py "
-                        f"--task {task} --gate commit.",
-                        human=human_notice("commit", task=task))
-        if task in push_tasks and push_needs_approval() and not run["push_approved"]:
-            return deny(f"Push for {task} is not approved yet. Wait for CEO approval, then: "
-                        f"python .claude/tools/pipeline/approve.py --task {task} --gate push.",
-                        human=human_notice("push", task=task))
-    for note in borrowed:
-        print(f"commit gate: judged as {note} by its [task-NNNN] tag, not by the branch name.",
-              file=sys.stderr)
-    return finish()
+                return deny(
+                    f"{task} has no row in the run store ({state.DB_PATH}), so the "
+                    f"checkpoint approval cannot be verified and the gate refuses rather "
+                    f"than assuming approval. Either register the task - python "
+                    f".claude/tools/pipeline/advance.py --task {task} --type <type> - or, if "
+                    f"it IS registered, this session is in the wrong lane: PIPELINE_LANE"
+                    f"{f'={state.LANE!r}' if state.LANE else ' is unset'} selects the store "
+                    f"above, and a lane holds its own runs.")
+            if task in commit_ts and not run["commit_approved"]:
+                via = (f" (the commit is tagged [{task}]; the branch '{branch}' belongs to "
+                       f"{head_task})" if tagged_elsewhere else "")
+                return deny(f"Commit for {task} is not approved yet{via}. Surface the diff and wait "
+                            f"for CEO approval, then: python .claude/tools/pipeline/approve.py "
+                            f"--task {task} --gate commit.",
+                            human=human_notice("commit", task=task))
+            if task in push_tasks and push_needs_approval() and not run["push_approved"]:
+                return deny(f"Push for {task} is not approved yet. Wait for CEO approval, then: "
+                            f"python .claude/tools/pipeline/approve.py --task {task} --gate push.",
+                            human=human_notice("push", task=task))
+        for note in borrowed:
+            print(f"commit gate: judged as {note} by its [task-NNNN] tag, not by the branch name.",
+                  file=sys.stderr)
+        return finish()
+    except PushBudgetExpired:
+        return deny(
+            f"The git checks for this command (branch, refs, leak guard) did not finish "
+            f"within their {PUSH_BUDGET:g}s time budget. A hook that times out is an "
+            f"allow, so the gate refuses instead. Retry; if it keeps happening, run "
+            f"python .claude/tools/pipeline/leak_guard.py --ref=<branch> by hand to see "
+            f"which git call is slow.")
+    finally:
+        end_push_budget()
 
 
 LIVE_HARNESS_MSG = ("{who}: '{path}' is the live harness (gate code, hook wiring, an agent "
@@ -3743,6 +3893,79 @@ def read_payload() -> dict:
     return json.loads(raw)
 
 
+# The hook's own timeout is 20 s in settings.json and a hook that times out is an
+# allow. This watchdog answers first: a subagent call, and a command that runs git
+# push / commit / merge / pull, that is still being judged after WATCHDOG_SECONDS
+# is denied from a timer thread, which no blocking filesystem or sqlite call in
+# the main thread can hold up. Other orchestrator commands keep the old behaviour
+# (the timeout allows), because a stall there must not brick the orchestrator.
+# 14 s leaves 6 s of the 20 s for the interpreter to start before the timer is even armed.
+WATCHDOG_SECONDS = 14.0
+WATCHDOG_MSG = ("The pretool gate did not finish checking this call within {seconds:g}s. A "
+                "hook that times out is an allow, so the call is refused instead. Retry; "
+                "if it keeps happening a filesystem or git call is stalling - report it to "
+                "the orchestrator.")
+_watchdog_lock = threading.Lock()
+_watchdog_done = False
+
+
+def watchdog_deny_and_exit(reason: str) -> None:
+    """Write a PreToolUse deny and end the process with status 2. Both gates' watchdogs use
+    it. os.write skips the stream locks the main thread may be holding, and os._exit skips
+    its cleanup, so nothing the stalled thread owns can hold the verdict back."""
+    try:
+        verdict = json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse", "permissionDecision": "deny",
+            "permissionDecisionReason": reason}})
+        os.write(1, (verdict + "\n").encode("utf-8"))
+        os.write(2, (reason + "\n").encode("utf-8"))
+    finally:
+        os._exit(2)
+
+
+def _watchdog_fire() -> None:
+    with _watchdog_lock:
+        if _watchdog_done:
+            return
+        watchdog_deny_and_exit(WATCHDOG_MSG.format(seconds=WATCHDOG_SECONDS))
+
+
+def start_watchdog_timer(callback, reason: str, seconds: float) -> threading.Timer:
+    """Start a daemon timer for a gate's watchdog. If the thread cannot be started the gate
+    would run unguarded, so the call is denied on the spot instead."""
+    timer = threading.Timer(seconds, callback)
+    timer.daemon = True
+    try:
+        timer.start()
+    except Exception:  # RuntimeError: can't start new thread
+        watchdog_deny_and_exit(reason)
+    return timer
+
+
+def arm_watchdog(tool: str, ti: dict, is_subagent: bool) -> threading.Timer | None:
+    """Start the watchdog timer for a call that needs one, else None."""
+    global _watchdog_done
+    if not is_subagent:
+        command = str(ti.get("command", "")) if tool == "Bash" else ""
+        if not MENTIONS_GIT_RE.search(command):
+            return None
+    with _watchdog_lock:
+        _watchdog_done = False
+    return start_watchdog_timer(_watchdog_fire, WATCHDOG_MSG.format(seconds=WATCHDOG_SECONDS),
+                                WATCHDOG_SECONDS)
+
+
+def disarm_watchdog(timer: threading.Timer | None) -> None:
+    """Stop the timer. Taking the lock waits out a callback that already started,
+    and that callback ends the process, so a verdict is never written twice."""
+    global _watchdog_done
+    if timer is None:
+        return
+    with _watchdog_lock:
+        _watchdog_done = True
+    timer.cancel()
+
+
 def main() -> int:
     del PENDING_HUMAN[:]
     code = evaluate()
@@ -3772,12 +3995,17 @@ def evaluate() -> int:
         if "/subagents/" in tp or tp.rsplit("/", 1)[-1].startswith("agent-"):
             is_subagent = True
         orch = not is_subagent
-        if tool == "Bash":
-            return handle_bash(str(ti.get("command", "")), str(payload.get("cwd", "")), orch=orch)
-        if tool in EDIT_TOOLS:
-            path, content = edit_target(tool, ti)
-            return handle_edit(path, content, orch=orch, cwd=str(payload.get("cwd", "")))
-        return allow()
+        watchdog = arm_watchdog(tool, ti, is_subagent)
+        try:
+            if tool == "Bash":
+                return handle_bash(str(ti.get("command", "")), str(payload.get("cwd", "")),
+                                   orch=orch)
+            if tool in EDIT_TOOLS:
+                path, content = edit_target(tool, ti)
+                return handle_edit(path, content, orch=orch, cwd=str(payload.get("cwd", "")))
+            return allow()
+        finally:
+            disarm_watchdog(watchdog)
     except Exception as exc:
         # An exception in an early check skips every check behind it, so what the
         # gate does with it IS the policy. A subagent call denies: it is the

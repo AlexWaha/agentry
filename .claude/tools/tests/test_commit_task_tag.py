@@ -72,6 +72,9 @@ class CommitTagGateTest(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+        # The branch each task declares is recorded when its run is created.
+        task_file(self.dirs["active"], TASK_A, branch=BRANCH)
+        task_file(self.dirs["active"], TASK_B)
         conn = state.connect()
         try:
             state.create_run(conn, TASK_A, "feature", "ready")
@@ -79,8 +82,6 @@ class CommitTagGateTest(unittest.TestCase):
             state.create_run(conn, TASK_B, "feature", "ready")
         finally:
             conn.close()
-        task_file(self.dirs["active"], TASK_A, branch=BRANCH)
-        task_file(self.dirs["active"], TASK_B)
 
     def gate(self, command: str) -> tuple:
         err = io.StringIO()
@@ -129,17 +130,17 @@ class CommitTagGateTest(unittest.TestCase):
         self.assertIn(TASK_B, err)
 
     def test_tag_naming_a_task_that_does_not_declare_this_branch_is_denied(self):
-        task_file(self.dirs["active"], TASK_A)  # no `branch:` line any more
+        self.set_run(TASK_A, branch="")  # registered without a `branch:` line
         code, err = self.gate(f'git commit -m "[{TASK_A}] x"')
         self.assertEqual(code, 2)
-        for needle in (TASK_A, TASK_B, BRANCH, "does not declare"):
+        for needle in (TASK_A, TASK_B, BRANCH, "did not declare"):
             self.assertIn(needle, err)
 
     def test_tag_declaring_a_different_branch_is_denied(self):
-        task_file(self.dirs["active"], TASK_A, branch="feature/task-0999")
+        self.set_run(TASK_A, branch="feature/task-0999")
         code, err = self.gate(f'git commit -m "[{TASK_A}] x"')
         self.assertEqual(code, 2)
-        self.assertIn("does not declare", err)
+        self.assertIn("did not declare", err)
 
     def test_tag_naming_a_task_with_no_run_row_is_denied_with_both_ids(self):
         code, err = self.gate('git commit -m "[task-0777] x"')

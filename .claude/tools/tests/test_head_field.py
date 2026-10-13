@@ -29,35 +29,48 @@ class HeadFieldTest(unittest.TestCase):
         self.dirs = {name: tmp / name for name in ("backlog", "active", "done")}
         for d in self.dirs.values():
             d.mkdir()
-        patcher = unittest.mock.patch.object(state, "TASK_DIRS", self.dirs)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for name, value in (("TASK_DIRS", self.dirs), ("STATE_DIR", tmp / "state"),
+                            ("DB_PATH", tmp / "state" / "run.db")):
+            patcher = unittest.mock.patch.object(state, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def write(self, task, text, where="active"):
         (self.dirs[where] / f"{task}.md").write_text(text, encoding="utf-8")
 
+    def register(self, task):
+        """Create the run, which records the file's `branch:` (task-0124)."""
+        conn = state.connect()
+        try:
+            state.create_run(conn, task, "feature", "implement")
+        finally:
+            conn.close()
+
     def test_task_branch_reads_the_branch_field_and_strips_quotes(self):
         self.write("task-0200", "---\nid: 200\nbranch: \"feature/task-0120\"\n---\n")
+        self.register("task-0200")
         self.assertEqual("feature/task-0120", state.task_branch("task-0200"))
 
     def test_task_branch_is_empty_when_the_field_is_absent(self):
         self.write("task-0201", "---\nid: 201\n---\n")
+        self.register("task-0201")
         self.assertEqual("", state.task_branch("task-0201"))
 
     def test_task_repo_and_task_branch_read_their_own_keys(self):
         self.write("task-0202", "---\nrepo: agentry\nbranch: fix/task-0202\n---\n", where="done")
+        self.register("task-0202")
         self.assertEqual("agentry", state.task_repo("task-0202"))
         self.assertEqual("fix/task-0202", state.task_branch("task-0202"))
 
     def test_prose_below_the_frontmatter_is_not_a_field(self):
         self.write("task-0203", "---\nid: 203\n---\n\nbranch: not-the-field\nrepo: nor-this\n")
-        self.assertEqual("", state.task_branch("task-0203"))
+        self.assertEqual("", state.frozen_frontmatter("task-0203")["branch"])
         self.assertIsNone(state.task_repo("task-0203"))
 
     def test_a_file_without_frontmatter_reads_only_its_first_40_lines(self):
         self.write("task-0204", "repo: early\n" + "\n" * 60 + "branch: late\n")
         self.assertEqual("early", state.task_repo("task-0204"))
-        self.assertEqual("", state.task_branch("task-0204"))
+        self.assertEqual("", state.frozen_frontmatter("task-0204")["branch"])
 
     def test_a_key_is_matched_whole_not_as_a_prefix(self):
         self.write("task-0205", "---\nrepository: wrong\n---\n")
