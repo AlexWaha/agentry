@@ -110,7 +110,8 @@ class AppendTest(JournalCase):
     def test_kinds_are_the_closed_set_from_the_plan(self):
         self.assertEqual(events.KINDS, {
             "registered", "transition", "gate", "blocked", "parked", "approved",
-            "rejected", "continued", "merged", "closed", "paused", "resumed"})
+            "rejected", "continued", "merged", "closed", "paused", "resumed",
+            "abandoned"})
 
 
 class AppendOnlyTest(JournalCase):

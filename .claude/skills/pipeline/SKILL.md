@@ -67,6 +67,7 @@ After any switch, run the adapter's `show` and report the state in one line.
 ## Behaviour per mode
 
 - **build**: drive the build flow through the project's gated scripts; with swarm on follow the swarm skill, with swarm off one task at a time. The build flow is `plan -> plan-approval -> implement -> test -> review -> ready -> done`; every type except those in `skip_for_types` (`bugfix`, `techdebt`) starts at `plan` and needs the CEO's plan approval (`approve.py --gate plan`) before any edit outside `.agentry/`, while `bugfix` and `techdebt` start at `implement`.
+- **abandon** (inside build): when the CEO drops a task, after a card, run `approve.py --task T --abandon --reason "<why>"`. It closes the run as done/abandoned, moves the file to `done/`, touches no git and owes no handoff doc or memory stamp. Details: "Abandon" in `rules/orchestration.md`.
 - **plan**: gated design flow; task files land in the backlog; no product code.
 - **talk**: answer, investigate, prototype in scratch; no task files, no branches, no product edits. Offer to capture anything worth keeping.
 

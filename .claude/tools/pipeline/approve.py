@@ -19,6 +19,7 @@ CLI:
     python approve.py --task task-0007 --reject --reason "diff touches an unrelated file"
     python approve.py --task task-0007 --pause "CEO force majeure: task-0058 first"
     python approve.py --task task-0007 --resume
+    python approve.py --task task-0007 --abandon --reason "CEO dropped the work"
     python approve.py --trunk-push [--remote NAME]
 """
 
@@ -36,6 +37,7 @@ import git_state
 import leak_guard
 import pretool_gate
 import state
+import stop_gate
 
 REASON_MAX = 500
 # Control, format, line and paragraph separator, private use, unassigned and
@@ -219,6 +221,53 @@ def resume_run(conn, run: dict) -> tuple[str, str]:
             f"done."), ""
 
 
+def live_dependents(task: str) -> list[str]:
+    """Backlog tasks whose `depends_on:` names `task`, sorted. Empty on any error."""
+    found: list[str] = []
+    try:
+        for path in sorted(state.TASK_DIRS["backlog"].glob("task-*.md")):
+            head = stop_gate.frontmatter(path.read_text(encoding="utf-8", errors="replace"))
+            raw = stop_gate.DEPENDS_RE.search(head)
+            if raw and task in stop_gate.TASK_ID_RE.findall(raw.group(1)):
+                found.append(path.stem)
+    except OSError:
+        pass
+    return found
+
+
+def abandon_run(conn, run: dict, reason: str) -> tuple[str, str]:
+    """Retire a run on the CEO's decision, without a merge. (message, "") on success,
+    ("", error) on refusal; every refusal comes before any write.
+
+    The run goes to stage `done` with stage_status `abandoned`, the task file moves
+    to done/ stamped `abandoned: <reason>`, and the commit, push and plan approvals
+    are cleared (the gates read them; an abandoned run must not leave a standing
+    permission). A run parked at `done` awaiting its merge (file still in active/)
+    can be abandoned; a merged one cannot. No git command runs here - the branch,
+    its commits and the working tree stay for the CEO to deal with."""
+    task = run["task"]
+    reason = clean_reason(reason)
+    if not reason:
+        return "", "--abandon needs --reason \"<why>\": the journal records why the work was dropped"
+    if run["stage"] == "done" and run.get("awaiting_human") != "merge":
+        how = "already abandoned" if run.get("stage_status") == state.ST_ABANDONED else "already merged"
+        return "", f"{task} is {how} - there is nothing to abandon."
+    if state.task_dir(task) in ("backlog", "active") and not state.move_task(
+            task, "done", abandoned=reason):
+        return "", (f"{task}.md could not be moved to tasks/done/: a different file already sits "
+                    f"there. Compare the two and remove one by hand, then abandon again.")
+    state.set_fields(conn, task, stage="done", stage_status=state.ST_ABANDONED,
+                     awaiting_human="", paused_status="", pause_reason="", pause_kind="",
+                     commit_approved=0, push_approved=0, plan_approved=0,
+                     abandon_reason=reason, event="abandoned", reason=reason)
+    dependents = live_dependents(task)
+    after = (f"Dependents are ready at once: {', '.join(dependents)} (at the auto level they "
+             f"start unattended)." if dependents else "No backlog task depends on it.")
+    return (f"{task} abandoned at '{run['stage']}': the run is closed and its file is in "
+            f"tasks/done/. Git was not touched: the branch, its commits and the working tree "
+            f"are left as they were - clean the tree before the next task. {after}"), ""
+
+
 def reject_target(pipeline: dict, run: dict) -> tuple[str, bool]:
     """(stage a rejected run goes back to, whether its plan approval is cleared).
 
@@ -248,7 +297,8 @@ def main() -> int:
                         help="send the task back (implement, or plan while the plan is "
                              "unapproved), clearing approvals")
     parser.add_argument("--reason", metavar="TEXT",
-                        help="with --reject: why the CEO sent the task back (required); "
+                        help="with --reject or --abandon: why the CEO sent the task back or "
+                             "dropped it (required); "
                              "recorded in the event journal, capped at 500 characters, "
                              "control characters become spaces")
     parser.add_argument("--pause", metavar="REASON",
@@ -256,6 +306,9 @@ def main() -> int:
                              "uncommitted work; records REASON and whether it had commits")
     parser.add_argument("--resume", action="store_true",
                         help="bring a paused task back at the stage it was paused at")
+    parser.add_argument("--abandon", action="store_true",
+                        help="retire the task without a merge (CEO decision): run closed, file "
+                             "moved to done/, git untouched; needs --reason")
     parser.add_argument("--trunk-push", action="store_true",
                         help="solo mode only: allow ONE push of the trunk to the remote")
     parser.add_argument("--remote", default=pretool_gate.TRUNK_PUSH_DEFAULT_REMOTE,
@@ -269,12 +322,33 @@ def main() -> int:
         print(json.dumps({"error": "need --task task-XXXX (or --trunk-push)"}))
         return 2
 
+    if args.abandon and (args.reject or args.gate or args.pause is not None or args.resume):
+        print(json.dumps({"error": "--abandon stands alone: combine it with none of --gate, "
+                                   "--reject, --pause, --resume"}))
+        return 2
+
     conn = state.connect()
     run = state.get_run(conn, args.task)
     if run is None:
         conn.close()
         print(json.dumps({"error": f"no active run for {args.task}"}))
         return 1
+
+    if run.get("stage_status") == state.ST_ABANDONED and (args.reject or args.gate):
+        conn.close()
+        print(json.dumps({"error": f"{args.task} was abandoned - it takes no further decision."}))
+        return 2
+
+    if args.abandon:
+        msg, err = abandon_run(conn, run, args.reason)
+        if err:
+            conn.close()
+            print(json.dumps({"error": err}))
+            return 2
+        run = state.get_run(conn, args.task)
+        conn.close()
+        print(json.dumps({"ok": True, "message": msg, "run": run}, indent=2))
+        return 0
 
     if args.pause is not None or args.resume:
         if args.reject or args.gate or (args.pause is not None and args.resume):

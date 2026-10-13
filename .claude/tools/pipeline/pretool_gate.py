@@ -112,17 +112,23 @@ PUSH_DESTRUCTIVE_SHORT = frozenset("fd")  # -f, -d, and bundles like -fu
 # `git push` options that push every local branch, trunk and task branches alike.
 PUSH_FANOUT_LONG = frozenset({"--all", "--branches", "--mirror"})
 
-# git accepts any unambiguous prefix of a long option (measured on 2.51: `--al`,
-# `--mir`, `--bra`, `--del`, `--force-with`, `--pru` all act as the full option), so
-# a token that merely abbreviates one of the sets above is that option.
+def is_long_option_prefix(name: str, option: str) -> bool:
+    """True when `name` (`--target`, `--t`) abbreviates `option`; a bare `--` ends the
+    options and abbreviates nothing. The one abbreviation rule of both gates: git, argparse
+    and getopt_long all accept any unambiguous prefix of a long option, and an ambiguous
+    one is an error, so matching the first candidate is fail-closed."""
+    return len(name) > 2 and option.startswith(name)
+
+
+# git push options, by their abbreviations (measured on 2.51: `--al`, `--mir`, `--bra`,
+# `--del`, `--force-with`, `--pru` all act as the full option), so a token that merely
+# abbreviates one of the sets above is that option.
 def push_option_in(tok: str, names) -> str:
     """The member of `names` that the long option `tok` spells or abbreviates, or ''.
     An ambiguous prefix (`--a`, `--fo`) is refused by git itself; matching the first
     member is fail-closed for it."""
     name = tok.split("=", 1)[0]
-    if len(name) < 3 or not name.startswith("--"):
-        return ""
-    return next((full for full in sorted(names) if full.startswith(name)), "")
+    return next((full for full in sorted(names) if is_long_option_prefix(name, full)), "")
 
 
 # A refspec side naming a branch: `main`, `heads/main` and `refs/heads/main` are one.
@@ -143,7 +149,7 @@ EM_EN_DASH = (chr(0x2014), chr(0x2013))  # em dash, en dash
 #   destructive_allow_if: [substr,...]        - ... unless one of these appears
 #   repl_write_keyword: str        - REPL command name (e.g. a live shell)       [G]
 #   repl_write_patterns: [regex,...] - write ops denied inside that REPL
-#   forbid_piped_test_suite: bool  - block unittest discover / pytest piped      [H]
+#   forbid_piped_test_suite: bool  - block unittest / pytest runs piped          [H]
 #                                     into head/tail/grep/wc/more/less
 def gates_cfg() -> dict:
     cfg = state.load_pipeline().get("gates", {})
@@ -925,8 +931,9 @@ def executed_names(command: str) -> list | None:
 # Windows - a test child can inherit the pipe's write end, so the sink never
 # sees EOF and blocks past any timeout, holding a live process behind it
 # (task-0082, measured: two orphaned `unittest discover` runs held ~4h each,
-# a QA agent stalled the full 600s tool timeout). The two suite entry points
-# this project runs end to end, never a single narrowed test file.
+# a QA agent stalled the full 600s tool timeout). Any unittest or pytest run
+# can spawn such a child, so a narrowed run (module list, -k, -p, a test id) is
+# covered as well (task-0123: four agents piped narrowed runs into tail).
 PIPED_SUITE_SINKS = frozenset({"head", "tail", "grep", "wc", "more", "less"})
 
 
@@ -937,47 +944,102 @@ def basename_no_ext(token: str) -> str:
     return re.sub(r"\.exe$", "", name)
 
 
-def is_test_suite_segment(segment: list) -> bool:
-    """True when `segment` (one simple command's tokens) invokes the unittest
-    discover runner or pytest. Deliberately narrow: `python -m unittest
-    <single test>` (no `discover` token) is a narrowed run, not the suite, and
-    stays out of scope."""
-    low = [t.lower() for t in segment]
-    if "unittest" in low and "discover" in low:
-        return True
-    i = argv0_index(segment)
-    if i is None:
-        return False
-    if basename_no_ext(segment[i]) == "pytest":
-        return True
-    if INTERPRETER_RE.match(segment[i]) and "-m" in low:
-        m = low.index("-m")
-        if m + 1 < len(low) and low[m + 1] == "pytest":
+# `python -m unittest`, `python -Im pytest`, `python -munittest`: the -m flag, alone or
+# glued to its module (or to other single-letter flags), and the module name it takes.
+TEST_MODULES = frozenset({"unittest", "pytest"})
+MODULE_FLAG_RE = re.compile(r"^-[a-z]*m(.*)$")
+
+
+def runs_test_module(low: list) -> bool:
+    """True when a lowercased argv has a `-m unittest` / `-m pytest` (or `-munittest`) pair.
+    Any `-m` counts, wherever it sits, so `python script.py -m unittest` is read as a test
+    run too: fail-closed, and the old pytest rule already treated every `-m` alike."""
+    for n, tok in enumerate(low):
+        match = MODULE_FLAG_RE.match(tok)
+        if not match:
+            continue
+        module = match.group(1) or (low[n + 1] if n + 1 < len(low) else "")
+        if module.split(".")[0] in TEST_MODULES:
             return True
     return False
 
 
-def piped_test_suite_sink(command: str) -> str:
-    """The forbidden sink name when `command` pipes a test-suite invocation
-    (unittest discover / pytest) into head, tail, grep, wc, more or less - the
-    shape that deadlocks (see PIPED_SUITE_SINKS above). '' when nothing
-    matches, including when the text cannot be tokenised: this gate is
-    additive on top of the suite commands, which already run elsewhere in
-    the pipeline, so failing open here never hides a mutation another gate
-    would have caught."""
-    pairs = segments_with_separators(command)
-    if not pairs:
-        return ""
+# `coverage run -m unittest`: a program that runs a test module for another program.
+COVERAGE_RE = re.compile(r"^(?:.*[\\/])?coverage[\d.]*(?:\.exe)?$", re.IGNORECASE)
+PYTEST_NAMES = frozenset({"pytest", "py.test"})
+
+
+def runs_suite_at(segment: list, j: int) -> bool:
+    """True when segment[j] starts a unittest / pytest run: a pytest binary, or an
+    interpreter / `coverage` handed `-m unittest` / `-m pytest` further along."""
+    if basename_no_ext(segment[j]) in PYTEST_NAMES:
+        return True
+    if INTERPRETER_RE.match(segment[j]) or COVERAGE_RE.match(segment[j]):
+        return runs_test_module([t.lower() for t in segment[j:]])
+    return False
+
+
+def is_test_suite_segment(segment: list) -> bool:
+    """True when `segment` (one simple command's tokens) is a unittest or pytest run of any
+    shape: `unittest discover`, a bare `pytest`, or an interpreter / `coverage run` running
+    `-m unittest` / `-m pytest` with whatever arguments follow (module list, `-k`, `-p`, test
+    ids). Wrappers (`uv run`, `env`, `timeout 60`, `VAR=x`) are skipped by argv0_index.
+
+    A wrapper's own option takes a value this file cannot enumerate per wrapper (`timeout -s
+    KILL 60`, `env -u X`, `uv run --with pkg`), and that value is then taken for argv0. When
+    argv0 follows an option behind a wrapper every later word is tried as the real command
+    too, the way exec_tokens() does: more than the shell runs is a deny at worst.
+
+    Not covered, because spelling alone cannot tell them from other commands: `coverage run`
+    around a script, `tox`, `nox`, `make test`, `python tests/test_x.py`."""
+    low = [t.lower() for t in segment]
+    if "unittest" in low and "discover" in low:
+        return True
+    i, wrapped = _argv0(segment)
+    if i is None:
+        return False
+    if runs_suite_at(segment, i):
+        return True
+    return wrapped and segment[i - 1].startswith("-") and any(
+        runs_suite_at(segment, j) for j in range(i + 1, len(segment)))
+
+
+def pipe_chain_sink(pairs: list) -> str:
+    """The forbidden sink name when the pipe chain feeding a sink holds a test run anywhere:
+    `run | tail`, `run | tee f | tail`, `{ run; } | tail`, `run 2>&1 | cat | tail`."""
     for n in range(1, len(pairs)):
         sep, seg = pairs[n]
-        if sep not in PIPE_SEPS or not is_test_suite_segment(pairs[n - 1][1]):
+        if sep not in PIPE_SEPS:
             continue
         i = argv0_index(seg)
-        if i is None:
+        if i is None or basename_no_ext(seg[i]) not in PIPED_SUITE_SINKS:
             continue
-        name = basename_no_ext(seg[i])
-        if name in PIPED_SUITE_SINKS:
-            return name
+        if any(is_test_suite_segment(pairs[k][1]) for k in pipe_sources(pairs, n)):
+            return basename_no_ext(seg[i])
+    return ""
+
+
+def piped_test_suite_sink(command: str, _depth: int = 0) -> str:
+    """The forbidden sink name when `command` pipes a test-suite invocation
+    (unittest / pytest, any arguments, anywhere earlier in the same pipe chain) into head,
+    tail, grep, wc, more or less - the shape that deadlocks (see PIPED_SUITE_SINKS above).
+    '' when nothing matches, including when the text cannot be tokenised: this gate is
+    additive on top of the suite commands, which already run elsewhere in
+    the pipeline, so failing open here never hides a mutation another gate
+    would have caught.
+
+    The pipe may sit inside `$( ... )`, a backtick, `bash -c '...'` or an `eval` operand
+    (`out=$(python -m unittest x 2>&1 | tail)` is the shape an agent reaches for when told
+    to capture), so every nested body is read too, down to MAX_SHELL_DEPTH. Past that depth
+    the body goes unread, as unparseable text does."""
+    pairs = segments_with_separators(command)
+    sink = pipe_chain_sink(pairs) if pairs else ""
+    if sink or _depth >= MAX_SHELL_DEPTH:
+        return sink
+    for body in nested_command_bodies(command):
+        sink = piped_test_suite_sink(body, _depth + 1)
+        if sink:
+            return sink
     return ""
 
 
@@ -3271,7 +3333,7 @@ def check_piped_test_suite(command: str) -> int:
     if not sink:
         return allow()
     return deny(
-        f"Piping a test-suite run (unittest discover / pytest) into '{sink}' is denied "
+        f"Piping a test-suite run (unittest / pytest) into '{sink}' is denied "
         f"(gates.forbid_piped_test_suite). In Git Bash on Windows this deadlocks: a test "
         f"child can inherit the pipe's write end, so '{sink}' never sees EOF and blocks past "
         f"any timeout, holding a live process behind it. Run the suite unpiped and let the "

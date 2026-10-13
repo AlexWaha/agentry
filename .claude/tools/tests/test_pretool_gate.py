@@ -449,11 +449,14 @@ class PipedTestSuiteGateTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(0, self.drive(command)[0])
 
-    def test_a_narrowed_unittest_run_with_no_discover_token_is_allowed(self):
-        # `python -m unittest <single test>` is a narrowed run, not the suite -
-        # out of scope by design (see is_test_suite_segment's docstring).
+    def test_a_narrowed_unittest_run_with_no_discover_token_is_denied(self):
+        # `python -m unittest <module>` spawns test children like the full suite
+        # does, so the pipe hazard is the same (task-0123).
         command = "python -m unittest .claude.tools.tests.test_pretool_gate | tail"
-        self.assertEqual(0, self.drive(command)[0])
+        code, msg = self.drive(command)
+        self.assertEqual(2, code, msg)
+        self.assertIn("forbid_piped_test_suite", msg)
+        self.assertIn("tail", msg)
 
     def test_the_suite_piped_into_a_non_sink_command_is_allowed(self):
         # Piping the suite into something that is not one of the six named

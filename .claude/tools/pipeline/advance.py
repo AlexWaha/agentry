@@ -507,6 +507,12 @@ def main() -> int:
 
     if cur == "done":
         conn.close()
+        if run.get("stage_status") == state.ST_ABANDONED:
+            # Dropped by the CEO: nothing merged and nothing is owed, so no git read
+            # and no merge park.
+            return result("done", args.task, run,
+                          f"{args.task} was abandoned ({run.get('abandon_reason') or 'no reason'})"
+                          f" - nothing to merge.")
         return finish_or_wait_for_merge(args.task, run)
 
     # A paused run is not advanced: running its gate here would rewrite its
