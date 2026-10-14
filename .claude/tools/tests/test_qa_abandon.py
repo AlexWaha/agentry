@@ -39,7 +39,7 @@ OTHER = "task-9501"
 UMBRELLA = "task-9510"
 SUB = "task-9511"
 EPIC = "epic-0042"
-REASON = "CEO dropped the work"
+REASON = "User dropped the work"
 
 
 class OddRunShapesTest(_Base):

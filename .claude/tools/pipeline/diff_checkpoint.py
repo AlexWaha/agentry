@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Getting the diff in front of the CEO at the commit checkpoint (FR-53 to FR-55,
+"""Getting the diff in front of the User at the commit checkpoint (FR-53 to FR-55,
 contract C-9).
 
 An AskUserQuestion card does not show a diff, and approving a commit without one
@@ -151,7 +151,7 @@ def at_commit_parking_point(task: str) -> bool:
 
 
 def inject_diff(task: str) -> bool:
-    """Queue /diff for the CEO. The only function in the pipeline that writes to
+    """Queue /diff for the User. The only function in the pipeline that writes to
     the console input buffer, and it does so only at a commit parking point."""
     if not at_commit_parking_point(task):
         return False
@@ -233,10 +233,10 @@ def _preview_note(task: str) -> str:
     except Exception:
         diff = ""
     if _in_tree(task):
-        pointer = (f" {DIFF_COMMAND} does not read this task's worktree, so do not point the CEO "
+        pointer = (f" {DIFF_COMMAND} does not read this task's worktree, so do not point the User "
                    f"to it.")
     else:
-        pointer = f" Tell the CEO to run {DIFF_COMMAND} for the full diff."
+        pointer = f" Tell the User to run {DIFF_COMMAND} for the full diff."
     if not diff:
         return pointer
     return (f"{pointer} Put the diff below, verbatim, in the preview field of the "
@@ -245,7 +245,7 @@ def _preview_note(task: str) -> str:
 
 def _injected_note(task: str) -> str:
     """/diff runs only when the model's turn ends and the card keeps the turn
-    open, so nothing here promises the CEO already sees it."""
+    open, so nothing here promises the User already sees it."""
     try:
         files = changed_files(task)
     except Exception:
@@ -266,4 +266,4 @@ def deliver(task: str, *, inject: bool) -> str:
             return _injected_note(task)
         return _preview_note(task)
     except Exception:
-        return f" Tell the CEO to run {DIFF_COMMAND} for the full diff."
+        return f" Tell the User to run {DIFF_COMMAND} for the full diff."

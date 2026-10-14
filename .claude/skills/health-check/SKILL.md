@@ -1,6 +1,6 @@
 ---
 name: health-check
-description: Run the full quality gate (format, lint, type check, tests, forbidden pattern scan) and report PASS/FAIL per check. Use before every commit, after a bug fix or feature scaffold, before showing a diff to the CEO, or when asked to "check code quality", "run the quality gate", or "verify this is ready to commit".
+description: Run the full quality gate (format, lint, type check, tests, forbidden pattern scan) and report PASS/FAIL per check. Use before every commit, after a bug fix or feature scaffold, before showing a diff to the User, or when asked to "check code quality", "run the quality gate", or "verify this is ready to commit".
 allowed-tools: Read, Grep, Glob, Bash
 ---
 

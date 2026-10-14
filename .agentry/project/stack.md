@@ -85,7 +85,7 @@ task or changes state, so it was deliberately left unexecuted.
 | `ruff check --fix .claude/tools` | Applies the safe lint fixes. This is the nearest thing to a formatter; no gate runs it | `pyproject.toml` rule set | not run (mutating) |
 | `python .claude/tools/pipeline/advance.py --task task-XXXX --type <type>` | Registers a task and advances it one stage by running the real exit gate | `rules/orchestration.md` | not run (needs a task) |
 | `python .claude/tools/pipeline/state.py --show` | Dumps every run in `run.db` as JSON | `state.py` docstring | 0 |
-| `python .claude/tools/pipeline/approve.py --task task-XXXX --gate commit` | Records a checkpoint approval. Orchestrator only, and only after the CEO approves | `rules/orchestration.md` | not run (changes state) |
+| `python .claude/tools/pipeline/approve.py --task task-XXXX --gate commit` | Records a checkpoint approval. Orchestrator only, and only after the User approves | `rules/orchestration.md` | not run (changes state) |
 | `python .claude/tools/pipeline/stack_gate.py --task task-XXXX --stage implement\|test\|review [--repo KEY]` | Runs the per-repo gate commands from `repos{}` in `pipeline.json` | `stack_gate.py` | 0 (`--stage review --repo agentry`) |
 | `python .claude/tools/pipeline/supervisor.py --stop` | Stops the detached supervisor daemon | `pipeline.json` `supervisor._comment` | not run (changes state) |
 | `python .claude/tools/memory/memory.py --query "<topic>"` | Queries the memory store (`--record`, `--export`, `--stats` also exist) | `rules/self-learning.md` | 0 |
@@ -93,7 +93,7 @@ task or changes state, so it was deliberately left unexecuted.
 | `python .claude/tools/pipeline/events.py --task task-XXXX` / `--summary [--since DATE]` | Prints the event journal (`.agentry/state/events.db`) for one task or for all tasks, as JSON. `approve.py --reject` now requires `--reason "<why>"` | `rules/orchestration.md` "Event journal" | 0 |
 | `python .claude/tools/pipeline/zones.py --prove --task task-XXXX` / `--show` | Freezes the board's `## Zones` map for a swarm task (exit 1 names overlaps), or prints the frozen map (`--show` needs no task) | `skills/swarm/SKILL.md` | not run (needs a swarm task) |
 | `python .claude/tools/pipeline/leak_guard.py --ref REF` | Refuses a ref that adds a path under `.agentry/` that `<remote>/<trunk>` lacks (`origin/main` unless `pipeline.json` sets `remote` / `main_branch`; exit 0 clean, 1 leaked, 2 error; the whole push check has a 12 s budget and a slow git call denies). Also run by every `git push` and by `.githooks/pre-push`; enable the hook once per clone with `git config core.hooksPath .githooks` | `rules/git-workflow.md` | not run (needs `origin/main`) |
-| `python .claude/tools/pipeline/approve.py --task task-XXXX --trunk-push [--remote NAME]` | Records the one-shot CEO approval for pushing the trunk to the named remote (default `origin`). Orchestrator only, `solo` mode | `rules/git-workflow.md` | not run (changes state) |
+| `python .claude/tools/pipeline/approve.py --task task-XXXX --trunk-push [--remote NAME]` | Records the one-shot User approval for pushing the trunk to the named remote (default `origin`). Orchestrator only, `solo` mode | `rules/git-workflow.md` | not run (changes state) |
 | `python .claude/tools/pipeline/worktree.py --list` | Prints `{"enabled", "max_parallel", "trees": [...]}` as JSON: each in-flight task's worktree path, branch, status (OK, LEGACY, MISSING, INVALID) and stage | `rules/orchestration.md` "Parallel tasks in worktrees" | not run (new in task-0129 to task-0131, not yet deployed to the live harness) |
 | `python .claude/tools/pipeline/worktree.py --sweep` | Reports `<repo>-wt/task-*` directories no in-flight run records; removes nothing | same | not run (as above) |
 | `python .claude/tools/pipeline/worktree.py --remove --task task-XXXX` / `--repair --task task-XXXX` | Removes a merged task's tree (no `--force`; exit 1 when it had to be left), or re-links a moved or dangling one. Orchestrator only: dev agents are denied both when `worktrees.enabled` | same | not run (changes state) |
@@ -127,7 +127,7 @@ quote):
 - plan stage: `python {root}/.claude/tools/pipeline/artifact_gate.py --task {task} --kind plan`
 - test stage, the evidence half: `python {root}/.claude/tools/pipeline/ui_evidence.py --task {task}`
 
-The table above still shows today's cwd-relative spellings because `{root}` is a CEO
+The table above still shows today's cwd-relative spellings because `{root}` is a User
 config step taken at rollout, after deploy; `pipeline.json` is what the gates run.
 Switch the two commands, then flip `enabled`. The `{task}` and `{root}` tokens are
 both substituted, `{task}` first.

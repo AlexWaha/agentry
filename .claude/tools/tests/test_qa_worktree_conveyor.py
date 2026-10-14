@@ -51,14 +51,14 @@ PIPELINES = {"pipelines": {"build": {"editing_stages": ["implement", "test", "re
     {"name": "test", "owner": "qa-engineer"},
     {"name": "review", "owner": "reviewer"},
     {"name": "ready", "owner": "orchestrator", "checkpoints": ["commit"]},
-    {"name": "done", "owner": "ceo", "terminal": True}]}}}
+    {"name": "done", "owner": "user", "terminal": True}]}}}
 TRIAGE = {"pipelines": {"build": {"editing_stages": ["implement", "test", "review"], "stages": [
     {"name": "triage", "owner": "dev"},
     {"name": "implement", "owner": "dev"},
     {"name": "test", "owner": "qa-engineer"},
     {"name": "review", "owner": "reviewer"},
     {"name": "ready", "owner": "orchestrator", "checkpoints": ["commit"]},
-    {"name": "done", "owner": "ceo", "terminal": True}]}}}
+    {"name": "done", "owner": "user", "terminal": True}]}}}
 UMBRELLA_HEAD = "epic: epic-0007\numbrella: true\n"
 EPIC_HEAD = "epic: epic-0007\n"
 PAUSED = {"stage_status": state.ST_PAUSED, "paused_status": state.ST_IN_PROGRESS}

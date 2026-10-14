@@ -1,7 +1,7 @@
 """task-0124 (M2): the task-file decisions that gate closure and approval borrowing
 are recorded in the run row at registration and read from there afterwards.
 
-`active/` is gitignored, so the CEO's diff never shows the file an agent can rewrite
+`active/` is gitignored, so the User's diff never shows the file an agent can rewrite
 after the commit approval. These tests register a run, then edit the file, and assert
 that the sweep (move_swarm_subtasks), the umbrella debt cover (covering_umbrella) and
 the commit-tag branch rule (task_branch) did not notice. Everything runs on a sandbox

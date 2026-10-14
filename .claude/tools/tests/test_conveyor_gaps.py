@@ -2,7 +2,7 @@
 
 Each test pins one defect that cost a round trip every turn of a real session:
 
-1. a run parked on a human (checkpoint, or a finished task waiting for the CEO
+1. a run parked on a human (checkpoint, or a finished task waiting for the User
    to merge) let stop_gate.py offer the next backlog task, which would switch
    the branch out from under a human reading the diff;
 2. nothing wrote the busy marker when a subagent was dispatched, so the hook
@@ -21,7 +21,7 @@ Each test pins one defect that cost a round trip every turn of a real session:
    set nor awaiting_human - so the Stop hook read a free slot and offered the
    next task, which is defects 1 and 3 back through another door;
 7. the handoff-debt and memory-debt checks were read INSIDE that same free-slot
-   branch, so any task parked on the CEO - the normal state of a pipeline with a
+   branch, so any task parked on the User - the normal state of a pipeline with a
    human in it - switched off the only machine that reports undocumented work.
    Two done tasks went undocumented with `handoff.py --check` reporting 2 and
    nothing objecting, an hour after defect 3's fix gave a blocked run the
@@ -167,7 +167,7 @@ def decide_output_with(runs: list[dict], backlog=("task-0002",), pipeline=None,
 def decide_with(*args, **kw) -> str | None:
     """The block reason decide_output_with() produced, or None when the hook did
     not block. A stop released with only a `systemMessage` (a run parked on the
-    CEO) is not a block, so it is None here exactly as silence is."""
+    User) is not a block, so it is None here exactly as silence is."""
     output = decide_output_with(*args, **kw)
     return output["reason"] if output and output.get("decision") == "block" else None
 
@@ -234,7 +234,7 @@ class DocumentationDebtTest(unittest.TestCase):
     Measured an hour after task-0067 merged, with task-0010 parked blocked and
     two done tasks undocumented: `handoff.py --check` reported 2, and the Stop
     hook allowed the stop without a word. The condition that disabled the check
-    was "some task is waiting for the CEO", which is the normal state of a
+    was "some task is waiting for the User", which is the normal state of a
     pipeline with a human in it.
 
     A completed task's documentation is not less owed because another task is
@@ -307,7 +307,7 @@ class DocumentationDebtTest(unittest.TestCase):
         self.assertIn("task-0001 is at stage 'implement'", reason)
 
     def test_surfacing_a_blocked_run_still_outranks_the_debt(self):
-        # Same precedence, for the run nobody is driving: the CEO hears about
+        # Same precedence, for the run nobody is driving: the User hears about
         # the blocker first, and the debt on the stop after it.
         reason = decide_with([run(stage="implement", status=state.ST_BLOCKED)],
                              debt=self.HANDOFF)
@@ -350,7 +350,7 @@ class DebtNagBoundTest(unittest.TestCase):
         self.addCleanup(p.stop)
 
     def stop(self, **kw) -> str | None:
-        """One stop event with a run parked on the CEO and the REAL counter."""
+        """One stop event with a run parked on the User and the REAL counter."""
         return decide_with([run(stage="ready", awaiting_human="commit")],
                            count_nags=True, **kw)
 
@@ -529,7 +529,7 @@ class StopHookActiveBackstopTest(unittest.TestCase):
 
         surfaced = self.stop([run(stage="implement", status=state.ST_BLOCKED)])
         self.assertIn("task-0001 is parked BLOCKED", surfaced)
-        self.assertIn("CEO", surfaced)
+        self.assertIn("with the User", surfaced)
 
     def test_a_park_at_ready_is_surfaced_too(self):
         # The awkward case, and the one the mock hides: site 1 fires only while
@@ -609,7 +609,7 @@ class StopHookActiveBackstopTest(unittest.TestCase):
         self.assertIn("Start the next ready task task-0002", escalation)
         self.assertEqual([], self.parked())
 
-        # ONE escalation, then quiet about that exact sentence - the CEO owns it.
+        # ONE escalation, then quiet about that exact sentence - the User owns it.
         self.assertIsNone(self.stop([], backlog=("task-0002",)))
 
     def test_it_cannot_swallow_the_blocked_run_surfacing(self):
@@ -871,7 +871,7 @@ class BlockedRunIsVisibleAtSessionStartTest(unittest.TestCase):
     def test_a_blocked_run_is_named_as_needing_the_ceo(self):
         text = self.resume([run(stage="implement", status=state.ST_BLOCKED,
                                 awaiting_human="blocked")])
-        self.assertIn("BLOCKED, needs the CEO", text)
+        self.assertIn("BLOCKED, needs the User", text)
         self.assertIn("task-0001", text)
         self.assertIn("--reject", text)
 
@@ -1294,7 +1294,7 @@ class BacklogFilterTest(unittest.TestCase):
         self.assertEqual([], self._ready())
 
     def test_non_empty_blocked_on_is_not_offered(self):
-        self._task("task-0100", blocked_on="CEO ruling on the pricing model")
+        self._task("task-0100", blocked_on="User ruling on the pricing model")
         self.assertEqual([], self._ready())
 
     def test_dependency_on_a_superseded_task_resolves_through_its_successor(self):
@@ -1438,7 +1438,7 @@ class StrandedStageTest(unittest.TestCase):
 class SoloCheckpointTest(unittest.TestCase):
     """task-0047, second half: in solo mode the ready stage must not gate on a
     push, because no push happens - the approved branch is merged into the trunk
-    locally and the CEO pushes the trunk himself later.
+    locally and the User pushes the trunk later.
 
     Measured live: the trunk already carried task-0003 and advance.py still
     returned awaiting_human=push, a checkpoint on a step the mode had removed,
@@ -1465,7 +1465,7 @@ class SoloCheckpointTest(unittest.TestCase):
         self.addCleanup(p.stop)
         # The approvals level is pinned, and it is not cosmetic: approvals.read()
         # reads .agentry/state/approvals from the LIVE workspace, so without this
-        # these tests assert solo-mode behaviour only while the CEO happens to
+        # these tests assert solo-mode behaviour only while the User happens to
         # have the dial at `manual`. It went unnoticed because advance.py could
         # not act on the level at all (task-0083); the moment it could, the
         # workspace sitting at `assisted` auto-approved the commit inside
@@ -1872,7 +1872,7 @@ class DebtBoundBeforeStartingTest(unittest.TestCase):
         for _ in range(stop_gate.DEBT_NAG_CEILING + 2):
             self.stop(debt=self.DEBT)
         # ...and the no-work-to-drive copy is spent too. Two budgets for one
-        # demand would mean twice as many stops before the CEO hears about it.
+        # demand would mean twice as many stops before the User hears about it.
         self.assertIsNone(decide_with([run(stage="ready", awaiting_human="commit")],
                                       count_nags=True, debt=self.DEBT))
 
@@ -1941,9 +1941,9 @@ PLAN_PIPELINE = {
             {"name": "formalize", "owner": "architect"},
             {"name": "draft", "owner": "architect"},
             {"name": "plan-review", "owner": "reviewer"},
-            {"name": "approval", "owner": "ceo", "checkpoints": ["plan"]},
+            {"name": "approval", "owner": "user", "checkpoints": ["plan"]},
             {"name": "breakdown", "owner": "product-manager"},
-            {"name": "done", "owner": "ceo"},
+            {"name": "done", "owner": "user"},
         ],
     }},
 }
@@ -2119,10 +2119,10 @@ class UnlistedStageIsDrivenTest(unittest.TestCase):
         self.assertNotIn("Start the next ready task", nxt)
 
     def test_a_checkpoint_stage_is_never_nagged_as_stage_work(self):
-        # `ready` carries `checkpoints`, so its work is the CEO's approval and
+        # `ready` carries `checkpoints`, so its work is the User's approval and
         # the demand would be addressed to nobody. Since task-0019 that stable
         # sentence would also park the run on the third repeat, costing an
-        # approval the CEO had already given. Silence here, and the queue is
+        # approval the User had already given. Silence here, and the queue is
         # held by the free-slot test instead.
         calls = unittest.mock.MagicMock()
         self.assertIsNone(decide_with([run(stage="ready")], pipeline=BUILD_PIPELINE,
@@ -2155,25 +2155,25 @@ PLAN_PIPELINE_APPROVAL_LISTED["pipelines"]["plan"]["editing_stages"] = [
 
 
 class CheckpointStageFromConfigTest(unittest.TestCase):
-    """The root the CEO asked to be fixed: the free-slot test derived from the
+    """The root the User asked to be fixed: the free-slot test derived from the
     literal stage name `ready`, so it was right for `build` by coincidence and
     blind to every other flow.
 
     The plan flow's `approval` is the same kind of stage - a human's - and
     matched neither the literal here nor any branch of the run loop, so the
-    conveyor drove the CEO's approval stage AND read its tree as free. A
+    conveyor drove the User's approval stage AND read its tree as free. A
     special case for `approval` would have been the same bug with a second
     name in it. Both halves are asserted for both flows, because they are one
     decision: what is not nagged must still occupy."""
 
     def test_a_plan_run_at_approval_is_silent_and_holds_the_queue(self):
-        # The case the CEO named. One call, both halves: nothing said about the
+        # The case the User named. One call, both halves: nothing said about the
         # run, and task-0002 not started while it sits there.
         calls = unittest.mock.MagicMock()
         self.assertIsNone(decide_with([plan_run(stage="approval")],
                                       pipeline=PLAN_PIPELINE, set_fields=calls))
         # Silent AND uncharged - a nag that spends the budget would park the run
-        # on the third stop even if the text never reached the CEO.
+        # on the third stop even if the text never reached the User.
         self.assertEqual(0, calls.call_count)
 
     def test_a_build_run_at_ready_is_silent_and_holds_the_queue(self):

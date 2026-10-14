@@ -65,14 +65,14 @@ flowchart LR
     A[implement] -->|build command passes| B[test]
     B -->|test suite green| C[review]
     C -->|lint clean, no Critical/High findings| D[ready]
-    D -->|CEO approves commit, then push| E[done]
+    D -->|User approves commit, then push| E[done]
     C -.->|findings found| A
     D -.->|commit rejected| A
 ```
 
 There is no separate visual-diff stage. There used to be one, backed by a local
 browser UI, and it was removed once Claude Code shipped a built-in `/diff`: the
-CEO now reads the diff at the commit checkpoint, where the approval already
+User now reads the diff at the commit checkpoint, where the approval already
 waits. Rejecting there sends the task back to `implement`.
 
 `implement`, `test`, and `review` are editing stages: only one task occupies
@@ -87,9 +87,9 @@ branch, not merely pushed.
 
 ```mermaid
 graph TD
-    CEO[CEO / CTO - human]
+    USR[User - human]
     ORCH[Orchestrator - COO]
-    CEO --> ORCH
+    USR --> ORCH
     ORCH --> TECH[Technical department]
     ORCH --> SUP[Support department]
     ORCH --> BIZ[Business department - deferred]
@@ -209,7 +209,7 @@ python .claude/tools/pipeline/state.py --show
 # Start a task (creates/records the run; branch must already be cut from up-to-date main)
 python .claude/tools/pipeline/advance.py --task task-0001 --type feature
 
-# After the CEO reviews the diff and approves:
+# After the User reviews the diff and approves:
 python .claude/tools/pipeline/approve.py --task task-0001 --gate commit
 git commit -m "..."
 python .claude/tools/pipeline/advance.py --task task-0001
@@ -256,7 +256,7 @@ merged into the main branch.
 | spec-developer | docs | writing the spec from the architect's plan |
 | product-manager | docs | epic + task decomposition from an approved spec |
 | sprint-prioritizer | docs | ordering the backlog, status reporting |
-| feedback-synthesizer | docs | consolidating user/CEO feedback into themes |
+| feedback-synthesizer | docs | consolidating user feedback into themes |
 | business-analyst | docs | market research, business plan, requirements analysis (deferred) |
 | financial-analyst | docs | financial models, unit economics, pricing, runway (deferred) |
 | marketing-strategist | docs | GTM strategy, channels, launch planning (deferred) |

@@ -3,14 +3,14 @@
 Contract C-8 gives each audience its own field: `reason` for the model,
 `systemMessage` for the person reading the terminal, `terminalSequence` for the
 terminal itself. Until task-0024 the Stop hook only filled the first, so nothing
-the pipeline said reached the CEO.
+the pipeline said reached the User.
 
 What is pinned here:
 
 1. every block path in stop_gate.py carries a non-empty `systemMessage` that is
    not the model's sentence (the audiences differ: "run advance.py" is noise to a
-   CEO), and the human-asking ones say a decision is owed;
-2. a stop released while a run is parked on the CEO says what he owes it, with no
+   User), and the human-asking ones say a decision is owed;
+2. a stop released while a run is parked on the User says what the User owes it, with no
    `decision`, so the stop is still allowed;
 3. four distinct `terminalSequence` values, one per event, each inside the
    allowlist Claude Code applies (measured in the 2.1.295 binary), and an event
@@ -53,7 +53,7 @@ from test_conveyor_gaps import (
 EVENTS = ("commit", "push", "blocked", "gate-failure")
 
 # The model's vocabulary. If one of these shows up in the sentence meant for the
-# CEO, the two audiences have been merged again.
+# User, the two audiences have been merged again.
 MODEL_ONLY = ("advance.py", "approve.py", "AskUserQuestion", "Do not ask", "--reject")
 
 DEBT = [{"task": "task-0067", "reason": "no handoff doc"}]
@@ -63,7 +63,7 @@ LATEST = {"task": "task-0066", "sha": "a" * 40, "reason": "no handoff doc"}
 # The escape sequences Claude Code lets through (build 2.1.295): BEL, and OSC
 # 0/1/2/9/99/777 ended by BEL or ESC \, at most 4096 bytes, an OSC 9 body that
 # does not open with a digit. A mirror of that rule, so a sequence the build would
-# drop whole is a red test here rather than a silent no-op in the CEO's terminal.
+# drop whole is a red test here rather than a silent no-op in the User's terminal.
 OSC = re.compile(r"\x1b\](\d+)(?:;([^\x07\x1b]*))?(?:\x07|\x1b\\)")
 ALLOWED_OSC = (0, 1, 2, 9, 99, 777)
 
@@ -99,7 +99,7 @@ class BlockPathsSpeakToTheHumanTest(unittest.TestCase):
     path missing from it is a path nobody checked."""
 
     SCENARIOS = (
-        # (name, decide kwargs, terminal event, does it ask the CEO for a decision)
+        # (name, decide kwargs, terminal event, does it ask the User for a decision)
         (
             "blocked run surfaced",
             {"runs": [run(stage="implement", status=state.ST_BLOCKED)]},
@@ -173,7 +173,7 @@ class BlockPathsSpeakToTheHumanTest(unittest.TestCase):
 
     def test_the_bound_escalation_of_a_debt_asks_the_ceo(self):
         # Past the nag ceiling bounded_block() stops repeating and hands the debt
-        # to the CEO. That is a decision, so it says so and rings the blocked bell.
+        # to the User. That is a decision, so it says so and rings the blocked bell.
         with unittest.mock.patch.object(stop_gate, "debt_nags", return_value=stop_gate.DEBT_NAG_CEILING + 1):
             out = printed(
                 lambda: stop_gate.bounded_block(
@@ -214,7 +214,7 @@ class BlockPathsSpeakToTheHumanTest(unittest.TestCase):
 
 class ParkedRunsAreAnnouncedTest(unittest.TestCase):
     """The release at the end of decide() used to print nothing, so a run parked
-    on the CEO was silent. advance.py's own output only reaches the model."""
+    on the User was silent. advance.py's own output only reaches the model."""
 
     def parked(self, awaiting: str, **extra) -> dict | None:
         return decide_output_with(
@@ -467,7 +467,7 @@ class SessionStartBlockedRunTest(unittest.TestCase):
         context = json.loads(raw)["hookSpecificOutput"]["additionalContext"]
         self.assertIn("pipeline mode: plan - planning", context)
         self.assertIn("Pipeline state (resume in-flight work", context)
-        self.assertIn("BLOCKED, needs the CEO", context)  # the model still gets its line
+        self.assertIn("BLOCKED, needs the User", context)  # the model still gets its line
         self.assertIn("codegraph: synced", context)
 
     def test_without_a_blocked_run_the_output_is_the_same_plain_text_as_before(self):
@@ -498,7 +498,7 @@ class SessionStartBlockedRunTest(unittest.TestCase):
         with unittest.mock.patch.object(state, "blocked_notice", side_effect=RuntimeError("boom")):
             raw = self.start([run(stage="implement", status=state.ST_BLOCKED)])
         self.assertFalse(raw.startswith("{"))
-        self.assertIn("BLOCKED, needs the CEO", raw)  # the model's line survived
+        self.assertIn("BLOCKED, needs the User", raw)  # the model's line survived
 
     def test_a_quiet_start_prints_nothing(self):
         buf = io.StringIO()

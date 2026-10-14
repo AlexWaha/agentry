@@ -1,7 +1,7 @@
 > **STATUS: DEFERRED**
 > Not active in current project phase (backend API only).
 > Will be activated when business planning/analysis work begins.
-> Do not invoke until explicitly activated by CEO.
+> Do not invoke until explicitly activated by the User.
 
 # Business Standards
 
@@ -102,7 +102,7 @@ All financial projections MUST include three scenarios:
 | **Base case** | Realistic assumptions - industry averages, conservative estimates |
 | **Worst case** | Pessimistic assumptions - slower growth, higher churn, lower conversion |
 
-Never present only one scenario. Investors and CEOs need to understand the range of outcomes.
+Never present only one scenario. Investors and the User need to understand the range of outcomes.
 
 ### Unit Economics
 

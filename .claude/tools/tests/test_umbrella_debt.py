@@ -2,12 +2,12 @@
 
 After task-0118 merged, its 15 swarm subtasks were swept to done/ and each one then
 read as an undocumented, unstamped done task, blocking every registration until the
-CEO approved a waiver per subtask. `state.covering_umbrella()` names the done
+User approved a waiver per subtask. `state.covering_umbrella()` names the done
 umbrella that documents a subtask, and both readers skip a covered subtask.
 
 Everything here runs on a sandbox copy of the folder layout (tmproot.sandbox); the
 live `.agentry` is never read or written. The layout mirrors the real case: one done
-umbrella listing 15 done subtasks of the same epic, some with CEO waiver docs.
+umbrella listing 15 done subtasks of the same epic, some with User waiver docs.
 """
 
 # ruff: noqa: E402  (sys.path is extended before the sibling imports resolve)

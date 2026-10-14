@@ -1,4 +1,4 @@
-"""task-0134 part A: the commit approval is bound to the change set the CEO read.
+"""task-0134 part A: the commit approval is bound to the change set the User read.
 
 Real git, real worktrees under the project's tmp/, the real advance.py, approve.py and the
 real pretool_gate hook entry point; only the stage gate command and the approvals level are
@@ -75,12 +75,12 @@ class BindingCase(MergeCase):
         return self.approve_cli("--gate", "commit")
 
     def approved(self) -> None:
-        """The CEO's approval, which must have been recorded."""
+        """The User's approval, which must have been recorded."""
         code, out = self.approve_commit()
         self.assertEqual(0, code, out)
 
     def parked_and_approved(self, name: str = "feature.txt") -> str:
-        """Uncommitted work in the tree, the commit park, the CEO's approval. Returns
+        """Uncommitted work in the tree, the commit park, the User's approval. Returns
         the binding the run holds."""
         self.write(name)
         self.park()
@@ -358,12 +358,12 @@ class CommitCheckTest(BindingCase):
 
     def test_commit_denied_when_tree_differs_from_approved(self):
         self.parked_and_approved()
-        self.write("sneaked.txt", "not in the diff the CEO read\n")
+        self.write("sneaked.txt", "not in the diff the User read\n")
 
         code, err = self.commit_verdict()
 
         self.assertEqual(2, code)
-        self.assertIn("the tree changed after the CEO approved it", err)
+        self.assertIn("the tree changed after the User approved it", err)
         self.assertIn("advance.py --task " + TASK, err)
 
     def test_an_edit_to_an_approved_file_is_denied_too(self):
@@ -373,7 +373,7 @@ class CommitCheckTest(BindingCase):
         code, err = self.commit_verdict()
 
         self.assertEqual(2, code)
-        self.assertIn("changed after the CEO approved", err)
+        self.assertIn("changed after the User approved", err)
 
     def test_commit_and_merge_pass_when_tree_matches(self):
         self.parked_and_approved()
@@ -480,7 +480,7 @@ class MergeCheckTest(BindingCase):
 
         self.assertEqual(2, code)
         self.assertIn("condition 3 of 3 failed", err)
-        self.assertIn("holds a change set the CEO did not approve", err)
+        self.assertIn("holds a change set the User did not approve", err)
 
     def test_an_approved_branch_missing_part_of_the_work_is_denied_at_the_merge(self):
         self.write("one.txt")
@@ -651,7 +651,7 @@ class ClearingTest(BindingCase):
         self.at("implement")
         self.approved()
         self.assertTrue(self.row()["approved_tree"])
-        code, _ = self.approve_cli("--pause", "CEO force majeure")
+        code, _ = self.approve_cli("--pause", "User force majeure")
         self.assertEqual(0, code)
 
         code, out = self.approve_cli("--resume")

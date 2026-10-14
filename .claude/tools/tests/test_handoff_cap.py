@@ -13,7 +13,7 @@ Three things these tests exist to pin, in order of how much a mistake costs:
    DISABLE the cap, not to reject the document - including the ones nothing
    else reaches, because an untested fail-open branch is a branch that gets
    deleted by a refactor without anyone noticing.
-2. **The exemption really exempts.** The CEO's decision of 2026-09-15 was that
+2. **The exemption really exempts.** The User's decision of 2026-09-15 was that
    the cap binds new documents only; the 18 already over it are grandfathered.
    `test_an_exempt_task_passes_while_an_identical_one_fails` is that decision
    encoded: same bytes, same cap, opposite verdicts, the exempt list the only
@@ -145,7 +145,7 @@ class CapTest(unittest.TestCase):
         self.assertNotEqual([], self.check(self.doc(6145)))
 
     def test_an_exempt_task_passes_while_an_identical_one_fails(self):
-        # The CEO decision of 2026-09-15, encoded: the cap applies to new
+        # The User decision of 2026-09-15, encoded: the cap applies to new
         # documents only. Same byte count, same cap; the exempt list is the
         # only difference between the two verdicts.
         old = self.doc(9000, task="task-0081")
@@ -324,7 +324,7 @@ class InjectionBudgetTest(unittest.TestCase):
                 if ln.startswith("- task-")]
 
     def test_the_oldest_index_lines_go_before_the_document_is_touched(self):
-        # The order the CEO chose on 2026-09-15, after the reverse order was
+        # The order the User chose on 2026-09-15, after the reverse order was
         # built and measured: this block's contract is the newest document in
         # full, so pointers are spent before content is.
         block = self.render(inject_budget_bytes=9300)

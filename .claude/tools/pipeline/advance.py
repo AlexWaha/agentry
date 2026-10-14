@@ -12,7 +12,7 @@ parks for the commit and then goes straight to the merge check - see
 stage_checkpoints().
 
 Registration backstop: a task may only ENTER the pipeline when its file exists
-in tasks/active/, its status is released by the CEO (`active`/`review`), its
+in tasks/active/, its status is released by the User (`active`/`review`), its
 Acceptance Criteria are non-empty, and - when it names a spec - that spec is
 `approved`. Spec-driven discipline enforced in code, not prose.
 
@@ -66,7 +66,7 @@ FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 CRITERIA_RE = re.compile(r"##\s*Acceptance Criteria\s*\n(.*?)(\n##\s|\Z)", re.DOTALL)
 CHECKBOX_RE = re.compile(r"-\s*\[[ x]\]")
 
-# The one refusal that waits on the CEO rather than on an agent (task-0114,
+# The one refusal that waits on the User rather than on an agent (task-0114,
 # FR-50): the spec is not approved. Every other refusal is work for an agent.
 # The marker is shared by the refusal text and refusal_human(), so the two
 # cannot drift apart.
@@ -190,7 +190,7 @@ def check_task_ready(task: str) -> str:
             if spec_fm.get("status") != "approved":
                 return (f"{task}: spec '{spec_id}' has status "
                         f"'{spec_fm.get('status', '?')}' - {SPEC_NOT_APPROVED}. "
-                        f"Surface it to the CEO.")
+                        f"Surface it to the User.")
         return ""
     except Exception:
         return ""  # fail-open
@@ -211,7 +211,7 @@ def _register_tree(task: str, task_type: str, which: str) -> dict | None:
 
 
 def refusal_human(task: str, refusal: str) -> str:
-    """The sentence for the CEO when a refusal waits on him, else "".
+    """The sentence for the User when a refusal waits on the User, else "".
 
     The model reads `message` in the Bash tool result; the person reads this,
     through hooks/refusal_notice.py (PostToolUse on Bash). NEVER raises: a message
@@ -240,7 +240,7 @@ def _merge_wait(task: str, run: dict, waiting: str) -> dict:
     journals `merged`; the write that sets the wait journals `parked`.
 
     A park nobody writes down is invisible: stop_gate.py sees an idle slot and
-    hands the working tree to the next backlog task while the CEO is still
+    hands the working tree to the next backlog task while the User is still
     reading the diff on this branch. Opens its own connection because callers
     have already closed theirs. Fail-open: bookkeeping never breaks the run."""
     try:
@@ -265,7 +265,7 @@ def finish_or_wait_for_merge(task: str, run: dict) -> int:
     done/ once git confirms the merge - and until then the task keeps saying it
     is waiting for one."""
     # The branch recorded at registration, not the file's current `branch:`: the file
-    # is not in the CEO's diff, and a line added to it after the commit approval
+    # is not in the User's diff, and a line added to it after the commit approval
     # must not point this check at a branch that is already merged.
     declared = state.task_branch(task)
     report = git_state.task_report(task)
@@ -293,7 +293,7 @@ def finish_or_wait_for_merge(task: str, run: dict) -> int:
                       f"'[{task}]' commit. This is UNKNOWN, not merged, so the task stays "
                       f"out of tasks/done/. If its work rides on another task's branch, "
                       f"registration did not record that branch and editing the file now "
-                      f"changes nothing (it is frozen in the run row). The CEO decides: "
+                      f"changes nothing (it is frozen in the run row). The User decides: "
                       f"the orchestrator re-registers the task with 'branch: <type>/task-NNNN' "
                       f"declared, or retags the carrying commit '[{task}]'; otherwise push "
                       f"the branch.")
@@ -307,7 +307,7 @@ def finish_or_wait_for_merge(task: str, run: dict) -> int:
         run = _merge_wait(task, run, "merge")
         who = ("Merge the approved branch into the trunk locally (solo workflow mode)"
                if pretool_gate.workflow_mode() == pretool_gate.WORKFLOW_SOLO else
-               "The CEO merges the PR in the web UI")
+               "The User merges the PR in the web UI")
         return result("park", task, run,
                       f"The main branch does not carry this task yet: {where}. "
                       f"{who}; re-run advance.py afterwards and the file "
@@ -364,7 +364,7 @@ def stage_checkpoints(stage_def: dict) -> list:
     """The checkpoints this stage really has, narrowed by the workflow mode.
 
     In `solo` mode nothing is pushed: the approved branch is merged into the
-    trunk locally and the CEO pushes the trunk himself later. A push checkpoint
+    trunk locally and the User pushes the trunk later. A push checkpoint
     there gates a step that never happens, which is why the first task of an
     unattended run reached `ready` and stopped for the night. The mode drives
     the list rather than a branch inside the checkpoint block, so there is one
@@ -394,7 +394,7 @@ def start_stage(pipeline: dict, which: str, task_type: str) -> str:
     `skip_for_types` does not name the type (case-insensitive).
 
     This is where small work skips the build flow's plan step (task-0045), as
-    configuration and not as a per-task flag: the CEO's rule is "bugfix and
+    configuration and not as a per-task flag: the User's rule is "bugfix and
     techdebt skip it, feature always asks", and approvals.never_granted() still
     refuses the plan at every level. Read once, at registration - a run in
     flight keeps the stage it is on. A stage list that skips everything, or one
@@ -456,10 +456,10 @@ def _stale_send_back(conn, task: str, run: dict, behind: int, back: str, budget:
                      was: str) -> int:
     """The trunk moved on after this branch was cut: what the gates judged (or what
     would merge) is not the code on the trunk. Send the run back to `back`, the stage
-    that runs the suite, keeping the commit approval (the CEO approved the work, not
+    that runs the suite, keeping the commit approval (the User approved the work, not
     the base). `was` says where the run stood. The sends are counted per run: an agent
     that never merges the trunk would loop test, review and stale forever, so the
-    `retry_budget`-th one BLOCKS the run for the CEO. Closes `conn`."""
+    `retry_budget`-th one BLOCKS the run for the User. Closes `conn`."""
     sent = int(run.get("stale_sendbacks") or 0) + 1
     if sent >= budget:
         state.set_fields(conn, task, stale_sendbacks=sent, stage_status=state.ST_BLOCKED,
@@ -469,7 +469,7 @@ def _stale_send_back(conn, task: str, run: dict, behind: int, back: str, budget:
         return result("blocked", task, run,
                       f"{was}, but {worktree.stale_message(behind)}. The run was already sent "
                       f"back {sent - 1} times for this and the worktree still lacks trunk "
-                      f"commits - BLOCKED, needs CEO. Do not auto-retry.")
+                      f"commits - BLOCKED, needs the User. Do not auto-retry.")
     state.set_fields(conn, task, stage=back, stage_status=state.ST_IN_PROGRESS,
                      awaiting_human="", retries=0, continuations=0, stale_sendbacks=sent)
     run = state.get_run(conn, task)
@@ -644,7 +644,7 @@ def main() -> int:
     if cur == "done":
         conn.close()
         if run.get("stage_status") == state.ST_ABANDONED:
-            # Dropped by the CEO: nothing merged and nothing is owed, so no git read
+            # Dropped by the User: nothing merged and nothing is owed, so no git read
             # and no merge park.
             return result("done", args.task, run,
                           f"{args.task} was abandoned ({run.get('abandon_reason') or 'no reason'})"
@@ -687,13 +687,13 @@ def main() -> int:
     if run["stage_status"] == state.ST_BLOCKED:
         conn.close()
         return result("blocked", args.task, run,
-                      "task is BLOCKED - needs CEO. Do not auto-retry.")
+                      "task is BLOCKED - needs the User. Do not auto-retry.")
 
     stage_def = state.get_stage(pipeline, cur, which) or {}
 
     # 2. Human-checkpoint tail stage (commit, then push). A checkpoint listed in
     # the stage's optional "auto_approve" array is approved by the script itself
-    # (no CEO parking) - for flows where human participation is optional. The
+    # (no User parking) - for flows where human participation is optional. The
     # approval FLAG is still set, so pretool_gate / stop_gate work unchanged.
     # Default (key absent / empty) keeps both checkpoints human-approved.
     checkpoints = stage_checkpoints(stage_def)
@@ -704,14 +704,14 @@ def main() -> int:
         # The first checkpoint still unapproved is the one to park on; none left
         # means the tail of the stage is complete, so route to the merge check -
         # in solo mode the local merge is what satisfies it, in pr mode the
-        # CEO's merge of the pushed branch. Same check either way.
+        # User's merge of the pushed branch. Same check either way.
         # A checkpoint name with no approval field can never be approved, so it
         # stays pending (fail-closed) and the park message names it.
         pending = next((c for c in checkpoints
                         if not run.get(APPROVAL_FIELD.get(c, ""))), None)
         if (pending is None and approvals.COMMIT in checkpoints and run.get("worktree")
                 and run.get("commit_approved")):
-            # The commit approval is bound to the change set the CEO read. A tree that
+            # The commit approval is bound to the change set the User read. A tree that
             # no longer holds that change set (an overlapping sync, a late edit) or
             # cannot be read voids the approval and parks the run again, so the diff
             # is shown a second time.
@@ -738,7 +738,7 @@ def main() -> int:
             fresh_park = run.get("awaiting_human") != pending
             fields = {"awaiting_human": pending}
             if pending == approvals.COMMIT and run.get("worktree"):
-                # What the CEO is shown is what the approval will be bound to: recorded
+                # What the User is shown is what the approval will be bound to: recorded
                 # at every park, and a park whose tree moved since the last one counts
                 # as fresh, so the diff is delivered again.
                 bound, unbound = _commit_binding(args.task, run)
@@ -774,14 +774,14 @@ def main() -> int:
                        if approvals.granted(approvals.COMMIT, sorted(auto)) and not refused_auto
                        else
                        "Review passed. Stage files, surface the full diff, and wait for "
-                       "CEO commit approval (approve.py --gate commit). git commit is "
+                       "User commit approval (approve.py --gate commit). git commit is "
                        f"hook-blocked until then. After the commit: {after_commit}"),
             "push": ("Checkpoint 'push' auto-approved. Perform the git push now, "
                      "then re-run advance.py."
                      if approvals.granted(approvals.PUSH, sorted(auto)) else
-                     "Committed. Wait for CEO push approval (approve.py --gate push). "
+                     "Committed. Wait for User push approval (approve.py --gate push). "
                      "git push is hook-blocked until then."),
-            "plan": ("Plan awaiting CEO approval. Present it, and wait for the CEO to "
+            "plan": ("Plan awaiting User approval. Present it, and wait for the User to "
                      "approve (approve.py --gate plan). advance.py will not leave "
                      f"'{cur}' until that is recorded, at any approvals level."),
         }
@@ -798,13 +798,13 @@ def main() -> int:
         if refused_auto:
             message += (f" The level would approve this commit, but the change set of the "
                         f"worktree could not be read ({refused_auto}), so it was NOT approved: "
-                        f"an approval is never recorded without the tree it covers. The CEO "
+                        f"an approval is never recorded without the tree it covers. The User "
                         f"approves it.")
         elif run["awaiting_human"] == "commit" and bound:
             message += (f" The approval binds change set {bound[:12]}: a byte changed after the "
                         f"diff is shown (formatter, late edit) voids it, and advance.py parks "
                         f"the task again.")
-        # The one place the CEO is handed the commit diff (FR-53/54). deliver()
+        # The one place the User is handed the commit diff (FR-53/54). deliver()
         # answers "" unless the run is genuinely parked on an unapproved commit,
         # so an auto-approved commit gets nothing here.
         if run["awaiting_human"] == "commit":
@@ -850,9 +850,9 @@ def main() -> int:
         conn.close()
         owner = stage_owner(pipeline, nxt, args.task, which)
         # A checkpoint stage is not driven by the Stop hook, so nothing would ever
-        # tell the orchestrator to park the plan for the CEO. Say it here.
+        # tell the orchestrator to park the plan for the User. Say it here.
         nxt_def = state.get_stage(pipeline, nxt, which) or {}
-        then = (f" '{nxt}' awaits the CEO's plan approval: re-run advance.py --task "
+        then = (f" '{nxt}' awaits the User's plan approval: re-run advance.py --task "
                 f"{args.task} to park it." if approvals.PLAN in stage_checkpoints(nxt_def) else "")
         return result("advanced", args.task, run,
                       f"gate passed: '{cur}' -> '{nxt}' (owner: {owner}). Proceed.{then}")
@@ -864,7 +864,7 @@ def main() -> int:
         run = state.get_run(conn, args.task)
         conn.close()
         return result("blocked", args.task, run,
-                      f"gate failed {retries}/{budget} times - BLOCKED. Surface to CEO, stop retrying.")
+                      f"gate failed {retries}/{budget} times - BLOCKED. Surface to User, stop retrying.")
 
     state.set_fields(conn, args.task, stage_status=state.ST_GATE_FAILED, retries=retries)
     run = state.get_run(conn, args.task)

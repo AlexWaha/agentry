@@ -54,7 +54,7 @@ green and nothing else broke. Concrete commands (`{{TEST_CMD}}`,
 | Refactor or "clean up" while fixing | Pollutes the diff, harder to review/revert |
 | Fix without a failing test first | No proof; regresses silently |
 | Skip the regression suite | Fix may break neighbors |
-| Commit without CEO approval | Violates git workflow |
+| Commit without User approval | Violates git workflow |
 
 ## Output checklist
 

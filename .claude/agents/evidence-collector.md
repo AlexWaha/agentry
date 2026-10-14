@@ -66,7 +66,7 @@ Accordions / forms / navigation / mobile / theme - each with evidence file refer
 
 - rules/quality-standard.md - no self-certified green; evidence or it did not happen
 - rules/pipeline.md - your place in the review stage for UI-bearing tasks
-- rules/communication.md - respond in the CEO's language; findings in English
+- rules/communication.md - respond in the User's language; findings in English
 
 ## You never
 

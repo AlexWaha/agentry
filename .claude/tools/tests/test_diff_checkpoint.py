@@ -191,7 +191,7 @@ class PreviewFallbackTest(SandboxedRunTest):
                                            side_effect=RuntimeError("git gone")):
             note = diff_checkpoint.deliver("task-0806", inject=True)
 
-        self.assertEqual(" Tell the CEO to run /diff for the full diff.", note)
+        self.assertEqual(" Tell the User to run /diff for the full diff.", note)
 
     def test_the_preview_is_capped_and_points_at_the_full_diff(self):
         huge = "\n".join(f"+line {i} " + "x" * 60 for i in range(500))
@@ -255,7 +255,7 @@ class PreviewFallbackTest(SandboxedRunTest):
                 unittest.mock.patch.object(git_state, "_git", return_value=(1, "")):
             note = diff_checkpoint.deliver("task-0843", inject=True)
 
-        self.assertEqual(" Tell the CEO to run /diff for the full diff.", note)
+        self.assertEqual(" Tell the User to run /diff for the full diff.", note)
 
     def test_a_git_call_that_raises_degrades_to_the_bare_pointer(self):
         self.seed("task-0844", awaiting_human="commit")
@@ -265,7 +265,7 @@ class PreviewFallbackTest(SandboxedRunTest):
                 unittest.mock.patch.object(git_state, "_git", side_effect=OSError("no git")):
             note = diff_checkpoint.deliver("task-0844", inject=True)
 
-        self.assertEqual(" Tell the CEO to run /diff for the full diff.", note)
+        self.assertEqual(" Tell the User to run /diff for the full diff.", note)
 
 
 class ChangesTest(unittest.TestCase):
@@ -425,7 +425,7 @@ class AdvanceParkIntegrationTest(SandboxedRunTest):
 
         self.assertEqual("park", out["action"])
         self.assertIn("M feature.py", out["message"])
-        self.assertIn("wait for CEO commit approval", out["message"])
+        self.assertIn("wait for User commit approval", out["message"])
 
     def test_an_auto_approved_commit_never_writes(self):
         self.seed("task-0832")

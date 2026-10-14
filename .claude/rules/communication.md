@@ -7,8 +7,8 @@ Rules governing language, tone, and style for all interactions and deliverables.
 ## Language
 
 - **Response language** - always respond to the user in the language they use.
-  For dispatched agents: respond to the Orchestrator/CEO in `{{COMM_LANG}}`
-  (set at onboarding; until then, mirror the language the CEO writes in).
+  For dispatched agents: respond to the Orchestrator/User in `{{COMM_LANG}}`
+  (set at onboarding; until then, mirror the language the User writes in).
   Never hardcode a specific language in an agent definition.
 - **Code language** - all code, comments, docblocks, variable names, commit messages, PR descriptions, and any generated text must be in English only (exception: user-facing translation strings).
 
@@ -69,11 +69,11 @@ Lead with the answer or action. Details and reasoning come after, not before. If
 
 ---
 
-## Subagents never ask the CEO
+## Subagents never ask the User
 
-The CEO talks to the Orchestrator and to nobody else. A dispatched agent has no
-channel to him and must not acquire one: its permission prompts surface in the main
-session, where they read as the Orchestrator interrupting, and the CEO cannot even
+The User talks to the Orchestrator and to nobody else. A dispatched agent has no
+channel to them and must not acquire one: its permission prompts surface in the main
+session, where they read as the Orchestrator interrupting, and the User cannot even
 tell which agent wants what.
 
 Two things keep that true, and both are needed:
@@ -88,23 +88,23 @@ Two things keep that true, and both are needed:
    cannot commit without a recorded approval. Bypassing prompts removes the dialog,
    not the rules.
 
-If an agent needs a decision only the CEO can make, it says so in its report and
+If an agent needs a decision only the User can make, it says so in its report and
 stops. The Orchestrator then raises the card. An agent that blocks waiting for a
 human has been dispatched wrongly - the question belonged in its prompt.
 
 ### Recorded lesson
 
 SIGNATURE: subagent-prompts-reach-the-ceo
-TRIGGER:   dispatching any agent, and any time the CEO reports being interrupted
+TRIGGER:   dispatching any agent, and any time the User reports being interrupted
 WHAT:      the CEO was repeatedly asked to approve Bash calls made by a dispatched devops-engineer, four times across two sessions, while the Orchestrator reported that it was working autonomously.
 WHY:       agent definitions set no `permissionMode`, so each agent inherited the session mode; when that mode prompts, every agent prompts, and the prompt surfaces in the main conversation behind only a small "from the <agent> agent" label. Separately, `blockReadsOutsideWorkingDirectories` prompts on any path computed at run time - which is every command shaped `cd <root> && <tool> <relative path>` - and no permission mode bypasses it.
 FIX:       set `permissionMode: bypassPermissions` in every agent definition and rely on `agent_gate.py` profiles for enforcement. Never set `blockReadsOutsideWorkingDirectories` in a harness whose agents run commands with run-time paths. When a prompt appears anyway, read its stated reason and scan EVERY settings layer (user, project, local, managed) by parsing each one - do not fix the first file you happen to open, and check that `permissions` appears exactly once per file, since a duplicate key is valid JSON and the last one silently wins.
 DATE:      2026-09-13
 
-## Asking the CEO (orchestrator)
+## Asking the User (orchestrator)
 
 A question written as plain chat text is not a question. It scrolls off the screen
-behind the next tool call, and the CEO learns that something was wanted only by
+behind the next tool call, and the User learns that something was wanted only by
 re-reading the transcript. Meanwhile the pipeline sits parked and nobody knows it.
 
 **Every point where work stops and waits for a human goes through `AskUserQuestion`.**
@@ -112,7 +112,7 @@ No exceptions, and specifically including:
 
 - The tail checkpoints `workflow.mode` leaves in place: the commit, and - in `pr` mode only - the push after it.
 - Plan and spec approval.
-- A blocked task surfaced to the CEO.
+- A blocked task surfaced to the User.
 - A fork in the work where two readings lead to different deliverables.
 - Anything else that ends your turn with nothing left to do until an answer arrives.
 
@@ -122,14 +122,14 @@ recommendation first and mark it. Prose around the card is for context, never fo
 question itself.
 
 The reverse also holds. Do not raise a card for something you can decide from the
-code, the rules, or a sensible default. A card for a question that was never the CEO's
-to answer is as expensive as a missed one, because it teaches him to click through
-them without reading.
+code, the rules, or a sensible default. A card for a question that was never the User's
+to answer is as expensive as a missed one, because it teaches them to click through
+without reading.
 
 ### Recorded lesson
 
 SIGNATURE: checkpoint-must-be-a-card
-TRIGGER:   ending a turn while waiting on the CEO for anything
+TRIGGER:   ending a turn while waiting on the User for anything
 WHAT:      parked plan approval and spec approval in plain prose; the CEO had to re-read the whole message to work out that something was expected of him, twice.
 WHY:       chat text has no state - it scrolls, and nothing on screen shows that the pipeline is waiting or on what.
 FIX:       if the turn ends with work stopped, the last tool call is `AskUserQuestion`. Writing the question in prose instead is the defect, however well the prose is written.

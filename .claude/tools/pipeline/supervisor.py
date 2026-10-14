@@ -88,7 +88,7 @@ STALLED  in flight, nothing above applies, the STAGE has not changed for
          row's `updated` column - see stage_age() for the defect that
          distinction fixes.
 HEALTHY  anything else, including a run parked on a human by design (a task
-         waiting for the CEO's commit approval is not stalled, it is correct).
+         waiting for the User's commit approval is not stalled, it is correct).
 
 FREQUENCY WAS RETIRED: WHAT `continuations` CAN AND CANNOT SAY
 -------------------------------------------------------------
@@ -183,7 +183,7 @@ parks it, and nothing in this file signals an agent (the only os.kill is stop(),
 aimed at this lane's own daemon; pid_alive() only probes with signal 0, which
 delivers nothing). Why the one place this process does less than
 it could: a live owner or dispatch is, by definition, on the tree, so a relaunch
-is a second writer racing the first; parking costs a CEO intervention to
+is a second writer racing the first; parking costs a User intervention to
 surface something the evidence cannot prove is stuck; and killing is the failure
 this label exists to avoid - a watchdog that stops work to report that work had
 stopped. The report lands in the supervisor log and in `--status`. It does NOT
@@ -264,7 +264,7 @@ until the next one starts.
 
 THE IDLE ORCHESTRATOR: DETECTED, NOT REMEDIED
 ---------------------------------------------
-The CEO's case: the orchestrator finishes a step and writes prose instead of
+The User's case: the orchestrator finishes a step and writes prose instead of
 starting the next. DETECTED: the Stop hook is nagging (`continuations` written
 within stall_seconds) on a stage frozen for stall_seconds, and for hung_seconds
 nothing has moved - no gate log row, no changed file, no task file edit. That is
@@ -288,13 +288,13 @@ produced silence from both. Ninety minutes of it, measured (task-0067).
 
 The decision, and the reason it went that way: stop_gate.py surfaces it, once,
 by setting `awaiting_human=blocked` and blocking the stop with an instruction to
-raise it with the CEO. It owns this because its output is the only one of the two
-that lands in the live session the CEO reads; this process is detached, and
+raise it with the User. It owns this because its output is the only one of the two
+that lands in the live session the User reads; this process is detached, and
 notify() writes to a log file nobody has open, so it cannot reach a human on its
 own however loudly it repeats itself. The single `awaiting_human` write also
 makes the run show up in `state.py --resume` at SessionStart, so a session that
 STARTS with a blocked run sees it too - one write, both surfaces, and it is
-cleared by a CEO rejection, which is the only exit from `blocked`. (Named that
+cleared by a User rejection, which is the only exit from `blocked`. (Named that
 way rather than by script, here and below: the forbidden-token test in
 tools/tests/test_supervisor.py reads this file for the name of the approval tool,
 and it is right to - this process must not so much as know how to call it.)
@@ -308,7 +308,7 @@ supervisor operates on one lane and never crosses lanes.
 
 HOW IT IS STARTED, AND THE ONE PLACE THAT FAILS OPEN INSTEAD OF SAFE
 --------------------------------------------------------------------
-The CEO never starts this by hand. A `SessionStart` hook runs
+The User never starts this by hand. A `SessionStart` hook runs
 `--ensure-running`, which spawns the poll loop DETACHED and as a singleton per
 lane. Detached is not a preference: a watcher that dies with the session cannot
 report that session's death, and DEAD is half of what this process is for.
@@ -372,7 +372,7 @@ RELAUNCHABLE = frozenset({STALLED, DEAD})
 # chain closes with no human in it: the spawned session drives the task,
 # advance.py clears the commit checkpoint by itself at that level, and the local
 # trunk write needs only a matching branch name, a run row and that flag. So the
-# trunk could be written overnight by a process the CEO never watches.
+# trunk could be written overnight by a process the User never watches.
 #
 # The prompt in RELAUNCH_PROMPT asks the session not to do any of it, and a
 # request is not a control: the model is free to read it differently at three in
@@ -503,9 +503,9 @@ RELAUNCH_PROMPT = (
     "that owned it ended without finishing ({why}). Read "
     ".agentry/tasks/active/{task}.md, absorb context per rules/pipeline.md, "
     "finish the stage work, then run: python .claude/tools/pipeline/advance.py "
-    "--task {task}. Do not commit without the CEO's approval, and do not "
+    "--task {task}. Do not commit without the User's approval, and do not "
     "attempt to send work to the remote, merge a branch, or record any "
-    "approval - those are the CEO's, always."
+    "approval - those are the User's, always."
 )
 
 
@@ -841,7 +841,7 @@ def coherent_climbs(entry: dict, cont: int) -> tuple[int, int]:
     WHY THIS IS COHERENCE ON EVERY POLL AND NOT AN EDGE. observe() also resets
     both counts when `continuations` decreases, which is correct and stops fresh
     corruption; it heals nothing that is already broken. MEASURED live on
-    task-0010, after a CEO rejection zeroed the counter without a stage change:
+    task-0010, after a User rejection zeroed the counter without a stage change:
 
         run.db   : stage=implement, stage_status=blocked, continuations=0
         registry : continuations=0, loop_ticks=0, stage_climbs=2
@@ -918,7 +918,7 @@ def observe(entry: dict, run: dict, now_ts: float) -> dict:
     which resets `loop_ticks` only, because that count claims adjacency and has
     to measure it; and `continuations` DECREASING, which resets both, because the
     counter these counts were derived from was reset underneath them. Only
-    a CEO rejection and a stage transition zero `continuations`, and a
+    a User rejection and a stage transition zero `continuations`, and a
     genuine slow loop climbs or stands still - it never decreases - so this
     branch cannot fire on one.
 
@@ -1105,7 +1105,7 @@ def classify(run: dict, entry: dict, cfg: dict, now_ts: float) -> tuple[str, str
     ceiling = int(cfg.get("continuation_ceiling", 30))
     cont = int(run.get("continuations") or 0)
 
-    # Not in flight: a finished run, or one already parked for the CEO. Neither
+    # Not in flight: a finished run, or one already parked for the User. Neither
     # is the supervisor's business, and a blocked run in particular must never
     # be poked again - it was surfaced to a human on purpose.
     if stage == "done":
@@ -1113,10 +1113,10 @@ def classify(run: dict, entry: dict, cfg: dict, now_ts: float) -> tuple[str, str
     if status == state.ST_BLOCKED:
         # No action, and deliberately not silence: surfacing a blocked run is
         # stop_gate.py's job, because its output is the only one of the two that
-        # lands in the live session where the CEO reads. This process is
+        # lands in the live session where the User reads. This process is
         # detached and writes to a log file nobody has open. See the SURFACING A
         # BLOCKED RUN note in the module docstring.
-        return HEALTHY, ("already parked blocked for the CEO (surfaced by the Stop hook, "
+        return HEALTHY, ("already parked blocked for the User (surfaced by the Stop hook, "
                          "which sets awaiting_human=blocked; not this supervisor's to poke)")
     if run.get("awaiting_human"):
         return HEALTHY, f"parked on a human by design (awaiting_human={run['awaiting_human']})"
@@ -1298,7 +1298,7 @@ def classify(run: dict, entry: dict, cfg: dict, now_ts: float) -> tuple[str, str
         #   - not STALLED, because a relaunch would put a second session on a
         #     tree that already has one (the fourth-round regression, and it
         #     stays fixed: a loop climbing every other poll lands here);
-        #   - not LOOPING, because parking a live run `blocked` costs a CEO
+        #   - not LOOPING, because parking a live run `blocked` costs a User
         #     intervention and a nag is not proof of a loop.
         #
         # WHAT ACTUALLY ENDS A RUN THAT SITS HERE, corrected: not this branch,
@@ -1312,7 +1312,7 @@ def classify(run: dict, entry: dict, cfg: dict, now_ts: float) -> tuple[str, str
         #
         # Ten hours is the MACHINE cover, and it is the only guarantee here. The
         # near-term cover is human: the same nag that lands in `continuations`
-        # also lands in the session the CEO reads, telling the model to finish the
+        # also lands in the session the User reads, telling the model to finish the
         # stage. A person noticing is not a machine bound, and this comment must
         # not be read as one.
         #
@@ -1357,7 +1357,7 @@ def log(text: str) -> None:
 
 
 def notify(text: str) -> None:
-    """Surface something to the human: the log file AND stdout, because the CEO
+    """Surface something to the human: the log file AND stdout, because the User
     may be reading either. Never raises."""
     log(text)
     print(f"{state.now()} {text}", flush=True)

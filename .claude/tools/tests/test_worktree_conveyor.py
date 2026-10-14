@@ -755,7 +755,7 @@ PIPELINES = {"pipelines": {"build": {"editing_stages": ["implement", "test", "re
     {"name": "test", "owner": "qa-engineer"},
     {"name": "review", "owner": "reviewer"},
     {"name": "ready", "owner": "orchestrator", "checkpoints": ["commit"]},
-    {"name": "done", "owner": "ceo", "terminal": True}]}}}
+    {"name": "done", "owner": "user", "terminal": True}]}}}
 
 
 class RealWorkspaceCase(WorkspaceCase):

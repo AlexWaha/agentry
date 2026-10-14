@@ -2,7 +2,7 @@
 """Repository autodetect for onboarding (FR-60, FR-61).
 
 Finds every git repository of a workspace, proposes a stack for each from the
-manifests it holds, and - once the CEO has corrected the proposal - writes the
+manifests it holds, and - once the User has corrected the proposal - writes the
 confirmed table into `repos{}` (contract C-3) and `lanes{}` (contract C-4) of
 `.agentry/pipeline.json`. Detect and propose, never assume: a directory with a
 `.git` and no recognised manifest is listed with stack `unknown`, not omitted.
@@ -28,7 +28,7 @@ Claude Code unless the orchestrator sets AGENTRY_MAIN_THREAD=1 (see
 refuse_unattested_live_write for why that is an attestation, not a detection).
 
 CLI:
-    python repo_scan.py --root DIR                    # table for the CEO
+    python repo_scan.py --root DIR                    # table for the User
     python repo_scan.py --root DIR --json             # [{key,path,stack,manifests}]
     python repo_scan.py --root DIR --write FILE       # write the scan as is
     python repo_scan.py --root DIR --table T.json --write FILE   # write the corrected table
@@ -55,7 +55,7 @@ import git_state
 import state
 
 # Manifest file name -> stack identifier. Order matters: the first manifest found
-# names the stack, every manifest found is still listed so the CEO can see a
+# names the stack, every manifest found is still listed so the User can see a
 # mixed repo and correct the stack.
 MANIFESTS = (
     ("pyproject.toml", "python"),
@@ -164,7 +164,7 @@ def scan(root: Path) -> list[dict]:
 
 
 def render(rows: list[dict]) -> str:
-    """The table the CEO corrects."""
+    """The table the User corrects."""
     header = ("key", "path", "stack", "manifests")
     body = [(r["key"], r["path"], r["stack"], ", ".join(r["manifests"]) or "-") for r in rows]
     widths = [max(len(line[i]) for line in [header, *body]) for i in range(4)]
@@ -408,7 +408,7 @@ def main() -> int:
                                  allow_abbrev=False)
     ap.add_argument("--root", default=".", help="workspace root to scan")
     ap.add_argument("--json", action="store_true", help="print the scan as JSON")
-    ap.add_argument("--table", help="JSON list of the CEO-corrected rows to write instead of the scan")
+    ap.add_argument("--table", help="JSON list of the User-corrected rows to write instead of the scan")
     ap.add_argument("--write", metavar="FILE", help="pipeline.json to write repos{} and lanes{} into")
     args = ap.parse_args()
 

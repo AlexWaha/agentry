@@ -1,13 +1,13 @@
 ---
 name: financial-model
-description: Build financial projections - explicit assumptions, revenue model, P&L, cash flow, breakeven, unit economics (CAC/LTV/MRR), three scenarios (best/base/worst), YAML data. Use when the CEO asks for a financial model, revenue/runway projections, pricing analysis, unit economics, or fundraising numbers.
+description: Build financial projections - explicit assumptions, revenue model, P&L, cash flow, breakeven, unit economics (CAC/LTV/MRR), three scenarios (best/base/worst), YAML data. Use when the User asks for a financial model, revenue/runway projections, pricing analysis, unit economics, or fundraising numbers.
 allowed-tools: Read, Grep, Glob, Write, WebSearch, WebFetch
 ---
 
 # Financial Model - Projections and Analysis
 
 > STATUS: DEFERRED until business planning begins - do not invoke before the
-> CEO activates the Business department.
+> User activates the Business department.
 
 Comprehensive financial model with explicit assumptions, multi-year projections,
 unit economics, and scenario analysis. Outputs narrative markdown plus
@@ -46,7 +46,7 @@ unit economics, TAM/SAM/SOM); pricing tiers and audience segments defined.
 11. **Write deliverables:** `docs/finance/financial-model.md` (narrative),
     `docs/finance/projections.yaml` (structured data),
     `docs/finance/breakeven-analysis.md` (focused breakeven + runway).
-12. **Present to CEO:** top-5 assumptions, Y1 base revenue, breakeven month,
+12. **Present to the User:** top-5 assumptions, Y1 base revenue, breakeven month,
     funding ask, unit economics, best/worst spread, biggest risk + mitigation.
     Wait for explicit approval.
 

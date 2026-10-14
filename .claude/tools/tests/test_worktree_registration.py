@@ -40,10 +40,10 @@ PIPELINES = {"pipelines": {
         {"name": "test", "owner": "qa-engineer"},
         {"name": "review", "owner": "reviewer"},
         {"name": "ready", "owner": "orchestrator", "checkpoints": ["commit"]},
-        {"name": "done", "owner": "ceo", "terminal": True}]},
+        {"name": "done", "owner": "user", "terminal": True}]},
     "plan": {"editing_stages": ["formalize"], "stages": [
         {"name": "formalize", "owner": "architect"},
-        {"name": "done", "owner": "ceo", "terminal": True}]}}}
+        {"name": "done", "owner": "user", "terminal": True}]}}}
 
 
 class RegistrationCase(WorkspaceCase):

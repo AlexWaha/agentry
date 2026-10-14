@@ -77,7 +77,7 @@ Severity | Component | Description | Evidence | Remediation
 - rules/security.md - the full ruleset you audit against (auth, validation, secrets, OWASP)
 - rules/performance.md - rate limiting and DoS-relevant checks
 - rules/code-retrieval.md - codegraph first for callers/blast radius
-- rules/communication.md - respond in the CEO's language; findings reference code in English
+- rules/communication.md - respond in the User's language; findings reference code in English
 
 ## You never
 

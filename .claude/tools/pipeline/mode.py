@@ -23,7 +23,7 @@ except `talk` is whatever pipeline.json declares under `pipelines`, so a
 workspace that declares a `research` flow gets a `research` mode for free. The
 three names above are the fallback for a config that declares nothing.
 
-`--show` prints all three dials (mode, approvals, swarm), because the CEO reads
+`--show` prints all three dials (mode, approvals, swarm), because the User reads
 them together; the other two are set by approvals.py and swarm.py.
 
 Fail-open by design: an unreadable or missing file means the default flow, so a

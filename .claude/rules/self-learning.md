@@ -10,7 +10,7 @@ After ANY of the following, update the knowledge base immediately - same session
 
 1. **Mistake made** - wrong assumption, missed precondition, broke convention, redid existing work
 2. **Surprise hit** - API behaved differently than expected, library has non-obvious quirk, tool failed unexpectedly
-3. **CEO correction** - explicit "don't do that", "do it this way next time"
+3. **User correction** - explicit "don't do that", "do it this way next time"
 4. **Workflow friction** - same manual step repeated 3+ times, same clarification asked repeatedly
 
 ### Where to record

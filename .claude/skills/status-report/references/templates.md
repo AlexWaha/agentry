@@ -27,7 +27,7 @@ Incomplete.
 
 A phase is "complete" when every task assigned to it is in
 `.agentry/tasks/done/`, every expected deliverable above exists in `docs/`,
-and CEO approval is noted in the epic or task completion notes.
+and User approval is noted in the epic or task completion notes.
 
 ## Output skeleton
 

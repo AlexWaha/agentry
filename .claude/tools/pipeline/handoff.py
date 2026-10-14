@@ -217,7 +217,7 @@ def validate_handoff(path: Path, task: str) -> list[str]:
 
     fm = _frontmatter(text)
 
-    # CEO waiver short-circuit (recorded in the doc itself, auditable in git).
+    # User waiver short-circuit (recorded in the doc itself, auditable in git).
     if fm.get("waived", "").lower() in ("true", "yes") and fm.get("reason", "").strip():
         return []
 
@@ -299,7 +299,7 @@ def uncovered_done_tasks() -> list[dict]:
             umbrella = state.covering_umbrella(task)
             if umbrella and covered_required(umbrella):
                 continue
-            # A task the CEO dropped (approve.py --abandon) merged nothing to document.
+            # A task the User dropped (approve.py --abandon) merged nothing to document.
             if state.is_abandoned(task):
                 continue
             out.append({"task": task, "reason": reason})
@@ -338,7 +338,7 @@ def drop_scaffold_markers(still_owed: set) -> None:
 
 def clean_slate() -> bool:
     """True on a checkout that has never run a task here: no handoff doc on disk
-    AND nothing in tasks/done/. Both folders are gitignored (task-0063, CEO
+    AND nothing in tasks/done/. Both folders are gitignored (task-0063, User
     decision 2026-10-06: the docs describe one project's internals and the repo
     is public), so a fresh clone carries the full tagged history of main and none
     of the documents. Either condition alone is NOT a clean slate: docs with an
@@ -640,7 +640,7 @@ def scaffold(task: str, force: bool = False) -> tuple[bool, str]:
 
 
 def waive(task: str, reason: str) -> str:
-    """CEO-approved escape hatch, orchestrator-only (agent_gate denies it inside
+    """User-approved escape hatch, orchestrator-only (agent_gate denies it inside
     subagents). Recorded in the doc itself so the waiver is auditable in git."""
     d = handoff_dir()
     d.mkdir(parents=True, exist_ok=True)
@@ -650,7 +650,7 @@ def waive(task: str, reason: str) -> str:
         f"---\ntask: {task}\nwaived: true\nreason: {reason}\n"
         f"date: {today}\n---\n\n"
         f"# Handoff: {task} - WAIVED\n\n"
-        f"Handoff doc waived by CEO decision: {reason}\n",
+        f"Handoff doc waived by User decision: {reason}\n",
         encoding="utf-8")
     return rel(path)
 
@@ -663,7 +663,7 @@ def main() -> int:
     parser.add_argument("--inject", action="store_true",
                         help="SubagentStart hook: newest handoff doc in full, older ones as index lines")
     parser.add_argument("--waive", metavar="TASK",
-                         help="waive the handoff for a task (orchestrator-only, CEO approval required)")
+                         help="waive the handoff for a task (orchestrator-only, User approval required)")
     parser.add_argument("--reason", default="", help="reason for --waive")
     args = parser.parse_args()
 

@@ -21,7 +21,7 @@ This is the foundational rule. Every other rule builds on top of it. No exceptio
 - A branch is only trustworthy if it was cut from up-to-date `main`. Off any other base the pipeline gates are not enforced - so its "green" is meaningless.
 - Inherited or "NOT VERIFIED" code on your branch is yours to gate. The moment it is on your branch, you own it - run its stack's gate before any green claim.
 
-Re-running a gate beats burning the CEO's time, money, and trust on rework.
+Re-running a gate beats burning the User's time, money, and trust on rework.
 
 ### Verification Discipline (the three steps before any green claim)
 
@@ -56,7 +56,7 @@ No half-assing. This is a funded startup building a real product for real users.
 
 Before submitting ANY result, ask yourself:
 
-> "Would I present this to investors? Would I show this to the CEO in a board meeting?"
+> "Would I present this to investors? Would I show this to the User in a board meeting?"
 
 If the answer is no - redo it. There is no "draft quality" in this team.
 
@@ -97,9 +97,9 @@ If the answer is no - redo it. There is no "draft quality" in this team.
 - Descriptive test names that explain the scenario and expected outcome
 - Self-contained tests (DAMP over DRY)
 
-## CEO Reviews Everything
+## The User Reviews Everything
 
-The CEO/CTO reviews all output. Poor quality wastes:
+The User reviews all output. Poor quality wastes:
 - Time (rework cycles)
 - Money (wasted compute and context)
 - Momentum (delays block downstream phases)
@@ -145,7 +145,7 @@ Python cannot.
 MSYS2 mounts a real character device at that path (`test -c /dev/null`
 succeeds), so the output is genuinely discarded and the directory is unchanged
 afterwards. It is still forbidden here, but by **policy, not physics**: it is
-the CEO's standing rule, `gates.forbid_dev_null` enforces it, and only the CEO
+the User's standing rule, `gates.forbid_dev_null` enforces it, and only the User
 relaxes it. Do not restate the old mechanism as the justification.
 
 **If you re-measure this, pin the shell first.** From Python a bare `bash` on
@@ -165,7 +165,7 @@ a third variant - the answer is to let the output through.
 
 ```bash
 # FORBIDDEN by policy - the Unix spelling (denied by gates.forbid_dev_null).
-# Measured: it works here and creates nothing. Denied anyway, by CEO rule.
+# Measured: it works here and creates nothing. Denied anyway, by User rule.
 command >/dev/null
 command 2>/dev/null
 command &>/dev/null
@@ -258,7 +258,7 @@ Project-specific command invocations (build, test, format, lint, migrate) live i
 
 ## Latest Versions Policy
 
-All packages, frameworks, tools, and dependencies must be the **latest stable version** at the time of installation. No pinning to old versions without explicit CEO approval.
+All packages, frameworks, tools, and dependencies must be the **latest stable version** at the time of installation. No pinning to old versions without explicit User approval.
 
 Concrete versions for this project's stack ({{LANG}}, {{FRAMEWORK}}, database, cache, runtime) live in `.agentry/project/stack.md`. That file is the single source of truth for current versions.
 
@@ -268,7 +268,7 @@ Concrete versions for this project's stack ({{LANG}}, {{FRAMEWORK}}, database, c
 - Container images (Docker, etc.): **explicit version tags** (e.g., `{{LANG}}:{{VERSION}}`), never the `latest` tag
 - Before adding any dependency: verify it supports the stack versions documented in `project/stack.md`
 - Before upgrading: verify cross-compatibility with the existing stack
-- If a package does not support the current stack: find an alternative or flag to CEO
+- If a package does not support the current stack: find an alternative or flag to the User
 - Security patches: apply immediately, no delays
 - Major version upgrades: verify changelog and breaking changes before upgrading
 

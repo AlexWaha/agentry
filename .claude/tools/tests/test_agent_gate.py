@@ -2,7 +2,7 @@
 
 `approvals.py <level>` and `mode.py <mode>` write `.agentry/state/approvals` and
 `.agentry/state/mode`. The approvals level decides which checkpoints clear
-without the CEO, so it is the same privilege boundary as a recorded approval.
+without the User, so it is the same privilege boundary as a recorded approval.
 Only the approval script was gated: a `docs`, `readonly` or `dev` agent that ran
 either setter through Bash got exit 0, even though task-0075 already denies the
 docs profile a Write to the same files.
@@ -462,7 +462,7 @@ class DocsProfileProtectedStateTest(unittest.TestCase):
     """task-0075 (absorbed 0050 / FR-8): is_docs_path() accepts all of .agentry/,
     and the approvals level, workflow mode, run.db approval flags, solo trunk_push
     approval and memory stamps live in .agentry/state/, so a docs agent could set
-    what clears without the CEO. The whole state tree is denied."""
+    what clears without the User. The whole state tree is denied."""
 
     PROTECTED = (".agentry/state/approvals", ".agentry/state/mode",
                  ".agentry/state/trunk_push", ".agentry/state/run.db",

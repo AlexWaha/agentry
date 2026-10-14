@@ -5,7 +5,7 @@ this fix, and both verified with the real tools:
 
   * `git log -1 --pretty=format:auto --output=.agentry/state/approvals` writes exactly
     `auto` into the approvals file; the same trick with a JSON `--pretty` writes a valid
-    trunk-push marker (the CEO's one-shot trunk-push approval).
+    trunk-push marker (the User's one-shot trunk-push approval).
   * `python .claude/tools/memory/memory.py --export --out FILE` overwrites any file with a
     markdown export: pipeline.json, a state file or gate code (a broken gate script exits
     non-2, which is an allow). `--db FILE` creates a store at any path.

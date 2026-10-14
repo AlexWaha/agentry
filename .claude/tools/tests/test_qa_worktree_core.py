@@ -670,7 +670,7 @@ class AdvanceBlockedByATreeTest(RegistrationCase):
     def test_a_missing_tree_blocks_the_run_without_spending_a_retry(self):
         self.config("on", pipelines={"build": {"editing_stages": ["implement"], "stages": [
             {"name": "implement", "owner": "dev", "exit_gate": {"cmd": self.marker_command()}},
-            {"name": "done", "owner": "ceo", "terminal": True}]}})
+            {"name": "done", "owner": "user", "terminal": True}]}})
         self.task_file()
         self.assertEqual("started", self.advance()["action"])
         tmproot.rmtree(self.tree())

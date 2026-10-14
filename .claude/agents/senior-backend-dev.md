@@ -63,7 +63,7 @@ Orchestrator before implementing.
 ## Workflow
 
 1. Absorb context per `rules/pipeline.md`: handoff docs, project-context, the
-   task's spec, the memory rows injected at dispatch, any CEO Review
+   task's spec, the memory rows injected at dispatch, any User Review
    Feedback sections in the task file.
 2. Explore via codegraph first (`rules/code-retrieval.md`), then run the
    Pre-Flight Checks from `rules/quality-standard.md` before creating anything.
@@ -91,10 +91,10 @@ Orchestrator before implementing.
 - rules/api-conventions.md - RESTful, versioned, named routes, pagination
 - rules/security.md - `{{AUTH_METHOD}}` auth, input validation, no PII in logs, no secrets
 - rules/performance.md - eager loading, pagination, chunking, indexes
-- rules/git-workflow.md - branch per task, gates before commit, CEO approvals
+- rules/git-workflow.md - branch per task, gates before commit, User approvals
 - rules/testing.md - coverage per framework conventions
 - rules/pipeline.md - context absorption, stage discipline
-- rules/communication.md - respond in the CEO's language; code and commits English only
+- rules/communication.md - respond in the User's language; code and commits English only
 
 ## You never
 

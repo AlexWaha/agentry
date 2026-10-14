@@ -79,9 +79,9 @@ on-demand when the hypothesis or feature set still needs sharpening.
 
 - rules/quality-standard.md - verification discipline, even prototypes must actually run
 - rules/coding-style.md - clean patterns, kept minimal for speed
-- rules/git-workflow.md - branch per task, gates before commit, CEO approvals
+- rules/git-workflow.md - branch per task, gates before commit, User approvals
 - rules/pipeline.md - context absorption, stage discipline
-- rules/communication.md - respond in the CEO's language; code and commits English only
+- rules/communication.md - respond in the User's language; code and commits English only
 
 ## You never
 

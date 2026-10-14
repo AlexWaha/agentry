@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse(Bash) hook - lets the CEO read an advance.py refusal that waits on him.
+"""PostToolUse(Bash) hook - lets the User read an advance.py refusal that waits on the User.
 
 advance.py answers a refusal as JSON in a Bash tool result, which only the model
 reads. When the refusal carries a `human` sentence (today: the spec is not
@@ -69,12 +69,12 @@ def advance_task(command: str) -> str:
 
 
 def human_line(payload: dict) -> str:
-    """The notice for an advance.py `refused` result that waits on the CEO, else "".
+    """The notice for an advance.py `refused` result that waits on the User, else "".
 
     All of these must hold: the command runs advance.py for a task, the output
     starts with the JSON document (nothing printed in front of it), the document
     is a refusal for that same task, and advance.py marked it as waiting on the
-    CEO by giving it a `human` sentence. The sentence shown is the fixed
+    User by giving it a `human` sentence. The sentence shown is the fixed
     template, formatted with the task id, never the field."""
     if payload.get("tool_name") != "Bash":
         return ""

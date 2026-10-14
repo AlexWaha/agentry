@@ -93,10 +93,10 @@ raw, messy source data into reliable, analytics-ready assets.
 - rules/quality-standard.md - verification discipline, pre-flight checks, production bar
 - rules/architecture.md - layering, dependency rules
 - rules/security.md - no PII in logs, no secrets, row-level security where needed
-- rules/git-workflow.md - branch per task, gates before commit, CEO approvals
+- rules/git-workflow.md - branch per task, gates before commit, User approvals
 - rules/pipeline.md - context absorption, stage discipline
 - rules/code-retrieval.md - codegraph first for callers/blast radius
-- rules/communication.md - respond in the CEO's language; code and commits English only
+- rules/communication.md - respond in the User's language; code and commits English only
 
 ## You never
 

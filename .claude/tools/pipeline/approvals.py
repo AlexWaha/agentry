@@ -2,15 +2,15 @@
 """How much the pipeline may decide without asking.
 
 Separate axis from the mode: the mode picks WHICH stages run, this picks how
-many of their checkpoints the CEO still has to answer. Two dials rather than one
+many of their checkpoints the User still has to answer. Two dials rather than one
 matrix, because at three in the morning a matrix is unreadable.
 
 Levels, each a superset of the one before (default grants, what passes WITHOUT
-asking the CEO):
+asking the User):
 
   manual    ask at every checkpoint. Which task to take, the commit, the push.
             The default, and the right setting while someone is at the keyboard.
-  assisted  commit without asking. The CEO starts each task, and the conveyor
+  assisted  commit without asking. The User starts each task, and the conveyor
             stops after the current one. `take` is not granted here: taking
             the next task is the one thing that tells `auto` apart from
             `assisted` (task-0050).
@@ -22,16 +22,16 @@ What is withheld from every level, whatever the table above says:
 
   - everything listed in pipeline.json `approvals_never_granted`, read by
     never_granted(). This project lists `push` and `trunk_push`, so `auto` here
-    stops at the push exactly as it always did: the CEO asked for that decision
-    to stay his, every time, at every level (rules/git-workflow.md, "Push is
+    stops at the push exactly as it always did: the User asked for that decision
+    to stay theirs, every time, at every level (rules/git-workflow.md, "Push is
     never automatic"). A push is the moment work leaves the machine. A config
     that omits the list, or cannot be read, withholds both too (fail-safe).
   - `trunk_push` and `plan`, always, configured or not (ALWAYS_WITHHELD). The
-    trunk push publishes the trunk and is recorded per push by the CEO in chat
-    (approve.py --trunk-push), and a plan is the CEO's signature: every task
+    trunk push publishes the trunk and is recorded per push by the User in chat
+    (approve.py --trunk-push), and a plan is the User's signature: every task
     below an approved plan inherits its mistakes.
   - the merge into the main branch. No level grants it; who performs it follows
-    `workflow.mode`. In `pr` mode the agent stops at a pushed branch; the CEO
+    `workflow.mode`. In `pr` mode the agent stops at a pushed branch; the User
     opens and merges the PR in the web UI. In `solo` mode the pipeline merges
     locally once the commit is approved; the approved commit permits that
     merge, not the level. At `assisted` and `auto` the level sets the commit
@@ -41,7 +41,7 @@ What is withheld from every level, whatever the table above says:
     not by an approval: the human's merge in `pr` mode, the local merge in `solo`.
   - approving a plan, which is what lets the breakdown into tasks begin.
   - answering the questions raised while planning. That information exists only
-    in the CEO's head.
+    in the User's head.
 
 Because of these, an overnight run is bounded by the dependency chain:
 independent tasks run all night, a chain of dependent ones advances by exactly
@@ -79,7 +79,7 @@ LEVELS = (MANUAL, ASSISTED, AUTO)
 TAKE = "take"              # move a task out of the queue into work
 COMMIT = "commit"
 PUSH = "push"
-PLAN = "plan"              # the CEO signs off a plan (plan flow, stage `approval`)
+PLAN = "plan"              # the User signs off a plan (plan flow, stage `approval`)
 TRUNK_PUSH = "trunk_push"   # solo mode: publish the trunk itself, once
 
 GRANTS = {
@@ -90,8 +90,8 @@ GRANTS = {
 
 # Withheld from every level and every per-stage auto_approve list, in code, so
 # configuration can only add to it. TRUNK_PUSH is the one step that publishes
-# the trunk, so it is recorded per push by the CEO in chat (approve.py
-# --trunk-push), never handed over wholesale by a level. PLAN is the CEO's
+# the trunk, so it is recorded per push by the User in chat (approve.py
+# --trunk-push), never handed over wholesale by a level. PLAN is the User's
 # signature on a plan: closer to a push than to a commit, because every task
 # below an approved plan inherits its mistakes.
 ALWAYS_WITHHELD = frozenset({TRUNK_PUSH, PLAN})
@@ -150,7 +150,7 @@ def write(level: str) -> None:
 
 
 def granted(checkpoint: str, stage_auto: list | None = None) -> bool:
-    """Whether this checkpoint may pass without the CEO.
+    """Whether this checkpoint may pass without the User.
 
     `stage_auto` is the stage's own `auto_approve` list from pipeline.json; it
     is layered on top of the level, so a single checkpoint can be automated

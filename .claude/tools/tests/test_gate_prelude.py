@@ -39,12 +39,12 @@ READONLY = "Read-only agent"
 DOCS = "Docs agent"
 PROFILE_OF = {DEV: "dev", READONLY: "readonly", DOCS: "docs"}
 
-DEV_APPROVE_TEXT = ("approve.py is orchestrator-only. Recording CEO approval from a dev agent "
+DEV_APPROVE_TEXT = ("approve.py is orchestrator-only. Recording User approval from a dev agent "
                     "is self-approval - report readiness to the orchestrator instead.\n")
-DEV_WAIVE_TEXT = ("handoff.py --waive is orchestrator-only - it records a CEO waiver. "
+DEV_WAIVE_TEXT = ("handoff.py --waive is orchestrator-only - it records a User waiver. "
                   "Report the handoff problem to the orchestrator instead.\n")
 RESTRICTED_APPROVE_TEXT = "approve.py is orchestrator-only.\n"
-RESTRICTED_WAIVE_TEXT = "handoff.py --waive is orchestrator-only - it records a CEO waiver.\n"
+RESTRICTED_WAIVE_TEXT = "handoff.py --waive is orchestrator-only - it records a User waiver.\n"
 
 
 def stderr_of(call, *args) -> tuple:

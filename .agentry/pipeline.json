@@ -3,27 +3,27 @@
   "cwd": ".",
   "retry_budget": 3,
   "continuation_ceiling": 30,
-  "_stop_hook_repeat_ceiling_comment": "Read by tools/pipeline/stop_gate.py block(). How many CONSECUTIVE blocks may carry the SAME reason before the hook stops repeating it: it parks the run the reason names, or - when the reason names no run - escalates once to the CEO and then goes quiet about that sentence. Independent of continuation_ceiling, which is per run and per stage; this one is per reason and survives stage transitions, so it catches the loops no per-branch budget can see. Armed only while the hook payload's stop_hook_active is true, so every demand is uttered at least once per turn whatever its history. Three by CEO decision RQ-7: two identical blocks are a legitimate retry. A missing or unreadable key falls back to 3; a value below 1 disables the backstop and every branch reports exactly as it did before it existed, which is the fail-open direction NFR-4 wants - losing a bound is recoverable, losing the report is the silent halt.",
+  "_stop_hook_repeat_ceiling_comment": "Read by tools/pipeline/stop_gate.py block(). How many CONSECUTIVE blocks may carry the SAME reason before the hook stops repeating it: it parks the run the reason names, or - when the reason names no run - escalates once to the User and then goes quiet about that sentence. Independent of continuation_ceiling, which is per run and per stage; this one is per reason and survives stage transitions, so it catches the loops no per-branch budget can see. Armed only while the hook payload's stop_hook_active is true, so every demand is uttered at least once per turn whatever its history. Three by User decision RQ-7: two identical blocks are a legitimate retry. A missing or unreadable key falls back to 3; a value below 1 disables the backstop and every branch reports exactly as it did before it existed, which is the fail-open direction NFR-4 wants - losing a bound is recoverable, losing the report is the silent halt.",
   "stop_hook_repeat_ceiling": 3,
   "main_branch": "main",
   "protected_branches": ["staging", "production"],
   "branch_pattern": "{type}/{task}",
-  "_approvals_never_granted_comment": "Read by tools/pipeline/approvals.py never_granted(): checkpoints withheld from EVERY approvals level and from any stage auto_approve list. The level table grants `push` (work branch only) at `auto`; listing it here is what keeps the CEO's standing rule (the push is never automatic) true. `trunk_push` and `plan` are withheld in code whatever this says. A missing key, a non-list value or an unreadable file withholds `push` and `trunk_push` too (fail-safe), so only an explicit list can loosen anything, and an explicit [] is the one way to let `auto` push the work branch. Editing this is a CEO decision.",
+  "_approvals_never_granted_comment": "Read by tools/pipeline/approvals.py never_granted(): checkpoints withheld from EVERY approvals level and from any stage auto_approve list. The level table grants `push` (work branch only) at `auto`; listing it here is what keeps the User's standing rule (the push is never automatic) true. `trunk_push` and `plan` are withheld in code whatever this says. A missing key, a non-list value or an unreadable file withholds `push` and `trunk_push` too (fail-safe), so only an explicit list can loosen anything, and an explicit [] is the one way to let `auto` push the work branch. Editing this is a User decision.",
   "approvals_never_granted": ["push", "trunk_push"],
   "repos": {"agentry": {"path": ".", "stack": "python", "stages": {"implement": ["python -m compileall -q .claude/tools"], "test": [], "review": ["ruff check .claude/tools"]}}},
   "lanes": {
     "_comment": "Contract C-4 (FR-45). Read by state.lanes() / state.lane_repo(); stop_gate.read_backlog() offers a lane only the backlog tasks whose repo: equals the lane's repo. Exactly one repo per lane (a key of repos{}). The lane named default also receives tasks whose repo: is empty. A lane is selected with PIPELINE_LANE=<name>; unset is default. A missing lanes{} object offers the whole backlog to every lane (fail open, NFR-4); a session in a lane that is not declared here is offered nothing.",
     "default": {"repo": "agentry"}
   },
-  "_allow_push_to_main_comment": "Read by tools/pipeline/pretool_gate.py allow_push_to_main(). Default false: a push to the trunk is refused unless the CEO recorded the one-shot approve.py --trunk-push marker (solo mode). Only a literal true waives the trunk push approval, so a plain push reaches the trunk without the marker; it never covers a force, delete or prune push, nor protected_branches other than the trunk. Editing this is a CEO decision.",
+  "_allow_push_to_main_comment": "Read by tools/pipeline/pretool_gate.py allow_push_to_main(). Default false: a push to the trunk is refused unless the User recorded the one-shot approve.py --trunk-push marker (solo mode). Only a literal true waives the trunk push approval, so a plain push reaches the trunk without the marker; it never covers a force, delete or prune push, nor protected_branches other than the trunk. Editing this is a User decision.",
   "allow_push_to_main": false,
   "workflow": {
-    "_comment": "What kind of project this is, read by tools/pipeline/pretool_gate.py. mode 'pr' (DEFAULT when absent) is the collaborative shape: nothing commits on the trunk, the branch is pushed and a human opens the pull request. mode 'solo' is the single-author shape: there is no second party to review or merge, so a LOCAL `git merge` of an approved task branch into the trunk is allowed - the task must still match <type>/task-NNNN, have a row in run.db, and carry an approved commit checkpoint, because those guard against merging unreviewed work rather than against working alone. Pushing to a protected branch is refused in BOTH modes, with one exception: in 'solo' mode the trunk itself may be published by a push the CEO approved in chat and the orchestrator recorded with approve.py --trunk-push, and that approval covers exactly ONE push (the push consumes the marker). No approvals level ever grants it, and an unattended session is refused it regardless. push_needs_approval is independent of the mode (default true): working alone says nothing about whether an unattended run may write to the remote. See .claude/rules/git-workflow.md.",
+    "_comment": "What kind of project this is, read by tools/pipeline/pretool_gate.py. mode 'pr' (DEFAULT when absent) is the collaborative shape: nothing commits on the trunk, the branch is pushed and a human opens the pull request. mode 'solo' is the single-author shape: there is no second party to review or merge, so a LOCAL `git merge` of an approved task branch into the trunk is allowed - the task must still match <type>/task-NNNN, have a row in run.db, and carry an approved commit checkpoint, because those guard against merging unreviewed work rather than against working alone. Pushing to a protected branch is refused in BOTH modes, with one exception: in 'solo' mode the trunk itself may be published by a push the User approved in chat and the orchestrator recorded with approve.py --trunk-push, and that approval covers exactly ONE push (the push consumes the marker). No approvals level ever grants it, and an unattended session is refused it regardless. push_needs_approval is independent of the mode (default true): working alone says nothing about whether an unattended run may write to the remote. See .claude/rules/git-workflow.md.",
     "mode": "solo",
     "push_needs_approval": true
   },
   "worktrees": {
-    "_comment": "task-0133 (epic-0004). When enabled is literally true, advance.py registers each non-umbrella build task in its own git worktree <repo>-wt/<task>, exit gates run there, and up to max_parallel tasks may sit in an editing stage at once; legacy runs and swarm umbrellas stay exclusive. Ships false (dark). The build plan and test gates run artifact_gate.py and ui_evidence.py from {root} (the live harness), so they work from inside a task tree. Enabling is a CEO decision. See .claude/rules/orchestration.md, Parallel tasks in worktrees.",
+    "_comment": "task-0133 (epic-0004). When enabled is literally true, advance.py registers each non-umbrella build task in its own git worktree <repo>-wt/<task>, exit gates run there, and up to max_parallel tasks may sit in an editing stage at once; legacy runs and swarm umbrellas stay exclusive. Ships false (dark). The build plan and test gates run artifact_gate.py and ui_evidence.py from {root} (the live harness), so they work from inside a task tree. Enabling is a User decision. See .claude/rules/orchestration.md, Parallel tasks in worktrees.",
     "enabled": false,
     "max_parallel": 2
   },
@@ -51,7 +51,7 @@
     "forbid_piped_test_suite": true
   },
   "handoff": {
-    "_comment": "Forced context-absorption chain: before any NEW task registers, every done task with id above baseline must have a valid doc in dir. The doc is written by the NEXT task's assignee, who is instructed to write it in its own words; that is an instruction, and validation checks structure only, not authorship. baseline: '' for a fresh project (every done task covered); when adopting mid-project, set it at onboarding to the highest pre-existing done task id (those are grandfathered). Enforced by advance.py (registration refusal), stop_gate.py (start-next-task block) and pretool_gate.py (hard_edit_gate code-edit freeze). Tools: handoff.py --check / --for / --inject / --waive (waive is orchestrator-only, CEO approval required).",
+    "_comment": "Forced context-absorption chain: before any NEW task registers, every done task with id above baseline must have a valid doc in dir. The doc is written by the NEXT task's assignee, who is instructed to write it in its own words; that is an instruction, and validation checks structure only, not authorship. baseline: '' for a fresh project (every done task covered); when adopting mid-project, set it at onboarding to the highest pre-existing done task id (those are grandfathered). Enforced by advance.py (registration refusal), stop_gate.py (start-next-task block) and pretool_gate.py (hard_edit_gate code-edit freeze). Tools: handoff.py --check / --for / --inject / --waive (waive is orchestrator-only, User approval required).",
     "enabled": true,
     "dir": ".agentry/tasks/handoffs",
     "baseline": "",
@@ -78,7 +78,7 @@
   },
   "pipelines": {
     "build": {
-      "_comment": "Implementation. Drives a task from code to a pushed branch. Merging into the main branch is always the CEO's, never the agent's.",
+      "_comment": "Implementation. Drives a task from code to a pushed branch. Merging into the main branch is always the User's, never the agent's.",
       "editing_stages": [
         "plan",
         "implement",
@@ -91,7 +91,7 @@
           "owner": "dev",
           "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
           "skip_for_types": ["bugfix", "techdebt"],
-          "_comment": "Per-task plan (task-0045): the owning agent writes what it intends to change and why to .agentry/plans/<date>-<slug>-<task>.md. pretool_gate.py denies edits outside .agentry/ until the CEO's plan approval is recorded. skip_for_types is read once, at registration (advance.py --type): a listed type starts at the stage after the plan step. No approvals level and no auto_approve list grants the plan (approvals.never_granted()).",
+          "_comment": "Per-task plan (task-0045): the owning agent writes what it intends to change and why to .agentry/plans/<date>-<slug>-<task>.md. pretool_gate.py denies edits outside .agentry/ until the User's plan approval is recorded. skip_for_types is read once, at registration (advance.py --type): a listed type starts at the stage after the plan step. No approvals level and no auto_approve list grants the plan (approvals.never_granted()).",
           "artifact": ".agentry/plans/*.md",
           "exit_gate": {
             "cmd": "python {root}/.claude/tools/pipeline/artifact_gate.py --task {task} --kind plan",
@@ -100,10 +100,10 @@
         },
         {
           "name": "plan-approval",
-          "owner": "ceo",
+          "owner": "user",
           "checkpoints": ["plan"],
           "skip_for_types": ["bugfix", "techdebt"],
-          "_comment": "The CEO approves the plan before any code is written. approve.py --gate plan records it; approve.py --reject here sends the task back to `plan`."
+          "_comment": "The User approves the plan before any code is written. approve.py --gate plan records it; approve.py --reject here sends the task back to `plan`."
         },
         {
           "name": "implement",
@@ -130,18 +130,18 @@
           "owner": "orchestrator",
           "checkpoints": ["commit", "push"],
           "auto_approve": [],
-          "_comment": "auto_approve: checkpoints listed here (e.g. [\"commit\"] or [\"commit\", \"push\"]) are approved by advance.py itself - no CEO parking. Empty = both approvals stay manual. Decide at onboarding Phase B; changing it later is a CEO decision."
+          "_comment": "auto_approve: checkpoints listed here (e.g. [\"commit\"] or [\"commit\", \"push\"]) are approved by advance.py itself - no User parking. Empty = both approvals stay manual. Decide at onboarding Phase B; changing it later is a User decision."
         },
         {
           "name": "done",
-          "owner": "ceo",
+          "owner": "user",
           "terminal": true
         }
       ]
     },
     "plan": {
       "_comment": "Design. Turns a request into an approved plan, a spec and task files sitting in tasks/backlog/. Writes documents, never product code.",
-      "_editing_stages_comment": "Every stage an AGENT owns and the conveyor must drive to an exit gate. This key was [] until task-0020, on the reading that a planning stage writes documents rather than code and so serializes against nothing - which is false twice over: those documents are files in this repository's working tree, and stop_gate.decide() uses the set to decide what is IN FLIGHT, not what is compiled. Empty meant a plan run mid-flight matched no branch of the run loop, so nothing drove it and the next backlog task was started on top of it. `approval` is excluded because the CEO owns it, not an agent; `done` is excluded as terminal. `plan-review` IS included for the same reason build's `review` is: read-only for the reviewer does not mean the run has let go of its branch. `approval` is protected by being a checkpoint stage rather than by being absent from this list: state.checkpoint_stages() reads the `checkpoints` key, so the Stop hook neither drives it nor treats its tree as free. The `plan` checkpoint is real (task-0089): advance.py parks on it, records nothing itself, and leaves `approval` only after approve.py --gate plan sets run.db plan_approved. No approvals level and no auto_approve list grants it (approvals.never_granted()).",
+      "_editing_stages_comment": "Every stage an AGENT owns and the conveyor must drive to an exit gate. This key was [] until task-0020, on the reading that a planning stage writes documents rather than code and so serializes against nothing - which is false twice over: those documents are files in this repository's working tree, and stop_gate.decide() uses the set to decide what is IN FLIGHT, not what is compiled. Empty meant a plan run mid-flight matched no branch of the run loop, so nothing drove it and the next backlog task was started on top of it. `approval` is excluded because the User owns it, not an agent; `done` is excluded as terminal. `plan-review` IS included for the same reason build's `review` is: read-only for the reviewer does not mean the run has let go of its branch. `approval` is protected by being a checkpoint stage rather than by being absent from this list: state.checkpoint_stages() reads the `checkpoints` key, so the Stop hook neither drives it nor treats its tree as free. The `plan` checkpoint is real (task-0089): advance.py parks on it, records nothing itself, and leaves `approval` only after approve.py --gate plan sets run.db plan_approved. No approvals level and no auto_approve list grants it (approvals.never_granted()).",
       "editing_stages": [
         "formalize",
         "draft",
@@ -153,7 +153,7 @@
           "name": "formalize",
           "owner": "architect",
           "tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
-          "_comment": "Write the problem statement: what hurts, scope, non-goals, open questions. Parks on the CEO until the questions are answered - that information exists nowhere else.",
+          "_comment": "Write the problem statement: what hurts, scope, non-goals, open questions. Parks on the User until the questions are answered - that information exists nowhere else.",
           "artifact": ".agentry/plans/*-brief.md",
           "exit_gate": {
             "cmd": "python .claude/tools/pipeline/artifact_gate.py --task {task} --kind brief",
@@ -179,9 +179,9 @@
         },
         {
           "name": "approval",
-          "owner": "ceo",
+          "owner": "user",
           "checkpoints": ["plan"],
-          "_comment": "CEO approves the plan. A plan is dearer than code: one wrong assumption is copied into every task below it."
+          "_comment": "User approves the plan. A plan is dearer than code: one wrong assumption is copied into every task below it."
         },
         {
           "name": "breakdown",
@@ -196,7 +196,7 @@
         },
         {
           "name": "done",
-          "owner": "ceo"
+          "owner": "user"
         }
       ]
     }

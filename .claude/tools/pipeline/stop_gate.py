@@ -13,12 +13,12 @@ allows the stop like the second case, because failing open is not negotiable,
 but it exits non-zero so the harness raises its `stop-hook-error` notification
 instead of letting the crash pass for a considered release. See CRASH_EXIT.
 
-A blocked run is surfaced once before it is left alone (it is the CEO's to
-unblock, and nothing else in the harness tells him it exists) - see decide().
+A blocked run is surfaced once before it is left alone (it is the User's to
+unblock, and nothing else in the harness tells the User it exists) - see decide().
 
 Work is serialized on the working tree. A new backlog task is offered only when
 nothing holds it: no run in an editing stage (blocked included - a blocked task
-still owns its dirty tree) and no run awaiting a human, because the CEO may be
+still owns its dirty tree) and no run awaiting a human, because the User may be
 reading the diff on that very branch.
 
 With worktrees on and `max_parallel` above 1 that sentence changes shape: a task
@@ -31,7 +31,7 @@ parallel_slots() and the free-slot test in decide()). With the flag off or
 Documentation owed by COMPLETED tasks - a missing handoff doc, an unstamped
 memory review - is read on every stop and blocks it, regardless of what is in
 flight. Both checks used to sit inside the free-slot branch, which switched them
-off whenever any task was parked on the CEO, which is the normal state of a
+off whenever any task was parked on the User, which is the normal state of a
 pipeline with a human in it (task-0072). Only the free-slot question reads the
 free slot now.
 
@@ -58,10 +58,10 @@ Fail-open: any error allows the stop (never trap the user in a loop).
 
 Hook output (contract C-8, one field per audience): print
 {"decision":"block","reason":...} to block - `reason` is for the model - and ALWAYS
-alongside it a `systemMessage` for the human saying what the CEO owes the run
+alongside it a `systemMessage` for the human saying what the User owes the run
 (nothing, a decision, an approval). A block may add a `terminalSequence`, the
 terminal's own channel. A stop that is allowed but has something to tell the
-human - a run parked on the CEO, a run just parked BLOCKED, the repeat backstop
+human - a run parked on the User, a run just parked BLOCKED, the repeat backstop
 tripping - prints {"systemMessage":...} with no decision, which still allows the
 stop; every other release prints nothing.
 """
@@ -88,7 +88,7 @@ TASK_ID_RE = re.compile(r"(task-\d+)")
 # its successor - it must never be offered as ready, and it will never reach
 # done/ either, which is why dep_satisfied resolves through the pointer.
 SUPERSEDED_RE = re.compile(r"^superseded_by:[ \t]*(task-\d+)", re.MULTILINE)
-# A task waiting on something no other task can satisfy - a CEO ruling, a vendor
+# A task waiting on something no other task can satisfy - a User ruling, a vendor
 # answer, an external decision - records it in blocked_on. depends_on cannot
 # express that, so without this the queue re-offers the task every turn and an
 # unattended run never settles. The negative lookahead is what keeps the blank
@@ -102,13 +102,13 @@ REPO_RE = re.compile(r"^repo:[ \t]*(.*?)[ \t]*$", re.MULTILINE)
 EPIC_RE = re.compile(r"^epic:[ \t]*(epic-[\w-]+)", re.MULTILINE)
 UMBRELLA_RE = re.compile(r"^umbrella:[ \t]*true\b", re.MULTILINE | re.IGNORECASE)
 
-# What `awaiting_human` is set to when a blocked run is surfaced to the CEO. It
+# What `awaiting_human` is set to when a blocked run is surfaced to the User. It
 # doubles as the surfaced-once marker, so a blocked run is raised on one stop
 # rather than on every one. See decide(), step 2.
 AWAITING_BLOCKED = "blocked"
 
 # How many consecutive stops may be blocked on the SAME outstanding debt before
-# the hook stops demanding and hands it to the CEO instead (decide(), step 5).
+# the hook stops demanding and hands it to the User instead (decide(), step 5).
 # The debt block is the file's only unbounded one, and it is bounded because the
 # argument for letting it repeat - the agent can clear it - has a degenerate
 # case: a handoff doc that keeps failing min_section_chars, or a store that
@@ -128,7 +128,7 @@ RECONCILED_PREFIXES = ("handoff:", "memory:")
 
 # Where the reason-repeat backstop keeps its count, and what it defaults to when
 # `stop_hook_repeat_ceiling` is missing from pipeline.json. Three, not two, by
-# CEO decision RQ-7: two identical blocks are a legitimate retry, and a backstop
+# User decision RQ-7: two identical blocks are a legitimate retry, and a backstop
 # that trips on a retry cuts off work that was about to succeed.
 STOP_REPEAT_FILE = "stop-repeat.json"
 STOP_REPEAT_CEILING_DEFAULT = 3
@@ -192,7 +192,7 @@ ACTIVE_DIR = state.ACTIVE_DIR
 DONE_DIR = state.DONE_DIR
 
 
-# FR-51, the four terminal treatments. The terminal is the channel for a CEO who
+# FR-51, the four terminal treatments. The terminal is the channel for a User who
 # is not looking at the session, so each event is told apart by what it does to a
 # window that is out of sight: a distinct bell count and a distinct title, plus a
 # desktop notification carrying the same label. Zero bells for a gate failure on
@@ -269,7 +269,7 @@ def emit(reason: str, human: str | None = None, event: str | None = None) -> int
 
     `reason` is for the model. `human` is for the person reading the terminal and
     says what they owe the run; it is never the same sentence, because the model's
-    instruction ("run advance.py") is noise to a CEO and the CEO's ask is noise to
+    instruction ("run advance.py") is noise to a User and the User's ask is noise to
     the model."""
     print(json.dumps({"decision": "block", "reason": reason,
                       **human_fields(human, event)}))
@@ -397,7 +397,7 @@ def park_looping_run(reason: str) -> str | None:
         state.set_fields(_CTX["conn"], task, stage_status=state.ST_BLOCKED,
                          reason="the stop hook repeated one demand to no effect")
         # Forget the count now the park has replaced the loop. Without this, a
-        # CEO who spots the park in `state.py --show` and runs approve.py
+        # User who spots the park in `state.py --show` and runs approve.py
         # --reject WITHOUT waiting for the surfacing stop leaves the key at its
         # tripped value, and this hook stays mute about that instruction until
         # the turn ends and the flag disarms. Bounded either way, but a state
@@ -436,16 +436,16 @@ def block(reason: str, human: str, event: str | None = None) -> int:
     What happens on the trip is the whole safety argument, and it is never
     "return allow() and hope". If the reason names a live run, that run is
     parked BLOCKED, which is louder than the block it replaces: the next stop
-    surfaces it through decide() step 2 with a different reason, naming the CEO.
+    surfaces it through decide() step 2 with a different reason, naming the User.
     If it names no run - both documentation demands, and the start-the-next-task
     branch task-0018 left unbounded on purpose - there is nothing to park, so it
     escalates in the same breath, once, naming the card. Only after that does it
     go quiet, and only about that exact sentence.
 
     `human` is the sentence for the person at the terminal (see emit()), and every
-    caller must supply one: that is how the "every block says what the CEO owes"
+    caller must supply one: that is how the "every block says what the User owes"
     rule is structural too. The two outcomes of the trip speak to the human as
-    well, because they are the moments a run is handed to him."""
+    well, because they are the moments a run is handed to the User."""
     if not STOP_HOOK_ACTIVE:
         return emit(reason, human, event)
     try:
@@ -457,7 +457,7 @@ def block(reason: str, human: str, event: str | None = None) -> int:
     if ceiling < 1 or n < ceiling:
         return emit(reason, human, event)
     if n > ceiling:
-        return allow()  # parked or escalated on the trip stop; the CEO owns it
+        return allow()  # parked or escalated on the trip stop; the User owns it
     task = park_looping_run(reason)
     if task:
         # Step 2 surfaces it to the model on the next stop, but the next stop may
@@ -468,7 +468,7 @@ def block(reason: str, human: str, event: str | None = None) -> int:
             f"agent re-run it, or send the task back to its first stage.", "blocked")
     return emit(
         f"The same instruction has now been repeated {n} times with nothing changing, and "
-        f"there is no run to park. Stop re-attempting it and raise it with the CEO now "
+        f"there is no run to park. Stop re-attempting it and raise it with the User now "
         f"(AskUserQuestion): the situation, the options, and your recommendation. This hook "
         f"will not raise it again. The instruction that is not working: {reason}",
         f"The agent has been told the same thing {n} times with nothing changing and "
@@ -687,7 +687,7 @@ def parallel_slots() -> int:
 
     Both halves are needed. The flag off means no new task gets a tree, so every
     run would hold `src/` and the slot count would be meaningless; `max_parallel`
-    1 is the CEO choosing serial. Any error reads as 1, the safe side."""
+    1 is the User choosing serial. Any error reads as 1, the safe side."""
     try:
         return worktree.max_parallel() if worktree.enabled() else 1
     except Exception:
@@ -904,11 +904,11 @@ def bounded_block(key: str, subject: str, reason: str,
     docstring promises never to create."""
     n = debt_nags(key)
     if n > DEBT_NAG_CEILING + 1:
-        return allow()  # escalated already; the CEO owns it now
+        return allow()  # escalated already; the User owns it now
     if n > DEBT_NAG_CEILING:
         return block(
             f"{subject} has survived {n - 1} stops and is not being cleared. Stop "
-            f"re-attempting it and raise it with the CEO now (AskUserQuestion): the "
+            f"re-attempting it and raise it with the User now (AskUserQuestion): the "
             f"situation, the options - {options[0]} - and your "
             f"recommendation. This hook will not raise it again, so if you drop it now "
             f"nothing else will catch it. The instruction that is not working: {reason}",
@@ -945,7 +945,7 @@ def done_conflict_block(task: str) -> int:
     different text. state.move_task() refuses that for good, so loops A and B of
     reconcile_status_drift() skip it without a word; this is the word. Bounded
     like every run-less demand, so it is said, escalated once, then left to the
-    CEO. In a helper for the same reason as unknown_repo_block()."""
+    User. In a helper for the same reason as unknown_repo_block()."""
     fix = (f"compare tasks/done/{task}.md with its twin in backlog/ or active/ and "
            f"delete the one that is wrong")
     return bounded_block(
@@ -1103,19 +1103,19 @@ APPROVED_FLAG = {"commit": "commit_approved", "push": "push_approved",
 
 def owed_to_ceo(runs: list[dict]) -> list[tuple[str, str | None]]:
     """[(sentence for the human, terminal event or None)] for every run parked on
-    him. Any value of `awaiting_human` not named above still produces a sentence,
+    the User. Any value of `awaiting_human` not named above still produces a sentence,
     so a new park reason is announced rather than silently dropped.
 
     Two exceptions to "a done run is finished". The merge wait is written ONLY at
     stage `done` (advance.py _merge_wait: the checkpoints passed and the main
     branch does not carry the task yet), so skipping done would skip the only
-    place it exists. And it is the human's only in `pr` mode, where he merges the
-    pull request; in `solo` the pipeline merges locally and he owes nothing."""
+    place it exists. And it is the human's only in `pr` mode, where the User merges the
+    pull request; in `solo` the pipeline merges locally and nothing is owed."""
     owed = []
     for r in runs:
         aw = r["awaiting_human"]
         if state.is_paused(r):
-            continue  # set aside by the CEO himself: nothing is owed until resume
+            continue  # set aside by the User: nothing is owed until resume
         if not aw or aw == AWAITING_BLOCKED or r.get(APPROVED_FLAG.get(aw, "")):
             continue
         if r["stage"] == "done" and aw != "merge":
@@ -1145,7 +1145,7 @@ def decide() -> int:
         # 1. Documentation owed by COMPLETED tasks, read BEFORE anything else.
         #
         # Not inside the free-slot branch, which is where it used to live: that
-        # condition - "some task is waiting for the CEO" - is the normal state of
+        # condition - "some task is waiting for the User" - is the normal state of
         # a pipeline with a human in it, and it switched the only report of
         # undocumented work off for as long as it held (task-0072). Whether a
         # finished task is documented is true or false regardless of what is in
@@ -1211,7 +1211,7 @@ def decide() -> int:
                 # produced no signal at all for ninety minutes.
                 #
                 # This hook owns the surfacing because its output is the only one
-                # of the two that lands in the live session the CEO reads - the
+                # of the two that lands in the live session the User reads - the
                 # supervisor is detached and logs to a file nobody has open.
                 #
                 # ONCE, not every stop: `awaiting_human` is the marker, which is
@@ -1236,7 +1236,7 @@ def decide() -> int:
                     return block(
                         f"{r['task']} is parked BLOCKED at stage '{stage}' and nothing is "
                         f"driving it: the pipeline will not advance it and the supervisor "
-                        f"will not touch it. Raise it with the CEO now (AskUserQuestion): "
+                        f"will not touch it. Raise it with the User now (AskUserQuestion): "
                         f"what the blocker is, and the options - fix it and re-run "
                         f"advance.py, or send the task back with python "
                         f".claude/tools/pipeline/approve.py --task {r['task']} --reject --reason "
@@ -1363,7 +1363,7 @@ def decide() -> int:
         #
         # This is NOT the mistake task-0072 fixed, and the difference is the
         # only reason it is safe. `occupied` silenced the debt on a condition
-        # with no clock in it - a task parked on the CEO stays parked - so the
+        # with no clock in it - a task parked on the User stays parked - so the
         # silence was permanent. A marker expires (state.BUSY_TIMEOUT), so the
         # debt is deferred by at most one marker's life and is then raised again
         # by the branches below.
@@ -1383,8 +1383,8 @@ def decide() -> int:
         # branch out from under someone:
         #   - an editing stage in flight;
         #   - an editing stage parked BLOCKED (a blocked task still owns its dirty
-        #     tree; it is surfaced to the CEO in step 2, not retired);
-        #   - ANY run awaiting a human - the CEO may be reading the diff on that
+        #     tree; it is surfaced to the User in step 2, not retired);
+        #   - ANY run awaiting a human - the User may be reading the diff on that
         #     very branch. A task parked on a human is unfinished work, not a
         #     free slot, so go quiet and wait instead;
         #   - a run on a CHECKPOINT STAGE, approved or not. Missing until
@@ -1399,7 +1399,7 @@ def decide() -> int:
         # `r["stage"] == "ready"`, which is true of the build flow because the
         # build flow happens to spell its checkpoint that way. Every other flow
         # fell through it: the plan flow's `approval` matched nothing here and
-        # nothing in the run loop, so the conveyor drove the CEO's own approval
+        # nothing in the run loop, so the conveyor drove the User's own approval
         # stage and read its tree as free at the same time. Special-casing
         # `approval` would have been a second literal of the same shape, and the
         # next flow a third. state.checkpoint_stages() asks the definition
@@ -1452,7 +1452,7 @@ def decide() -> int:
         else:
             free = not any(holds_tree(r, pipeline) for r in runs)
         if free:
-            # Taking work on is itself a checkpoint. Below `auto` the CEO says
+            # Taking work on is itself a checkpoint. Below `auto` the User says
             # which task to start, so an empty in-flight set means "stop and
             # ask", not "help yourself to the queue".
             queue = read_backlog()
@@ -1576,7 +1576,7 @@ def decide() -> int:
                 return block(reason, human)
             # Nothing ready for this lane, so the unroutable task is what is
             # left to say. Only under TAKE, like the queue itself: below `auto`
-            # the CEO picks the task and this hook offers nothing.
+            # the User picks the task and this hook offers nothing.
             if take and unrouted:
                 return unknown_repo_block(unrouted[0])
 
@@ -1620,14 +1620,14 @@ def decide() -> int:
         #   - It may repeat where the surfacing of a BLOCKED run may not (step 2
         #     raises that one ONCE), because the agent reading this message can
         #     clear the debt itself - write the doc, record the rows, or --waive
-        #     it with the CEO's approval - while a blocked run is clearable only
-        #     by the CEO.
+        #     it with the User's approval - while a blocked run is clearable only
+        #     by the User.
         #
         # "May repeat" is not "may repeat forever", and the difference is
         # DEBT_NAG_CEILING. The argument above assumes the demand is
         # satisfiable, and it has a degenerate case: a doc that keeps failing
         # min_section_chars, or a store that keeps refusing the stamp. After the
-        # ceiling the hook says so once, hands the decision to the CEO, and goes
+        # ceiling the hook says so once, hands the decision to the User, and goes
         # quiet - a bound, not a retreat to the silence this branch ended.
         #
         # After the drift reconciliation above, not before: moving a merged task
@@ -1650,7 +1650,7 @@ def decide() -> int:
                 f"python .claude/tools/pipeline/handoff.py --for {d['task']}, then fill every "
                 f"section of .agentry/tasks/handoffs/{d['task']}.md in its own words from "
                 f".agentry/tasks/done/{d['task']}.md, its merge diff on main and the gate log. "
-                f"If the CEO has decided the doc is not owed, he waives it: handoff.py --waive "
+                f"If the User has decided the doc is not owed, the User waives it: handoff.py --waive "
                 f"{d['task']} --reason \"...\". Do not ask the user whether to write it.")
         if mem_debt:
             d = mem_debt[0]
@@ -1669,8 +1669,8 @@ def decide() -> int:
                 f"recording). Do not ask the user whether to do it.")
 
         # 6. Everything is parked / blocked / done and nothing ready -> release.
-        # A run parked on the CEO is the one release that has something to say to
-        # him: this is where the commit and push checkpoints, the plan approval
+        # A run parked on the User is the one release that has something to say to
+        # the User: this is where the commit and push checkpoints, the plan approval
         # and the merge wait reach a person, since the advance.py output that
         # parked them only goes to the model.
         owed = owed_to_ceo(runs)

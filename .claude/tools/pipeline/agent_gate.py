@@ -10,7 +10,7 @@ profiles:
                       pretool_gate.py (commit/push approval flags,
                       protected-branch push deny, review-stage edit freeze) and
                       adds: deny `git push --force`, deny any invocation of
-                      approve.py (recording CEO approval is the orchestrator's
+                      approve.py (recording User approval is the orchestrator's
                       exclusive right - a dev agent running it would be
                       self-approval), deny an UNNARROWED run of the stack's test
                       suite while permitting a narrowed one.
@@ -143,7 +143,7 @@ MUTATING_BASH = [
 # They now ask pretool_gate whether the script is actually INVOKED (argv0, or
 # the script argument of an interpreter), which is the same tokenisation every
 # other gate here uses and is fail-closed on text it cannot tokenise.
-# handoff.py --waive records a CEO waiver - orchestrator-only, same trust
+# handoff.py --waive records a User waiver - orchestrator-only, same trust
 # boundary as approve.py. --for / --check stay allowed for every profile.
 HANDOFF_SCRIPT_RE = re.compile(r"(?:^|[\\/])handoff\.py[. )]*$", re.IGNORECASE)
 
@@ -154,7 +154,7 @@ is_long_option_prefix = pretool_gate.is_long_option_prefix
 
 # task-0097: approvals.py and mode.py write .agentry/state/approvals and
 # .agentry/state/mode, the files task-0075 already keeps the docs profile from
-# writing. The approvals level decides which checkpoints clear without the CEO,
+# writing. The approvals level decides which checkpoints clear without the User,
 # so setting it from Bash is the same boundary crossed by another door. Only the
 # SETTING form is denied: both scripts read when given no argument or `--show` /
 # `show` (their own first-argument test), and every profile may. `--help` / `-h`
@@ -178,7 +178,7 @@ STATE_SETTER_MSG = ("{script} is orchestrator-only when it SETS the approvals le
                     "workflow mode or the swarm flag, freezes or releases the swarm zone map "
                     "(zones.py --prove / --release), or WRITES the pipeline config "
                     "(repo_scan.py --write) - that decides what clears without "
-                    "the CEO, which procedure is in force, which paths a dev agent may write "
+                    "the User, which procedure is in force, which paths a dev agent may write "
                     "and which commands the gates run. Ask the orchestrator to change it; "
                     "--show (or no argument) still reads the first three, zones.py --show "
                     "reads the map, and repo_scan.py without --write only prints a scan.")
@@ -478,7 +478,7 @@ is_root_claude_md = pretool_gate.is_root_claude_md
 
 # The whole .agentry/state/ tree is the orchestrator's: the approvals level and mode,
 # the run.db commit/push/plan approval flags, the solo trunk_push approval and the
-# memory stamps all decide what clears without the CEO. Nothing a subagent writes
+# memory stamps all decide what clears without the User. Nothing a subagent writes
 # lives there. .agentry/pipeline.json is protected for the same reason: it holds the
 # gate configuration, so a subagent that could edit it could switch the gates off.
 # Windows resolves `state.` and `state ` (and `state./x`, `pipeline.json.`) to the
@@ -488,7 +488,7 @@ PROTECTED_STATE_MSG = ("{who}: '{path}' is under .agentry/state/, is .agentry/pi
                        "the live harness (.claude/tools, rules, skills, commands, settings, agent "
                        "definitions of the project root), or is inside a .git directory. They hold "
                        "the approvals level, workflow mode, run flags, gate settings and gate code "
-                       "that decide what clears without the CEO, and the git hooks and config that "
+                       "that decide what clears without the User, and the git hooks and config that "
                        "run as the orchestrator at its next commit. Report the change you need to "
                        "the orchestrator.")
 # Any repository's .git directory (or the gitfile named .git): a hook written there runs
@@ -2255,7 +2255,7 @@ DEV_WHO = "Dev agent"
 # What a dev agent is told on top of the shared orchestrator-only sentence; the readonly
 # and docs profiles get the sentence alone.
 PRELUDE_TAILS = {DEV_WHO: {
-    "approve": " Recording CEO approval from a dev agent is self-approval - report readiness "
+    "approve": " Recording User approval from a dev agent is self-approval - report readiness "
                "to the orchestrator instead.",
     "waive": " Report the handoff problem to the orchestrator instead.",
 }}
@@ -2270,7 +2270,7 @@ def bash_prelude(who: str, command: str, cwd: str) -> int:
     if runs_approve_script(command):
         return deny("approve.py is orchestrator-only." + tails.get("approve", ""))
     if runs_waive(command):
-        return deny("handoff.py --waive is orchestrator-only - it records a CEO waiver."
+        return deny("handoff.py --waive is orchestrator-only - it records a User waiver."
                     + tails.get("waive", ""))
     setter = sets_pipeline_state(command)
     if setter:

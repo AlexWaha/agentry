@@ -1,4 +1,4 @@
-"""task-0045: the build flow asks the CEO to approve a plan before any code is written.
+"""task-0045: the build flow asks the User to approve a plan before any code is written.
 
 `pipelines.build` gains two stages in front of `implement`: `plan` (the owning
 agent writes what it intends to change and why, gated on its artifact) and
@@ -56,13 +56,13 @@ BUILD_PIPELINE = {
         "stages": [
             {"name": "plan", "owner": "dev", "skip_for_types": SKIP,
              "exit_gate": {"cmd": "artifact-gate-stub", "expect_exit": 0}},
-            {"name": "plan-approval", "owner": "ceo", "checkpoints": ["plan"],
+            {"name": "plan-approval", "owner": "user", "checkpoints": ["plan"],
              "skip_for_types": SKIP},
             {"name": "implement", "owner": "dev"},
             {"name": "test", "owner": "qa-engineer"},
             {"name": "review", "owner": "reviewer"},
             {"name": "ready", "owner": "orchestrator", "checkpoints": ["commit", "push"]},
-            {"name": "done", "owner": "ceo", "terminal": True},
+            {"name": "done", "owner": "user", "terminal": True},
         ],
     }},
 }
@@ -76,7 +76,7 @@ OLD_BUILD_PIPELINE = {
             {"name": "test", "owner": "qa-engineer"},
             {"name": "review", "owner": "reviewer"},
             {"name": "ready", "owner": "orchestrator", "checkpoints": ["commit", "push"]},
-            {"name": "done", "owner": "ceo", "terminal": True},
+            {"name": "done", "owner": "user", "terminal": True},
         ],
     }},
 }
@@ -206,7 +206,7 @@ class PlanStepFlowTest(Harness):
         out = self.advance()
         self.assertEqual("advanced", out["action"])
         self.assertEqual("plan-approval", self.row()["stage"])
-        self.assertIn("awaits the CEO's plan approval", out["message"])
+        self.assertIn("awaits the User's plan approval", out["message"])
 
     def test_a_failing_plan_gate_keeps_the_run_at_plan(self):
         self.seed()
@@ -225,7 +225,7 @@ class PlanStepFlowTest(Harness):
         self.assertEqual("plan-approval", row["stage"])
         self.assertEqual("plan", row["awaiting_human"])
         self.assertEqual(0, row["plan_approved"])
-        self.assertIn("Plan awaiting CEO approval", out["message"])
+        self.assertIn("Plan awaiting User approval", out["message"])
 
     def test_no_approvals_level_and_no_auto_approve_list_grants_the_plan(self):
         self._patch(approvals, "read", return_value=approvals.AUTO)
@@ -287,9 +287,9 @@ class PlanStepFlowTest(Harness):
             "build": BUILD_PIPELINE["pipelines"]["build"],
             "plan": {"stages": [
                 {"name": "formalize", "owner": "architect"},
-                {"name": "approval", "owner": "ceo", "checkpoints": ["plan"]},
+                {"name": "approval", "owner": "user", "checkpoints": ["plan"]},
                 {"name": "breakdown", "owner": "product-manager"},
-                {"name": "done", "owner": "ceo"}]}}}
+                {"name": "done", "owner": "user"}]}}}
         conn = state.connect()
         state.create_run(conn, OTHER, "feature", "breakdown", state.PLAN)
         state.set_fields(conn, OTHER, plan_approved=1)
@@ -555,7 +555,7 @@ class HandoffFreezeStagesTest(Harness):
     def test_a_plan_flow_run_is_judged_by_the_plan_flows_stages(self):
         both = copy.deepcopy(BUILD_PIPELINE)
         both["pipelines"]["plan"] = {"editing_stages": ["formalize"], "stages": [
-            {"name": "formalize", "owner": "architect"}, {"name": "done", "owner": "ceo"}]}
+            {"name": "formalize", "owner": "architect"}, {"name": "done", "owner": "user"}]}
         conn = state.connect()
         state.create_run(conn, OTHER, "feature", "formalize", state.PLAN)
         conn.close()

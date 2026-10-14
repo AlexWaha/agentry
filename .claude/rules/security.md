@@ -188,7 +188,7 @@ secret_key: encrypted_string
 
 ## Dangerous Functions - NEVER Use
 
-Absolutely forbidden without explicit CEO approval. These are the single biggest source of RCE vulnerabilities.
+Absolutely forbidden without explicit User approval. These are the single biggest source of RCE vulnerabilities.
 
 **PHP:**
 ```php

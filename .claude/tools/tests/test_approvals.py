@@ -1,4 +1,4 @@
-"""The push checkpoint is CEO-gated at every approval level.
+"""The push checkpoint is User-gated at every approval level.
 
 rules/git-workflow.md ("Push is never automatic, at any approval level") said so
 while GRANTS[AUTO] still contained PUSH - the rule was written and not enforced,

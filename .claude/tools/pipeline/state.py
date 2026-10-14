@@ -101,11 +101,11 @@ ST_IN_PROGRESS = "in_progress"
 ST_GATE_PASSED = "gate_passed"
 ST_GATE_FAILED = "gate_failed"
 ST_BLOCKED = "blocked"
-# Deliberately set aside by the CEO's force-majeure call (task-0059): registered,
+# Deliberately set aside by the User's force-majeure call (task-0059): registered,
 # not driven, not holding the working tree. `stage` is left where it was and the
 # prior stage_status is kept in `paused_status`, so resume restores it exactly.
 ST_PAUSED = "paused"
-# Dropped on the CEO's decision (task-0122): `stage` is `done` although nothing
+# Dropped on the User's decision (task-0122): `stage` is `done` although nothing
 # merged, and `abandon_reason` carries why. Set only by approve.py --abandon.
 ST_ABANDONED = "abandoned"
 
@@ -158,7 +158,7 @@ def now() -> str:
 def today() -> str:
     """Calendar date for text a HUMAN reads (task files, handoff docs, review
     stamps) - the machine's LOCAL date, so `completed: 2026-09-13` matches the
-    CEO's own clock. A bare UTC date silently shows tomorrow (or yesterday) for
+    User's own clock. A bare UTC date silently shows tomorrow (or yesterday) for
     anyone far enough from UTC, which is how a handoff doc ends up dated a day
     off its own commit. Machine timestamps stay UTC - see now().
     `.astimezone()` converts the UTC-aware value to local, which keeps the call
@@ -266,7 +266,7 @@ def editing_stages(pipeline: dict, which: str = BUILD) -> tuple[str, ...]:
     this repository too, and reading the name literally is what left
     pipelines.plan.editing_stages empty and plan runs undriven until task-0020.
     Excluded are the stages an agent does NOT own - a checkpoint stage waiting on
-    the CEO, and the terminal stage.
+    the User, and the terminal stage.
 
     An absent key falls back to the module constant for `build` and to nothing
     for any other flow (NFR-4): a flow whose stages we cannot read drives no run
@@ -349,11 +349,11 @@ def _late_columns() -> list[tuple[str, str]]:
         # pre-approved.
         ("plan_approved", "INTEGER DEFAULT 0"),
         # Pause record (task-0059): the status the run had when it was paused, the
-        # CEO's reason, and whether the tree was clean or already committed.
+        # User's reason, and whether the tree was clean or already committed.
         ("paused_status", "TEXT DEFAULT ''"),
         ("pause_reason", "TEXT DEFAULT ''"),
         ("pause_kind", "TEXT DEFAULT ''"),
-        # Why the CEO dropped the task (task-0122). Not a frozen field: it comes
+        # Why the User dropped the task (task-0122). Not a frozen field: it comes
         # from the abandon command, never from the task file.
         ("abandon_reason", "TEXT DEFAULT ''"),
         # The task's own git worktree, workspace-relative posix (`src-wt/task-0130`),
@@ -364,7 +364,7 @@ def _late_columns() -> list[tuple[str, str]]:
         # How many times the run was sent back to `test` because its tree lacked trunk
         # commits (advance.py); at the retry budget it blocks instead of looping.
         ("stale_sendbacks", "INTEGER DEFAULT 0"),
-        # The change-set binding of the tree the CEO read at the commit checkpoint
+        # The change-set binding of the tree the User read at the commit checkpoint
         # (pretool_gate.tree_binding), '' when none is recorded (task-0134). Not a
         # frozen field: only the commit park and the commit approval write it, and it
         # is cleared wherever commit_approved is.
@@ -372,7 +372,7 @@ def _late_columns() -> list[tuple[str, str]]:
         # Task-file decisions frozen at registration (task-0124): the closure sweep,
         # the umbrella debt cover, the commit-tag branch rule and the repo scoping
         # read these columns, never the file, which the agent being judged can
-        # rewrite after the CEO's approval.
+        # rewrite after the User's approval.
         *((col, "TEXT DEFAULT ''") for col in FROZEN_FIELDS),
     ]
 
@@ -432,7 +432,7 @@ def all_runs(conn: sqlite3.Connection) -> list[dict]:
 # transition, and a failed append is reported on stderr and ignored.
 
 def _via() -> str:
-    """The stem of the script that made this write (`approve` = the CEO,
+    """The stem of the script that made this write (`approve` = the User,
     `advance` = a level grant, `stop_gate`, `supervisor`). '' when argv[0] is not a
     plain name, so a hostile argv cannot put free text in the journal."""
     stem = Path(sys.argv[0] or "").stem if sys.argv else ""
@@ -550,7 +550,7 @@ def _journal_write(task: str, before: dict | None, fields: dict, event: str,
             put("continued", detail={"count": int(count)})
 
         if event in ("merged", "closed"):
-            # One merge per task: a done run advanced again (the CEO re-running
+            # One merge per task: a done run advanced again (the User re-running
             # advance.py) must not push the registration-to-merge figure out.
             if event == "closed" or not last_event_at(task, "merged"):
                 put(event)
@@ -587,7 +587,7 @@ def is_paused(run: dict | None) -> bool:
 
 
 def is_abandoned(task: str) -> bool:
-    """True when the CEO dropped the task (approve.py --abandon). Never raises: a
+    """True when the User dropped the task (approve.py --abandon). Never raises: a
     missing or unreadable row answers False, the direction in which the debt
     readers still demand a doc and a stamp."""
     return _run_row(task).get("stage_status") == ST_ABANDONED
@@ -618,7 +618,7 @@ def set_fields(conn: sqlite3.Connection, task: str, *, event: str = "", reason: 
                **fields) -> None:
     """Write run columns, then journal what changed.
 
-    `event` names a fact the columns alone do not carry: `rejected` (the CEO sent
+    `event` names a fact the columns alone do not carry: `rejected` (the User sent
     the run back), `merged` or `closed` (the run reached done because git says so).
     `reason` is the human text for a blocked, rejected, paused or closed row. Both
     only feed the journal; the UPDATE is exactly the `fields`."""
@@ -776,7 +776,7 @@ def move_task(task: str, to: str, abandoned: str = "") -> bool:
         if to == "done" and abandoned:
             text = _stamp_abandoned(text, abandoned)
         elif to == "done":
-            stamp = today()  # local date - the CEO reads this in the task file
+            stamp = today()  # local date - the User reads this in the task file
             if re.search(r"(?m)^completed:", text):
                 text = re.sub(r"(?m)^completed:.*$", f"completed: {stamp}", text, count=1)
         dst_dir.mkdir(parents=True, exist_ok=True)
@@ -854,7 +854,7 @@ def move_swarm_subtasks(task: str, conn: sqlite3.Connection | None = None) -> li
 
     Only when the umbrella's own run row has `commit_approved`, and the umbrella
     flag, epic and subtask list come from that row as recorded at registration:
-    `active/` is not in the CEO's diff, so a subtask added to the file after the
+    `active/` is not in the User's diff, so a subtask added to the file after the
     approval must not be swept without a merge. `conn` is the caller's open
     run-store connection; without one the store is opened here. A run that
     recorded no umbrella sweeps nothing.
@@ -890,7 +890,7 @@ def covering_umbrella(task: str) -> str | None:
     row as recorded at registration, not from its file: editing the file later
     cancels no debt. The row must also be at stage `done` with the commit approved:
     a registered umbrella whose file was merely moved to done/ by hand has been
-    through neither the pipeline nor the CEO's diff, and covers nothing. An
+    through neither the pipeline nor the User's diff, and covers nothing. An
     abandoned umbrella (task-0122) covers nothing either: abandon leaves the
     approval flags as they were, and work that never merged is documented by no one.
 
@@ -961,17 +961,17 @@ def _resume_text(conn: sqlite3.Connection) -> str:
     # the same fact reaching a session that STARTS with one already parked.
     stuck = _blocked_tasks(live)
     if stuck:
-        lines.append(f"BLOCKED, needs the CEO before anything else: {', '.join(stuck)}. "
-                     f"advance.py will not move a blocked run - raise it with the CEO "
+        lines.append(f"BLOCKED, needs the User before anything else: {', '.join(stuck)}. "
+                     f"advance.py will not move a blocked run - raise it with the User "
                      f"(AskUserQuestion), then either fix the blocker or run approve.py "
                      f"--reject --reason \"<why>\" to send the task back.")
     # Same shape for a paused run: the line above would send the orchestrator to
-    # advance a task the CEO deliberately set aside, and advance.py refuses it.
+    # advance a task the User deliberately set aside, and advance.py refuses it.
     paused = [r for r in live if is_paused(r)]
     if paused:
         who = "; ".join(f"{r['task']} ({r.get('pause_kind') or '?'}: "
                         f"{r.get('pause_reason') or 'no reason recorded'})" for r in paused)
-        lines.append(f"PAUSED by the CEO, do not drive: {who}. Resume only when the CEO says: "
+        lines.append(f"PAUSED by the User, do not drive: {who}. Resume only when the User says: "
                      f"python .claude/tools/pipeline/approve.py --task <task> --resume.")
     return "\n".join(lines)
 

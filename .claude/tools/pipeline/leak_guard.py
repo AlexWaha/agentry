@@ -16,7 +16,7 @@ character is refused (git could read it as an option). Exit codes: 0 clean,
 unknown ref, no <remote>/<trunk>). The gate fails closed: 2 blocks the push exactly
 like 1.
 
-Known gap, accepted by the CEO: a modification of an already-tracked
+Known gap, accepted by the User: a modification of an already-tracked
 `.agentry/project/*.md` is not an addition and is not caught.
 """
 

@@ -6,8 +6,8 @@ One line, read from run.db and the lane and the three dials:
     task-0118 | stage review | owed: commit approval | lane default [agentry]
     | mode build | approvals manual | swarm off
 
-task, stage and owed action come from the run the CEO should look at first: a
-run parked on him, else a run being driven, else any run that is not done. With
+task, stage and owed action come from the run the User should look at first: a
+run parked on the User, else a run being driven, else any run that is not done. With
 nothing in flight the line says so and still shows the dials.
 
 Fails open (NFR-4): the line is cosmetic, so nothing here may raise or print to
@@ -62,9 +62,9 @@ def read_runs() -> list[dict] | None:
 
 
 def owed_label(run: dict) -> str:
-    """What the CEO owes this run, or '' when nothing. The rules for when a park
-    is his live in stop_gate.owed_to_ceo; asking it keeps the line and the Stop
-    hook from disagreeing. A paused run owes nothing: the CEO set it aside and
+    """What the User owes this run, or '' when nothing. The rules for when a park
+    lives in stop_gate.owed_to_ceo; asking it keeps the line and the Stop
+    hook from disagreeing. A paused run owes nothing: the User set it aside and
     the stage shows (paused)."""
     import state
 

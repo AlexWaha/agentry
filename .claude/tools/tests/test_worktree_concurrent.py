@@ -139,7 +139,7 @@ class WorkspaceCase(unittest.TestCase):
                 {"name": "plan", "owner": "dev", "skip_for_types": ["bugfix", "techdebt"],
                  "exit_gate": {"cmd": "python {root}/.claude/tools/pipeline/artifact_gate.py "
                                       "--task {task} --kind plan", "expect_exit": 0}},
-                {"name": "plan-approval", "owner": "ceo", "checkpoints": ["plan"],
+                {"name": "plan-approval", "owner": "user", "checkpoints": ["plan"],
                  "skip_for_types": ["bugfix", "techdebt"]},
                 {"name": "implement", "owner": "dev",
                  "exit_gate": gate("implement", " --barrier" if barrier else "")},
@@ -147,9 +147,9 @@ class WorkspaceCase(unittest.TestCase):
                 {"name": "review", "owner": "reviewer", "exit_gate": gate("review")},
                 {"name": "ready", "owner": "orchestrator", "checkpoints": ["commit", "push"],
                  "auto_approve": []},
-                {"name": "done", "owner": "ceo", "terminal": True}]}
+                {"name": "done", "owner": "user", "terminal": True}]}
         plan = {"editing_stages": ["formalize"], "stages": [
-            {"name": "formalize", "owner": "architect"}, {"name": "done", "owner": "ceo", "terminal": True}]}
+            {"name": "formalize", "owner": "architect"}, {"name": "done", "owner": "user", "terminal": True}]}
         config = {
             "cwd": "src", "retry_budget": 3, "continuation_ceiling": 30, "main_branch": "main",
             "protected_branches": ["staging", "production"], "branch_pattern": "{type}/{task}",
@@ -432,7 +432,7 @@ class TwoTasksSideBySideTest(WorkspaceCase):
         for task, own, other in ((A, FILE_A, FILE_B), (B, FILE_B, FILE_A)):
             parked = self.advance(task)
             self.assertEqual(("park", "commit"), (parked["action"], parked["awaiting_human"]), parked)
-            self.assertIn(own, parked["message"])  # the CEO's diff is read from the task's own tree
+            self.assertIn(own, parked["message"])  # the User's diff is read from the task's own tree
             self.assertNotIn(other, parked["message"])
 
     # --- 6. commits ---------------------------------------------------------------

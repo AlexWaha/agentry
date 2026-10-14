@@ -19,7 +19,7 @@ coordination. The shape of the project is therefore config, not prose:
 |---|---|---|
 | Trunk commits | none - the trunk is written only by a merged PR | a local `git merge` of an approved task branch |
 | Who merges | the human, in the web UI | the pipeline, locally |
-| Push to a protected branch | forbidden | forbidden, except the trunk itself by recorded CEO approval |
+| Push to a protected branch | forbidden | forbidden, except the trunk itself by recorded User approval |
 | Push approval | `workflow.push_needs_approval` | `workflow.push_needs_approval` |
 | Checkpoints at `ready` | commit, then push | commit only - no push happens |
 
@@ -42,7 +42,7 @@ supervisor-spawned unattended session is refused the merge regardless
 (`check_unattended`).
 
 Publishing the trunk is the one push `solo` mode allows, since that merge is its
-only writer: `approve.py --trunk-push [--remote NAME]` records the CEO's chat
+only writer: `approve.py --trunk-push [--remote NAME]` records the User's chat
 approval and the next push of the trunk consumes it - one push per approval, never
 granted by an approvals level, refused in an unattended session and in `pr` mode.
 The approval names the remote (default `origin`): the trunk sent to another remote
@@ -85,18 +85,18 @@ into it.
 
 These restrictions apply to all AI agents without exception:
 
-- **NEVER commit without CEO approval** - always show the diff and ask before committing
-- **NEVER push without CEO approval** - always ask before pushing
-- **NEVER create PRs via CLI** - CEO creates PRs manually (no `gh` integration)
+- **NEVER commit without User approval** - always show the diff and ask before committing
+- **NEVER push without User approval** - always ask before pushing
+- **NEVER create PRs via CLI** - the User creates PRs manually (no `gh` integration)
 - **NEVER work on `main` branch** - no commits, no pushes, no direct changes
-- **NEVER push to `main` in `pr` mode** - not even with CEO approval; all changes go through PRs. The one exception is the `solo`-mode trunk publication described under "Workflow modes", approved per push with `approve.py --trunk-push`
+- **NEVER push to `main` in `pr` mode** - not even with User approval; all changes go through PRs. The one exception is the `solo`-mode trunk publication described under "Workflow modes", approved per push with `approve.py --trunk-push`
 - **NEVER force push** to any branch
-- **NEVER delete remote branches** without CEO approval
+- **NEVER delete remote branches** without User approval
 - **NEVER skip pre-commit checks** - git hooks are disabled; linter and tests must be run manually before every commit
 
 ### Every push report carries its links
 
-A push that reports only "done" makes the CEO go and find the branch himself.
+A push that reports only "done" makes the User go and find the branch themselves.
 The report names, as clickable links:
 
 - the PR-creation URL, which `git push` prints in its own output on a first push
@@ -105,14 +105,14 @@ The report names, as clickable links:
 - the comparison against the trunk.
 
 Do not describe where to look. Paste the URLs. The same applies to anything else
-the CEO is expected to open: a PR, an issue, a run, a deployed page.
+the User is expected to open: a PR, an issue, a run, a deployed page.
 
 ### Push is never automatic, at any approval level
 
-`git push` requires the CEO's explicit approval in chat every single time. No
+`git push` requires the User's explicit approval in chat every single time. No
 approvals level grants it, no per-stage `auto_approve` entry may list it, and no
-"he approved the last one" carries over. A push is the moment work leaves the
-machine, and the CEO has asked for that decision to stay his without exception.
+"approved the last one" carries over. A push is the moment work leaves the
+machine, and the User has asked for that decision to stay theirs without exception.
 
 This is enforced, not just written: `approvals.never_granted()` refuses `PUSH` and
 `TRUNK_PUSH` at every level (`pipeline.json` `approvals_never_granted` lists both;
@@ -141,7 +141,7 @@ SIGNATURE: push-always-needs-approval
 TRIGGER:   reaching the push checkpoint, or reading any approvals-level description
 WHAT:      ran with approvals at `auto`, which grants the push, and told the CEO that commit and push would both happen silently. He had to interrupt to say push is always his.
 WHY:       `skills/pipeline/SKILL.md` describes `auto` as granting everything through the push, while `git-workflow.md` forbids pushing without approval. Two project documents disagreed and the orchestrator followed the permissive one.
-FIX:       treat push as unconditionally CEO-gated. When two project documents disagree about a safety boundary, follow the stricter one and report the contradiction instead of quietly picking.
+FIX:       treat push as unconditionally User-gated. When two project documents disagree about a safety boundary, follow the stricter one and report the contradiction instead of quietly picking.
 DATE:      2026-09-13
 
 ### Deterministic checkpoint enforcement
@@ -153,18 +153,18 @@ commit and push approvals are enforced by the `PreToolUse` hook, not by goodwill
   `python .claude/tools/pipeline/approve.py --task task-XXXX --gate commit`.
 - `git push` is blocked until you run the same with `--gate push`.
 - Any `git push` to the protected branch is blocked outright. The one-shot
-  `approve.py --trunk-push` marker (`solo` mode) lets the CEO-approved trunk push
+  `approve.py --trunk-push` marker (`solo` mode) lets the User-approved trunk push
   through once; `pipeline.json` `allow_push_to_main` (default `false`, and `false`
   here) would let a plain trunk push through without it, but never a force or
   delete push.
-- Every `git push` is also checked by the leak guard (`tools/pipeline/leak_guard.py`): a pushed ref that adds a path under `.agentry/` that `<remote>/<trunk>` does not have (`origin/main` unless `pipeline.json` sets `remote` / `main_branch`) is refused, and a check that cannot run counts as a leak. The whole push check has a 12 s budget; a slow git call denies. The same check runs as the `.githooks/pre-push` hook; `git config core.hooksPath .githooks` (once per clone, a CEO deploy action, not set by any script) covers pushes made from a terminal. By hand: `python .claude/tools/pipeline/leak_guard.py --ref HEAD` (exit 0 clean, 1 leaked paths on stderr, 2 error).
+- Every `git push` is also checked by the leak guard (`tools/pipeline/leak_guard.py`): a pushed ref that adds a path under `.agentry/` that `<remote>/<trunk>` does not have (`origin/main` unless `pipeline.json` sets `remote` / `main_branch`) is refused, and a check that cannot run counts as a leak. The whole push check has a 12 s budget; a slow git call denies. The same check runs as the `.githooks/pre-push` hook; `git config core.hooksPath .githooks` (once per clone, a User deploy action, not set by any script) covers pushes made from a terminal. By hand: `python .claude/tools/pipeline/leak_guard.py --ref HEAD` (exit 0 clean, 1 leaked paths on stderr, 2 error).
 
-Run `approve.py` **only after the CEO explicitly approves in chat**. To send a task
+Run `approve.py` **only after the User explicitly approves in chat**. To send a task
 back for rework instead of approving, use `approve.py --task task-XXXX --reject
 --reason "<why>"` (the reason is required, a bare `--reject` is refused, and it is
 journaled; capped at 500 characters, control characters become spaces; returns it to `implement`; before the plan approval it stays at `plan`). The
 plan approval (`--gate plan`) is a third checkpoint, ahead of any code, for
-every task type except those in `skip_for_types` (`bugfix`, `techdebt`). These approvals are the only points where the CEO
+every task type except those in `skip_for_types` (`bugfix`, `techdebt`). These approvals are the only points where the User
 re-engages during execution, and in `solo` mode the push one does not arise
 except for the one-shot trunk publication (`approve.py --trunk-push`).
 
@@ -333,7 +333,7 @@ Tests must pass before committing. If tests fail - fix first, then commit.
 
 This verifies formatting without modifying files, catching anything the auto-formatter missed on already-committed files.
 
-### 4. Show Diff to CEO
+### 4. Show Diff to the User
 
 ```bash
 git diff --staged
@@ -344,13 +344,13 @@ If nothing is staged yet:
 git diff
 ```
 
-Show the complete diff. Do not summarize or abbreviate. The CEO reads the actual changes.
+Show the complete diff. Do not summarize or abbreviate. The User reads the actual changes.
 
 ### 5. Ask for Approval
 
 Explicitly ask: "Ready to commit. Approve?"
 
-Only commit after receiving explicit CEO approval.
+Only commit after receiving explicit User approval.
 
 ---
 
@@ -372,13 +372,13 @@ If the current branch is `main` - **STOP. Do not push.** Switch to a feature bra
 git log origin/$(git branch --show-current)..HEAD --oneline
 ```
 
-Show the branch name and the commits that will be pushed. Ask for CEO approval.
+Show the branch name and the commits that will be pushed. Ask for User approval.
 
 ---
 
 ## Before Every PR
 
-**CEO creates PRs manually.** The AI agent does NOT have access to `gh` CLI or GitHub. The agent's role is to prepare the PR - push the branch and provide PR details.
+**The User creates PRs manually.** The AI agent does NOT have access to `gh` CLI or GitHub. The agent's role is to prepare the PR - push the branch and provide PR details.
 
 ### 1. Ensure Branch is Pushed
 
@@ -386,7 +386,7 @@ The branch must be pushed to origin before a PR can be created.
 
 ### 2. Prepare PR Details
 
-Present to CEO for manual PR creation:
+Present to the User for manual PR creation:
 - **Title**: Short, descriptive (under 70 characters)
 - **Body**: What changed, why, and how to test (use template below)
 - **Target branch**: `main` (always)
@@ -462,19 +462,19 @@ git branch -d feature/task-XXXX
 ### Rules
 
 - **Never** delete a branch that is not merged into `main`
-- **Never** delete remote branches without CEO approval
+- **Never** delete remote branches without User approval
 - **Never** use `git branch -D` (force delete) - use `git branch -d` (safe delete)
 - After PR merge, delete the local branch
 - With worktrees, the pipeline removes the task's tree after the merge but keeps the
   branch (automatic branch deletion is out of scope). Git refuses to delete a branch
   that is still checked out in a tree, so delete it only after the tree is gone
-- Remote branch deletion: only after CEO confirmation
+- Remote branch deletion: only after User confirmation
 
 ```bash
 # Safe local delete (fails if not merged)
 git branch -d feature/task-XXXX
 
-# Remote delete (only with CEO approval)
+# Remote delete (only with User approval)
 git push origin --delete feature/task-XXXX
 ```
 
@@ -482,7 +482,7 @@ git push origin --delete feature/task-XXXX
 
 ## Deploy Actions Reporting (MANDATORY)
 
-Every task report (before push / before merge) **must** include a **Deploy Actions** section stating exactly what commands ops/CEO must run on production after merge. No task is "done" without this section.
+Every task report (before push / before merge) **must** include a **Deploy Actions** section stating exactly what commands ops/User must run on production after merge. No task is "done" without this section.
 
 > Exact command syntax depends on the stack; see `.agentry/project/stack.md` for concrete commands. The categories below are framework-agnostic.
 
@@ -509,7 +509,7 @@ Every task report (before push / before merge) **must** include a **Deploy Actio
 - **Zero ambiguity.** Writing `none` is a positive assertion that no action is required - verified, not skipped.
 - **Multiple categories** are allowed. List every applicable command in execution order.
 - **New env var** → call it out explicitly with the variable name and value shape.
-- **Destructive step** (drop column, wipe table) → CEO approval required separately, not buried in deploy actions.
+- **Destructive step** (drop column, wipe table) → User approval required separately, not buried in deploy actions.
 - **Downtime expected** → flag with `⚠️ DOWNTIME` and estimate duration.
 - This section appears in the task report AND in the MR description.
 
@@ -565,14 +565,14 @@ When conflicts arise:
 1. Pull latest `main` into the feature branch
 2. Resolve conflicts locally
 3. Run tests after resolution
-4. Show the resolution to CEO before pushing
+4. Show the resolution to the User before pushing
 
 ```bash
 git checkout feature/task-XXXX
 git pull origin main
 # Resolve conflicts in editor
 git add .
-# Show diff to CEO, get approval, then commit
+# Show diff to the User, get approval, then commit
 ```
 
 ---
@@ -595,12 +595,12 @@ When a multi-step initiative is planned:
 Each branch corresponds to a task in the task management system:
 
 1. Task is created with a unique number (e.g., `task-XXXX`) and files into `.agentry/tasks/backlog/`
-2. `advance.py` moves the file `backlog/ -> active/` when the CEO says which task to start; a branch is created from `main` using the task number: `feature/task-XXXX`
+2. `advance.py` moves the file `backlog/ -> active/` when the User says which task to start; a branch is created from `main` using the task number: `feature/task-XXXX`
 3. Work proceeds on the branch
-4. Commit when task is done (CEO approval required)
-5. Push the feature branch to remote (CEO approval required)
-6. **CEO creates the PR manually** in the GitHub web UI - agents never merge to `main` locally, never push to `main`, never use `gh` CLI
-7. CEO merges the PR → `advance.py` confirms the merge via git and moves the task file `active/ -> done/` itself - "done" means merged, not pushed
+4. Commit when task is done (User approval required)
+5. Push the feature branch to remote (User approval required)
+6. **The User creates the PR manually** in the GitHub web UI - agents never merge to `main` locally, never push to `main`, never use `gh` CLI
+7. The User merges the PR → `advance.py` confirms the merge via git and moves the task file `active/ -> done/` itself - "done" means merged, not pushed
 8. Next task branches from fresh `main` (`git checkout main && git pull origin main`)
 
 ### File Locations

@@ -51,7 +51,7 @@ in `.agentry/tasks/` are the harness improving itself.
 
 Agentry has no application server and no request/response cycle. Its
 architecture is the pipeline itself - the components that sit between the
-CEO's instruction and the model's next tool call:
+User's instruction and the model's next tool call:
 
 - **Stage machine** (`.agentry/pipeline.json` +
   `.claude/tools/pipeline/advance.py`) - declares each pipeline's stages,
@@ -84,7 +84,7 @@ and commands in `project/stack.md`.
 - `stage` - one step of a pipeline (for example `implement`, `test`,
   `review`); a task moves to the next stage only when `advance.py` runs that
   stage's exit-gate command and it passes.
-- `checkpoint` - a point where the pipeline stops and waits for the CEO's
+- `checkpoint` - a point where the pipeline stops and waits for the User's
   approval: commit and push in `pr` mode, commit only in `solo` mode (this
   repository runs `solo`, so the gated local merge follows commit instead of
   a push checkpoint - push approval is still required if a push ever
@@ -102,7 +102,7 @@ and commands in `project/stack.md`.
   sections, no scaffold marker, minimum length), not whether the content is
   genuinely the writer's own.
 - `approvals level` - one of `manual`, `assisted`, `auto`: how many
-  checkpoints clear without asking the CEO. `manual` grants nothing,
+  checkpoints clear without asking the User. `manual` grants nothing,
   `assisted` the commit only, `auto` take and commit. The shipped
   `pipeline.json` lists push and trunk_push in `approvals_never_granted`, so no
   level grants the push. Subagent Write/Edit and explicit-path shell writes to
@@ -130,8 +130,8 @@ govern work on the harness itself.
 
 | Phase | Name | Key agents | Gate |
 |-------|------|-----------|------|
-| 6 | Technical architecture | Architect, senior-backend-dev | CEO approves technical design |
-| 7 | Infrastructure setup | DevOps engineer, Architect | CEO verifies the pipeline hooks fire |
+| 6 | Technical architecture | Architect, senior-backend-dev | User approves technical design |
+| 7 | Infrastructure setup | DevOps engineer, Architect | User verifies the pipeline hooks fire |
 | 8 | Implementation | Senior backend dev, DevOps engineer | Exit gates pass: `compileall`, `unittest`, `ruff` |
 | 9 | Testing and QA | QA engineer, Reviewer | All tests pass, security audit clean |
 

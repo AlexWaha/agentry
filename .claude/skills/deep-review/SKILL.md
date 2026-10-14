@@ -20,7 +20,7 @@ quality gate.
    `git diff main...HEAD --stat`; when the work is uncommitted review the
    working tree (`git diff HEAD` + untracked via `git status --porcelain`).
 2. **Select 3-4 lenses** from [references/lenses.md](references/lenses.md) per
-   subject type. Present the chosen lenses to the CEO/Orchestrator for approval
+   subject type. Present the chosen lenses to the User/Orchestrator for approval
    before analyzing.
 3. **Gather material.** Read ONLY changed files for code (plus their tests,
    validators, services, resources, migrations, routes); referenced sibling

@@ -1,6 +1,6 @@
 """The plan flow's `approval` stage is a real checkpoint (task-0089).
 
-`pipelines.plan` declared an `approval` stage owned by the CEO, spelled its key
+`pipelines.plan` declared an `approval` stage owned by the User, spelled its key
 `checkpoint` (singular, read by nobody), and advance.stage_checkpoints() then
 filtered every name that was not `commit` or `push` out of the list. A hand-run
 `advance.py --task X` at `approval` therefore walked straight to `breakdown`
@@ -51,9 +51,9 @@ PLAN_PIPELINE = {
             {"name": "formalize", "owner": "architect"},
             {"name": "draft", "owner": "architect"},
             {"name": "plan-review", "owner": "reviewer"},
-            {"name": "approval", "owner": "ceo", "checkpoints": ["plan"]},
+            {"name": "approval", "owner": "user", "checkpoints": ["plan"]},
             {"name": "breakdown", "owner": "product-manager"},
-            {"name": "done", "owner": "ceo"},
+            {"name": "done", "owner": "user"},
         ],
     }},
 }
@@ -204,7 +204,7 @@ class PlanCheckpointTest(unittest.TestCase):
     def test_the_build_flow_still_reaches_done_through_its_own_checkpoints(self):
         self.pipeline = {"retry_budget": 3, "pipelines": {"build": {"stages": [
             {"name": "ready", "owner": "orchestrator", "checkpoints": ["commit", "push"]},
-            {"name": "done", "owner": "ceo"}]}}}
+            {"name": "done", "owner": "user"}]}}}
         conn = state.connect()
         state.create_run(conn, "task-0801", "feature", "ready")
         state.set_fields(conn, "task-0801", commit_approved=1, push_approved=1)

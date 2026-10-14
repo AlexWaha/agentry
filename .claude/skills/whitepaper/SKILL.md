@@ -1,6 +1,6 @@
 ---
 name: whitepaper
-description: Produce a comprehensive technical and business whitepaper (vision, market context, solution, competitive advantages, monetization, roadmap) that bridges strategy and product for investors, partners, and strategic stakeholders. Use when the CEO asks for a "whitepaper", an investor deck's narrative backbone, a strategic overview combining market and product, or when business/market/financial docs are complete and need synthesis into one document.
+description: Produce a comprehensive technical and business whitepaper (vision, market context, solution, competitive advantages, monetization, roadmap) that bridges strategy and product for investors, partners, and strategic stakeholders. Use when the User asks for a "whitepaper", an investor deck's narrative backbone, a strategic overview combining market and product, or when business/market/financial docs are complete and need synthesis into one document.
 allowed-tools: Read, Grep, Glob, Write, WebSearch, WebFetch
 ---
 
@@ -8,7 +8,7 @@ allowed-tools: Read, Grep, Glob, Write, WebSearch, WebFetch
 
 > STATUS: DEFERRED. Not active in current project phase (backend API only).
 > Will be activated when business planning/analysis work begins. Do not
-> invoke until explicitly activated by CEO.
+> invoke until explicitly activated by the User.
 
 Synthesizes business strategy, market research, and product vision into one
 cohesive narrative document for investors and partners, without exposing
@@ -67,7 +67,7 @@ implementation details.
     `references/whitepaper-template.md`.
 13. **Cite every data point** back to its source document; never state a
     number without a reference.
-14. **Present a summary to the CEO** and wait for explicit approval before
+14. **Present a summary to the User** and wait for explicit approval before
     considering the task done: document structure overview, a 4-sentence
     narrative (problem -> solution -> market -> monetization), strongest
     selling point, weakest section or data gap, recommended audience
@@ -88,7 +88,7 @@ implementation details.
 - [ ] Every key number cites its source document
 - [ ] Document reads as one narrative, not a stack of disconnected sections
 - [ ] Table of contents and references list are accurate and complete
-- [ ] CEO summary presented and explicit approval requested
+- [ ] User summary presented and explicit approval requested
 
 ## References (read only when needed)
 
