@@ -3877,7 +3877,11 @@ def under_home_claude(file_path: str) -> bool:
     .claude/) store project data outside the repo - forbidden. Exception:
     ~/.claude/plans/ is the harness's own plan-mode scratch area (Claude Code
     forces the plan file there); denying it bricks plan mode, and the final
-    plan is copied into <project>/.agentry/plans/ anyway."""
+    plan is copied into <project>/.agentry/plans/ anyway.
+    Exception 2 (task-0135): exactly ~/.claude/CLAUDE.md, the user's own global
+    memory file - not project data. The compare is on the resolved path, case-folded
+    on Windows (normcase), so a CLAUDE.md in a subdirectory, a `..` spelling that
+    lands elsewhere, or a symlink to another file stays denied."""
     if is_unc(file_path):
         return False
     try:
@@ -3886,6 +3890,8 @@ def under_home_claude(file_path: str) -> bool:
         if p == home_claude or home_claude in p.parents:
             if (home_claude / "plans") in p.parents:
                 return False  # harness plan-mode scratch file - allowed
+            if os.path.normcase(p) == os.path.normcase(home_claude / "CLAUDE.md"):
+                return False  # the user's global CLAUDE.md - allowed
             # allow if it is actually the project's own .claude (repo under home)
             root_claude = (state.ROOT / ".claude").resolve()
             return not (p == root_claude or root_claude in p.parents)
