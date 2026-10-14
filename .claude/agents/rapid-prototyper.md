@@ -15,19 +15,7 @@ skills:
   - feature-scaffold
 rules:
   - coding-style.md
-hooks:
-  PreToolUse:
-    - matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit"
-      hooks:
-        - type: command
-          command: 'python "$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/agent_gate.py" --profile dev'
-          timeout: 20
-  PostToolUse:
-    - matcher: "Edit|Write|MultiEdit|NotebookEdit"
-      hooks:
-        - type: command
-          command: 'python "$CLAUDE_PROJECT_DIR/.claude/tools/hooks/dangerous_patterns.py"'
-          timeout: 15
+profile: dev
 ---
 
 # Rapid Prototyper

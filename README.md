@@ -79,7 +79,7 @@ waits. Rejecting there sends the task back to `implement`.
 one at a time, so there is never a concurrent edit to the working tree (a
 multi-subtask epic registered as one umbrella task is the exception: see "Swarm
 mode" in `.claude/rules/orchestration.md` and the swarm protocol in
-`.claude/skills/swarm/SKILL.md`). `done`
+`$AGENTRY_ROOT/skills/swarm/SKILL.md`). `done`
 is reached only when git confirms the branch is actually merged into the main
 branch, not merely pushed.
 
@@ -115,13 +115,13 @@ change.
   `PostToolUse` are all wired in `.claude/settings.json`).
 - **Python 3.12 or newer** on PATH. The scripts themselves parse on 3.9, but
   the project targets current stable releases and is only tested there. Every
-  script under `.claude/tools/` is standard-library only (`json`, `sqlite3`,
+  script under `plugin/tools/` is standard-library only (`json`, `sqlite3`,
   `subprocess`, `re`, `time`) at runtime, so no `pip install` step exists or is
   needed to run the harness.
 - **git**, for branch checks, merge detection, and the commit/push
   checkpoints.
 - **ruff** (development dependency only, not needed at runtime): lints
-  `.claude/tools` as the `review` stage's exit gate. Config lives in the root
+  `plugin/tools` as the `review` stage's exit gate. Config lives in the root
   `pyproject.toml`. Install with `pip install ruff` or any package manager;
   the harness itself never imports it.
 - **codegraph MCP server** (optional). Wired per project in the root
@@ -156,8 +156,11 @@ values: `main_branch` and the exit-gate commands of `implement`, `test` and
 instead of building your code, which passes and proves nothing. Section 2 lists
 each key with the value you inherit and the placeholder it replaced.
 
-A plugin-based install (`${CLAUDE_PLUGIN_ROOT}` addressing, marketplace
-manifest) is planned - see [Roadmap](#roadmap) - and is not shipped today.
+The code and skills already live in a plugin tree (`plugin/`, addressed as
+`${CLAUDE_PLUGIN_ROOT}` by hooks and skills and as `$AGENTRY_ROOT` in prose and
+Bash; layout in [plugin-layout.md](docs/technical/plugin-layout.md)). A
+marketplace install is planned - see [Roadmap](#roadmap) - and is not shipped
+today.
 
 ## Usage
 
@@ -181,8 +184,8 @@ manifest) is planned - see [Roadmap](#roadmap) - and is not shipped today.
 
 `.agentry/state/swarm` is the third dial, `on` or `off` (default `off`): whether a
 multi-subtask epic runs as a parallel agent swarm under one umbrella task. Set it
-with `python .claude/tools/pipeline/swarm.py on|off`; `python
-.claude/tools/pipeline/mode.py --show` prints all three dials, and the
+with `python "$AGENTRY_ROOT/tools/pipeline/swarm.py" on|off`; `python
+"$AGENTRY_ROOT/tools/pipeline/mode.py" --show` prints all three dials, and the
 `/pipeline-*` skills set them by name. The project values for the swarm protocol
 are in `.claude/pipeline-adapter.md`.
 
@@ -203,20 +206,21 @@ a supervisor-spawned (unattended) session is refused the merge regardless.
 ### The daily loop
 
 ```bash
+# AGENTRY_ROOT is the plugin root; the plugin's session_start hook exports it.
 # Check what is running
-python .claude/tools/pipeline/state.py --show
+python "$AGENTRY_ROOT/tools/pipeline/state.py" --show
 
 # Start a task (creates/records the run; branch must already be cut from up-to-date main)
-python .claude/tools/pipeline/advance.py --task task-0001 --type feature
+python "$AGENTRY_ROOT/tools/pipeline/advance.py" --task task-0001 --type feature
 
 # After the User reviews the diff and approves:
-python .claude/tools/pipeline/approve.py --task task-0001 --gate commit
+python "$AGENTRY_ROOT/tools/pipeline/approve.py" --task task-0001 --gate commit
 git commit -m "..."
-python .claude/tools/pipeline/advance.py --task task-0001
+python "$AGENTRY_ROOT/tools/pipeline/advance.py" --task task-0001
 
-python .claude/tools/pipeline/approve.py --task task-0001 --gate push
+python "$AGENTRY_ROOT/tools/pipeline/approve.py" --task task-0001 --gate push
 git push
-python .claude/tools/pipeline/advance.py --task task-0001
+python "$AGENTRY_ROOT/tools/pipeline/advance.py" --task task-0001
 ```
 
 Between the start of a task and its tail checkpoints (the commit, and - in `pr`

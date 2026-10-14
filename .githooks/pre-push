@@ -1,7 +1,10 @@
 #!/bin/sh
 # Leak guard (task-0041). Enable once per clone: git config core.hooksPath .githooks
+# leak_guard imports state, which reads the project root from CLAUDE_PROJECT_DIR and
+# exits 2 when it is unset. A terminal push has no such variable, so the hook names
+# its own repo root.
 root=$(git rev-parse --show-toplevel) || exit 2
 while read -r _ sha _ _; do
   case "$sha" in 0000000000000000000000000000000000000000) continue ;; esac
-  python "$root/.claude/tools/pipeline/leak_guard.py" --ref="$sha" || exit $?
+  CLAUDE_PROJECT_DIR="$root" python "$root/plugin/tools/pipeline/leak_guard.py" --ref="$sha" || exit $?
 done

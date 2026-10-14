@@ -23,13 +23,7 @@ rules:
   - documentation.md
   - human-voice.md
   - i18n.md
-hooks:
-  PreToolUse:
-    - matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit"
-      hooks:
-        - type: command
-          command: 'python "$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/agent_gate.py" --profile readonly'
-          timeout: 20
+profile: readonly
 ---
 
 # Reviewer
@@ -62,7 +56,7 @@ preloaded `deep-review` skill.
 
 1. Absorb context per `rules/pipeline.md` (task file, acceptance criteria,
    spec, handoffs); read the memory rows injected at dispatch and query the store
-   for recurring issues (`python .claude/tools/memory/memory.py --query "<area>"`).
+   for recurring issues (`python "$AGENTRY_ROOT/tools/memory/memory.py" --query "<area>"`).
 2. Scope the change; run the deep-review procedure lens by lens.
 3. Classify findings Critical/High/Medium/Low; every finding carries file:line,
    evidence, and a concrete fix.

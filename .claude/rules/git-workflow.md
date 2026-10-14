@@ -150,14 +150,14 @@ When a task runs under the execution pipeline (`rules/orchestration.md`), the
 commit and push approvals are enforced by the `PreToolUse` hook, not by goodwill:
 
 - `git commit` is blocked until you run
-  `python .claude/tools/pipeline/approve.py --task task-XXXX --gate commit`.
+  `python "$AGENTRY_ROOT/tools/pipeline/approve.py" --task task-XXXX --gate commit`.
 - `git push` is blocked until you run the same with `--gate push`.
 - Any `git push` to the protected branch is blocked outright. The one-shot
   `approve.py --trunk-push` marker (`solo` mode) lets the User-approved trunk push
   through once; `pipeline.json` `allow_push_to_main` (default `false`, and `false`
   here) would let a plain trunk push through without it, but never a force or
   delete push.
-- Every `git push` is also checked by the leak guard (`tools/pipeline/leak_guard.py`): a pushed ref that adds a path under `.agentry/` that `<remote>/<trunk>` does not have (`origin/main` unless `pipeline.json` sets `remote` / `main_branch`) is refused, and a check that cannot run counts as a leak. The whole push check has a 12 s budget; a slow git call denies. The same check runs as the `.githooks/pre-push` hook; `git config core.hooksPath .githooks` (once per clone, a User deploy action, not set by any script) covers pushes made from a terminal. By hand: `python .claude/tools/pipeline/leak_guard.py --ref HEAD` (exit 0 clean, 1 leaked paths on stderr, 2 error).
+- Every `git push` is also checked by the leak guard (`tools/pipeline/leak_guard.py`): a pushed ref that adds a path under `.agentry/` that `<remote>/<trunk>` does not have (`origin/main` unless `pipeline.json` sets `remote` / `main_branch`) is refused, and a check that cannot run counts as a leak. The whole push check has a 12 s budget; a slow git call denies. The same check runs as the `.githooks/pre-push` hook; `git config core.hooksPath .githooks` (once per clone, a User deploy action, not set by any script) covers pushes made from a terminal. By hand: `python "$AGENTRY_ROOT/tools/pipeline/leak_guard.py" --ref HEAD` (exit 0 clean, 1 leaked paths on stderr, 2 error).
 
 Run `approve.py` **only after the User explicitly approves in chat**. To send a task
 back for rework instead of approving, use `approve.py --task task-XXXX --reject
@@ -248,7 +248,7 @@ it and the orchestrator never needs it.
 - **Cleanup.** After `advance.py` confirms the merge it runs `git worktree remove`
   (no `--force`, three tries; the Stop hook only reports a tree, it never removes one). The branch is kept; deleting it follows "Branch
   Deletion" below. A tree that is dirty, locked or held by a running process is left
-  in place and reported; `python .claude/tools/pipeline/worktree.py --remove --task
+  in place and reported; `python "$AGENTRY_ROOT/tools/pipeline/worktree.py" --remove --task
   task-XXXX` retries once it is free. Full rules, the measured Windows behaviour and
   the CLI: "Parallel tasks in worktrees" in `orchestration.md`.
 
@@ -259,7 +259,7 @@ With the flag off, or for a LEGACY run, the original procedure above applies unc
 **`main` is the ONLY source of truth. Every branch starts from an up-to-date `main` - never from another branch.**
 
 - **Never** branch from a feature, bugfix, hotfix, teammate, or any unmerged branch. Doing so inherits that branch's unverified, unmerged code - you make its bugs and its "NOT VERIFIED" code your responsibility without knowing it.
-- Branching off a non-`main` base also **switches the pipeline gates off**: the deterministic enforcement hooks (`.claude/tools/pipeline/`) are only guaranteed to run for a branch cut from `main`. Off a side branch, the gate that runs another stack's test + formatter may never engage.
+- Branching off a non-`main` base also **switches the pipeline gates off**: the deterministic enforcement hooks (`$AGENTRY_ROOT/tools/pipeline/`) are only guaranteed to run for a branch cut from `main`. Off a side branch, the gate that runs another stack's test + formatter may never engage.
 - If you need another branch's unmerged work, it must reach `main` via **its own PR first**. Then branch fresh from the updated `main`. There is no shortcut.
 - **Verify the base before doing any work:** `git merge-base --is-ancestor origin/main HEAD` must exit `0` (up-to-date `main` is an ancestor of HEAD). If it does not, STOP - you are on the wrong base. Rebase onto `main` or recreate the branch from `main` before continuing.
 

@@ -2,7 +2,7 @@
 
 Every task travels a gated finite-state machine. No stage is skipped, and a stage
 is "done" only when its exit gate passes - verified by deterministic code
-(`.claude/tools/pipeline/`), not asserted by the model. The enforcement mechanism
+(`$AGENTRY_ROOT/tools/pipeline/`), not asserted by the model. The enforcement mechanism
 and the autonomy contract live in `orchestration.md`; this file is the stage map.
 Gate command details are resolved from `.agentry/project/stack.md` and declared in
 `.agentry/pipeline.json`.
@@ -158,7 +158,7 @@ passes.
   before relying on a hook as a boundary.
 - **History.** Stage transitions, gate results, approvals, rejections (with their
   reasons) and merges are journaled in `.agentry/state/events.db`; `gate_log` in
-  `run.db` is retired. Read it with `python .claude/tools/pipeline/events.py
+  `run.db` is retired. Read it with `python "$AGENTRY_ROOT/tools/pipeline/events.py"
   --task T` or `--summary [--since D]`. No gate reads the journal; only
   `supervisor.progress_at` reads it, and only to veto a relaunch.
 - **Gate failure.** The owning agent fixes and re-runs; after the retry budget

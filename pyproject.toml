@@ -1,17 +1,17 @@
 [tool.ruff]
-# Scope: the harness tooling under .claude/tools (stdlib-only Python, see README).
+# Scope: the harness tooling under plugin/tools (stdlib-only Python, see README).
 line-length = 110
 
 [tool.ruff.lint]
 # Explicit `select` on purpose - verified against ruff 0.16.1, not assumed:
-#   `ruff check --isolated .claude/tools` (ignores this file, ruff's built-in
+#   `ruff check --isolated plugin/tools` (ignores this file, ruff's built-in
 #   default rule set only) -> 86 errors, all BLE001 / S110 / S112 / PLW1510.
 #   Zero E or F findings under that default, and `--isolated --select=F`
 #   alone also passes clean - so ruff's default already covers F fully on
 #   this tree. It does NOT enable I (isort) at all, which is why E402 (import
 #   not at top) previously passed silently under an earlier, unconfigured
 #   version of this file (found by QA).
-#   `ruff check .claude/tools` (this config) -> "All checks passed!", so the
+#   `ruff check plugin/tools` (this config) -> "All checks passed!", so the
 #   select list below is genuinely green, not narrowed to pass trivially.
 # E, F, I are the task-0043 floor; W, UP, FURB, RUF, DTZ, PIE, ISC were already
 # active under the old (implicit) default and are kept because they caught
@@ -29,21 +29,21 @@ select = ["E", "F", "I", "W", "UP", "FURB", "RUF", "DTZ", "PIE", "ISC"]
 # oversight.
 
 [tool.ruff.lint.per-file-ignores]
-# These import a sibling module from .claude/tools/{pipeline,memory}, neither of
+# These import a sibling module from plugin/tools/{pipeline,memory}, neither of
 # which has an __init__.py or sits on sys.path by default - the path must be
 # extended before the import can resolve, so the import cannot sit at the top of
 # the file.
-".claude/tools/tests/test_approvals.py" = ["E402"]
-".claude/tools/tests/test_approvals_level.py" = ["E402"]
-".claude/tools/tests/test_busy_marker.py" = ["E402"]
-".claude/tools/tests/test_pretool_gate.py" = ["E402"]
-".claude/tools/tests/test_pretool_gate_git.py" = ["E402"]
-".claude/tools/tests/test_settings_attribution.py" = ["E402"]
-".claude/tools/tests/test_conveyor_gaps.py" = ["E402"]
-".claude/tools/tests/test_human_output.py" = ["E402"]
-".claude/tools/tests/test_diff_checkpoint.py" = ["E402"]
-".claude/tools/tests/test_memory_store.py" = ["E402"]
-".claude/tools/tests/test_supervisor.py" = ["E402"]
-".claude/tools/memory/update.py" = ["E402"]
-".claude/tools/memory/codebase_sync.py" = ["E402"]
-".claude/tools/memory/inject.py" = ["E402"]
+"plugin/tools/tests/test_approvals.py" = ["E402"]
+"plugin/tools/tests/test_approvals_level.py" = ["E402"]
+"plugin/tools/tests/test_busy_marker.py" = ["E402"]
+"plugin/tools/tests/test_pretool_gate.py" = ["E402"]
+"plugin/tools/tests/test_pretool_gate_git.py" = ["E402"]
+"plugin/tools/tests/test_settings_attribution.py" = ["E402"]
+"plugin/tools/tests/test_conveyor_gaps.py" = ["E402"]
+"plugin/tools/tests/test_human_output.py" = ["E402"]
+"plugin/tools/tests/test_diff_checkpoint.py" = ["E402"]
+"plugin/tools/tests/test_memory_store.py" = ["E402"]
+"plugin/tools/tests/test_supervisor.py" = ["E402"]
+"plugin/tools/memory/update.py" = ["E402"]
+"plugin/tools/memory/codebase_sync.py" = ["E402"]
+"plugin/tools/memory/inject.py" = ["E402"]

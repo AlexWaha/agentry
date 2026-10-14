@@ -48,7 +48,7 @@ blocks a dispatch.
 ## CLI
 
 ```bash
-M=.claude/tools/memory/memory.py
+M="$AGENTRY_ROOT/tools/memory/memory.py"
 
 python $M --record --kind lesson --signature <kebab-tag> --trigger <when it applies> \
           --what <one sentence> --why <root cause> --fix <checkable rule> \
@@ -108,7 +108,7 @@ does not need the columns.
   for the map.
 - **After every completed task:** `stop_gate.py` blocks starting the next task
   until the finished task's memory review is stamped:
-  `python .claude/tools/memory/update.py --stamp --task task-XXXX`. The stamp
+  `python "$AGENTRY_ROOT/tools/memory/update.py" --stamp --task task-XXXX`. The stamp
   COUNTS ROWS in the store: it is refused unless the store gained at least one
   row since the previous stamp, or `--none` says the review found nothing worth
   recording. Distill from the task's handoff doc: Gotchas -> `lesson` rows,

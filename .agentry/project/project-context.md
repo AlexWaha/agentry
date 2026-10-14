@@ -44,7 +44,7 @@ real work - hobby projects, pet projects, anything with no dedicated ops
 team - who wants Claude Code to keep advancing a task without being asked
 "shall I continue?", and wants each stage's pass or fail to come from a real
 command rather than a self-report. This repository is also Agentry's first
-adopter: the harness under `.claude/` is the product, and the tasks tracked
+adopter: the harness (the `plugin/` tree plus the project-side `.claude/`) is the product, and the tasks tracked
 in `.agentry/tasks/` are the harness improving itself.
 
 ## Architecture
@@ -54,13 +54,13 @@ architecture is the pipeline itself - the components that sit between the
 User's instruction and the model's next tool call:
 
 - **Stage machine** (`.agentry/pipeline.json` +
-  `.claude/tools/pipeline/advance.py`) - declares each pipeline's stages,
+  `$AGENTRY_ROOT/tools/pipeline/advance.py`) - declares each pipeline's stages,
   owning agent, and exit-gate command, and runs that command before
   recording an advance.
 - **Run state** (`.agentry/state/run.db`, SQLite) - one row per task in
   flight: pipeline, stage, stage status, and which approvals are still
   outstanding.
-- **Hooks** (`.claude/tools/pipeline/pretool_gate.py`, `agent_gate.py`,
+- **Hooks** (`$AGENTRY_ROOT/tools/pipeline/pretool_gate.py`, `agent_gate.py`,
   `stop_gate.py`) - PreToolUse hooks deny a commit or push until the
   matching approval is recorded, deny edits during the read-only review
   stage, and scope what each agent profile (`dev`, `readonly`, `docs`) may
@@ -73,8 +73,13 @@ User's instruction and the model's next tool call:
   the hooks enforce, and the agent roster the orchestrator dispatches
   against.
 
-The unittest suite lives in `.claude/tools/tests`, one module per concern. It
-holds 1711 tests (all passing on 2026-10-12).
+`AGENTRY_ROOT` in these paths is the plugin root (source: `plugin/` in this
+repository; until task-0039 switches the live harness, the workspace root
+`.claude`). See `docs/technical/plugin-layout.md`.
+
+The unittest suite lives in `plugin/tools/tests`, one module per concern. It
+holds 3528 tests (collected on 2026-10-14; the last full green run, 1711 tests,
+was on 2026-10-12).
 
 The component-by-component layout is in `project/architecture.md`, the stack
 and commands in `project/stack.md`.
@@ -117,7 +122,8 @@ Single-repository workspace; there is no separate application codebase.
 
 | Directory | Description | Git repo? |
 |-----------|-------------|-----------|
-| `.claude/` | The harness itself: rules, agents, skills, pipeline tools, task files, specs, memory store. This is what Agentry ships. | Yes (same repo as root) |
+| `plugin/` | The plugin root: `tools/` (pipeline, hooks, memory, setup, tests), `skills/`, `hooks/hooks.json`, `.claude-plugin/plugin.json`. This is what Agentry ships. | Yes (same repo as root) |
+| `.claude/` | The project side of the harness: rules, agents, `CLAUDE.md`, `settings.json`, `pipeline-adapter.md`, `skills/verify`. | Yes (same repo as root) |
 | `docs/` | Session memory notes under `docs/memory/`; the business, technical, and other subtrees `rules/documentation.md` describes are not populated yet. | Yes (same repo as root) |
 | `.codegraph/` | Code knowledge graph index, built by the codegraph CLI. | No (gitignored) |
 

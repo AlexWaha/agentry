@@ -49,9 +49,10 @@ The harness and the project's own work product live in different trees.
 
 | Path | Holds |
 |---|---|
-| `.claude/` | The harness: `CLAUDE.md`, `settings.json`, `agents/`, `rules/`, `skills/`, `hooks/`, `tools/` |
-| `.claude/tools/pipeline/` | State machine, gates and approvals (`advance.py`, `approve.py`, `approvals.py`, `mode.py`, `swarm.py`, `stack_gate.py`, `supervisor.py`) |
-| `.claude/tools/setup/` | Onboarding helpers (`repo_scan.py`, `substitute_tokens.py`, `rebuild_pipeline.py`) |
+| `.claude/` | The project side of the harness: `CLAUDE.md`, `settings.json`, `agents/`, `rules/`, `pipeline-adapter.md`, and `skills/verify` |
+| `$AGENTRY_ROOT` (the plugin root) | `tools/`, `skills/`, `hooks/hooks.json`. Source: `plugin/` in the harness repository. Until task-0039 switches the live harness to the plugin, `AGENTRY_ROOT` is `.claude/`, which still carries `tools/` and `skills/`. See `docs/technical/plugin-layout.md` |
+| `$AGENTRY_ROOT/tools/pipeline/` | State machine, gates and approvals (`advance.py`, `approve.py`, `approvals.py`, `mode.py`, `swarm.py`, `stack_gate.py`, `supervisor.py`) |
+| `$AGENTRY_ROOT/tools/setup/` | Onboarding helpers (`repo_scan.py`, `substitute_tokens.py`, `rebuild_pipeline.py`) |
 | `.agentry/pipeline.json` | Stage machine, gates, `repos`, `lanes`, `workflow`, `handoff`, `memory` |
 | `.agentry/project/` | Product, architecture, stack and API overlay for this project |
 | `.agentry/tasks/` | `backlog/`, `active/`, `done/`, `epics/`, `handoffs/`, `templates/` |
@@ -86,7 +87,7 @@ output if it is wrong.
 | Which repositories exist | `repo_scan.py`: one row per `.git` directory, fields `key`, `path`, `manifests` |
 | Language and stack of each repository | `repo_scan.py` field `stack` (`unknown` when a `.git` has no recognised manifest) |
 | Framework, test framework, formatter, container tool, CI tool, database, auth, main branch | Phase A1 inspection, written to the placeholder table in `.agentry/project/stack.md` |
-| Replacing `{{PLACEHOLDER}}` tokens file by file | `python .claude/tools/setup/substitute_tokens.py --target .`, driven by that table |
+| Replacing `{{PLACEHOLDER}}` tokens file by file | `python "$AGENTRY_ROOT/tools/setup/substitute_tokens.py" --target .`, driven by that table |
 | Test, format, lint, build and dev commands | The same table; they land in the gates you confirm in decision 2 |
 | The four pipeline keys to rewrite by hand (`main_branch` and the three exit gates) | Decision 1 and decision 2 write them |
 
@@ -101,7 +102,7 @@ runtime values.
 A workspace may hold one repository or several. Run:
 
 ```bash
-python .claude/tools/setup/repo_scan.py --root .
+python "$AGENTRY_ROOT/tools/setup/repo_scan.py" --root .
 ```
 
 It prints a table of key, path, stack and manifests, walking the root and two
@@ -115,7 +116,7 @@ right" and "Correct it". Correct a key, a path, a stack, or drop a row. Save
 the corrected rows as a JSON list in `tmp/repos.json` and write them:
 
 ```bash
-AGENTRY_MAIN_THREAD=1 python .claude/tools/setup/repo_scan.py --root . --table tmp/repos.json --write .agentry/pipeline.json
+AGENTRY_MAIN_THREAD=1 python "$AGENTRY_ROOT/tools/setup/repo_scan.py" --root . --table tmp/repos.json --write .agentry/pipeline.json
 ```
 
 This rewrites only `repos` and `lanes`, reads the result back through the
@@ -154,7 +155,7 @@ Three rules to know:
 - `stack_gate.py` runs these commands. Wire it as the exit gate of each stage in
   `pipelines.build` in `.agentry/pipeline.json`, because the shipped config does
   not do it for you:
-  `python .claude/tools/pipeline/stack_gate.py --task {task} --stage test`.
+  `python "$AGENTRY_ROOT/tools/pipeline/stack_gate.py" --task {task} --stage test`.
   Until you do, the exit gates keep the harness's own commands (`compileall`,
   `unittest`, `ruff`), and a build stage passes without touching your code.
   A gate that passes for the wrong reason is worse than no gate.
@@ -203,7 +204,7 @@ carry `lane` to override the name. Rules that follow from the file:
 - A session in a lane that `lanes` does not declare is offered nothing.
 - Approval level, mode and swarm are per lane. A second lane starts at `manual`;
   raise it in that lane's own session:
-  `PIPELINE_LANE=web python .claude/tools/pipeline/approvals.py assisted`.
+  `PIPELINE_LANE=web python "$AGENTRY_ROOT/tools/pipeline/approvals.py" assisted`.
 - With one repository you need no extra lanes. If you drop `lanes` entirely, every
   session is offered the whole backlog.
 
@@ -215,8 +216,8 @@ The coordination protocol between lanes is in
 The level says how many checkpoints clear without you. Set it per lane:
 
 ```bash
-python .claude/tools/pipeline/approvals.py assisted
-python .claude/tools/pipeline/approvals.py --show
+python "$AGENTRY_ROOT/tools/pipeline/approvals.py" assisted
+python "$AGENTRY_ROOT/tools/pipeline/approvals.py" --show
 ```
 
 | Level | Clears without you | Waits for you |
@@ -248,7 +249,7 @@ picks the stage machine for the current session.
 In `solo` mode the local merge still needs a branch named `<type>/task-NNNN`, a
 run in the store, and an approved commit checkpoint. `workflow.push_needs_approval`
 stays `true` in both modes. Publishing the trunk takes your explicit say-so in
-chat, recorded once with `python .claude/tools/pipeline/approve.py --trunk-push`;
+chat, recorded once with `python "$AGENTRY_ROOT/tools/pipeline/approve.py" --trunk-push`;
 the push consumes the marker. An unattended session is refused it. Full rules:
 `.claude/rules/git-workflow.md`.
 
@@ -261,7 +262,7 @@ the push consumes the marker. An unattended session is refused it. Full rules:
 | Push | `pr` mode only; never granted by a level | `approve.py --task task-XXXX --gate push` |
 | Trunk push | `solo` mode only, one push per approval | `approve.py --trunk-push` |
 
-All of these live in `.claude/tools/pipeline/approve.py`. While a plan is
+All of these live in `$AGENTRY_ROOT/tools/pipeline/approve.py`. While a plan is
 unapproved, the gate denies every write outside `.agentry/` on the task's branch,
 so the plan is the only thing that can change. Rejecting at the plan step keeps
 the task at `plan`; rejecting the diff at `ready` returns it to `implement` and
@@ -280,10 +281,10 @@ Skip this section on a fresh project.
   retroactive handoff docs. On a fresh project both stay `""`.
 - Before the next task registers, the previous completed task needs a handoff doc
   in `.agentry/tasks/handoffs/` and a memory stamp. Check with
-  `python .claude/tools/pipeline/handoff.py --check`, and after distilling the
+  `python "$AGENTRY_ROOT/tools/pipeline/handoff.py" --check`, and after distilling the
   task into memory rows, stamp it with
-  `python .claude/tools/memory/update.py --stamp --task task-XXXX` and
-  `python .claude/tools/memory/codebase_sync.py --stamp`.
+  `python "$AGENTRY_ROOT/tools/memory/update.py" --stamp --task task-XXXX` and
+  `python "$AGENTRY_ROOT/tools/memory/codebase_sync.py" --stamp`.
 - Seed the module map (Phase A7.5 of the init prompt) before the first task.
 
 ## Self-check
@@ -292,11 +293,11 @@ Skip this section on a fresh project.
 - [ ] `.agentry/project/stack.md` has concrete commands and no placeholders.
 - [ ] `grep -r 'PROJECT-SPECIFIC - REPLACE ME' .agentry/project/` returns nothing.
 - [ ] `grep -rE '\{\{[A-Z_]+\}\}' .claude/` returns only the three runtime-token files named above.
-- [ ] `python .claude/tools/pipeline/state.py --show` prints `[]`.
-- [ ] `python .claude/tools/setup/repo_scan.py --root .` agrees with `repos` in `pipeline.json`.
+- [ ] `python "$AGENTRY_ROOT/tools/pipeline/state.py" --show` prints `[]`.
+- [ ] `python "$AGENTRY_ROOT/tools/setup/repo_scan.py" --root .` agrees with `repos` in `pipeline.json`.
 - [ ] Every stage in `pipelines.build` runs your commands, not the harness's.
 - [ ] Every key of `lanes` points at a key of `repos`.
-- [ ] `python .claude/tools/pipeline/mode.py --show` prints the three dials as you intend.
+- [ ] `python "$AGENTRY_ROOT/tools/pipeline/mode.py" --show` prints the three dials as you intend.
 - [ ] `workflow.mode` is the one you chose, and `approvals_never_granted` still lists `push` and `trunk_push`.
 - [ ] `.claude/settings.local.json` is gitignored.
 
@@ -311,12 +312,12 @@ unapproved spec.
 
 | Need | Command |
 |---|---|
-| See where the pipeline stands | The status line shows `task | stage | owed | lane | mode | approvals | swarm`; `python .claude/tools/pipeline/state.py --show` dumps every run |
-| Change the session mode | `python .claude/tools/pipeline/mode.py plan` (`build`, `plan` or `talk`) |
-| Run each epic as a parallel swarm | `python .claude/tools/pipeline/swarm.py on` (`off` by default) |
-| Set a task aside for an urgent one | `python .claude/tools/pipeline/approve.py --task task-XXXX --pause "<reason>"`; refused while the tree has uncommitted work |
-| Bring it back | `python .claude/tools/pipeline/approve.py --task task-XXXX --resume` |
-| Stop the background supervisor | `python .claude/tools/pipeline/supervisor.py --stop` |
+| See where the pipeline stands | The status line shows `task | stage | owed | lane | mode | approvals | swarm`; `python "$AGENTRY_ROOT/tools/pipeline/state.py" --show` dumps every run |
+| Change the session mode | `python "$AGENTRY_ROOT/tools/pipeline/mode.py" plan` (`build`, `plan` or `talk`) |
+| Run each epic as a parallel swarm | `python "$AGENTRY_ROOT/tools/pipeline/swarm.py" on` (`off` by default) |
+| Set a task aside for an urgent one | `python "$AGENTRY_ROOT/tools/pipeline/approve.py" --task task-XXXX --pause "<reason>"`; refused while the tree has uncommitted work |
+| Bring it back | `python "$AGENTRY_ROOT/tools/pipeline/approve.py" --task task-XXXX --resume` |
+| Stop the background supervisor | `python "$AGENTRY_ROOT/tools/pipeline/supervisor.py" --stop` |
 
 The status line is registered in `.claude/settings.json` and needs a session
 restart the first time it is added. A run waiting on you shows `owed:` with what

@@ -7,13 +7,8 @@ permissionMode: bypassPermissions
 effort: low
 maxTurns: 100
 tools: Read, Grep, Glob, Bash
-hooks:
-  PreToolUse:
-    - matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit"
-      hooks:
-        - type: command
-          command: 'python "$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/agent_gate.py" --profile readonly --allow-script axe --allow-script lighthouse --allow-script pa11y --allow-script npx'
-          timeout: 20
+profile: readonly
+allow_scripts: [axe, lighthouse, pa11y, npx]
 ---
 
 # Accessibility Auditor
@@ -37,7 +32,7 @@ ARIA correctness, and cognitive barriers a green Lighthouse score will not show.
 ## Workflow
 
 1. Absorb context per `rules/pipeline.md` (handoffs, project-context, spec, task acceptance criteria).
-2. Run the automated baseline scan (axe-core, Lighthouse) per `.claude/skills/deep-review/references/a11y-checklist.md`.
+2. Run the automated baseline scan (axe-core, Lighthouse) per `$AGENTRY_ROOT/skills/deep-review/references/a11y-checklist.md`.
 3. Do the manual pass: keyboard-only, screen reader, zoom, contrast/motion modes, per the same reference's protocols.
 4. Deep-dive custom components; verify dynamic content (modals, toasts, live regions) announces correctly.
 5. Report findings; invoke `deep-review` on-demand when the audit is part of a broader multi-lens review, `health-check` on-demand to confirm axe-core is wired into CI.

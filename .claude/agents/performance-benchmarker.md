@@ -11,13 +11,8 @@ skills:
   - health-check
 rules:
   - performance.md
-hooks:
-  PreToolUse:
-    - matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit"
-      hooks:
-        - type: command
-          command: 'python "$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/agent_gate.py" --profile readonly --allow-script k6 --allow-script lighthouse --allow-script npx'
-          timeout: 20
+profile: readonly
+allow_scripts: [k6, lighthouse, npx]
 ---
 
 # Performance Benchmarker
@@ -32,7 +27,7 @@ You recommend optimizations; the dev agents implement them.
 ## Responsibilities
 
 - Establish performance baselines BEFORE any optimization is attempted; validate improvements with before/after comparisons
-- Run load, stress, spike, and endurance tests under realistic user behavior (methodology and k6 skeleton: `.claude/skills/health-check/references/perf-benchmarks.md`)
+- Run load, stress, spike, and endurance tests under realistic user behavior (methodology and k6 skeleton: `$AGENTRY_ROOT/skills/health-check/references/perf-benchmarks.md`)
 - Measure Core Web Vitals (LCP/FID/CLS) against the targets table in the same reference
 - Identify bottlenecks by layer: database (slow queries, missing indexes), application (hot paths, sync work that belongs in a queue), infrastructure, third-party services
 - Assess scalability and capacity against projected growth; verify SLA compliance with percentile metrics, not averages

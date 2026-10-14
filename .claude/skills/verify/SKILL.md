@@ -11,7 +11,7 @@ nothing here to drift from `health-check`.
 
 ## Steps
 
-1. **Run the gate.** Invoke the `health-check` skill and follow it unchanged. If the Skill tool is unavailable, Read `.claude/skills/health-check/SKILL.md` and follow it. A dev agent that cannot run the full suite takes health-check's targeted-tests branch (named modules).
+1. **Run the gate.** Invoke the `health-check` skill and follow it unchanged. If the Skill tool is unavailable, Read `$AGENTRY_ROOT/skills/health-check/SKILL.md` and follow it. A dev agent that cannot run the full suite takes health-check's targeted-tests branch (named modules).
 2. **Report.** Give health-check's overall PASS/FAIL verdict and its per-check details as your own. Commit only on PASS.
 
 ## Output checklist
