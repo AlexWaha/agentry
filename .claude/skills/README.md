@@ -1,13 +1,13 @@
 # Skills Catalog
 
-24 skills, each a directory with `SKILL.md` (procedure, <200 lines) plus
+25 skills, each a directory with `SKILL.md` (procedure, <200 lines) plus
 optional `references/` files (templates and code examples, loaded on demand).
-The table below catalogues those 24. The other 18 directories are the pipeline
+The table below catalogues those 25. The other 18 directories are the pipeline
 set, owned by this project and edited here: `swarm` (the supervised agent-swarm protocol, with
 `references/templates.md`), `pipeline` (the three dials and the command family)
 and the 16 `pipeline-*` command skills. They are session controls rather than work
 procedures and are documented in `skills/pipeline/SKILL.md`, which is why a
-listing shows 42 directories. Project values for them live in
+listing shows 43 directories. Project values for them live in
 `.claude/pipeline-adapter.md`.
 Agents preload their core procedures via the `skills:` frontmatter field
 (P below); everything else is invoked at runtime through the Skill tool (O).
@@ -37,6 +37,7 @@ Descriptions carry "Use when" triggers so model invocation fires reliably.
 | stakeholder-html-deck | Self-contained HTML slide deck with presenter view | - | financial-analyst, marketing-strategist |
 | status-report | Project status from actual task files and pipeline state | sprint-prioritizer | orchestrator, product-manager, content-manager, technical-writer |
 | update-docs | Post-phase documentation audit and changelog | technical-writer | content-manager |
+| verify | Pre-commit gate; delegates to health-check and adds no checks. Claude Code calls a skill named `verify` right before commits (2.1.286; not docs-only or tests-only commits) | - | orchestrator |
 | whitepaper | Technical + business whitepaper for investors/partners | - | content-writer, technical-writer |
 | write-tests | 5-category endpoint coverage + TDD mode | qa-engineer | senior-backend-dev, senior-frontend-dev |
 
