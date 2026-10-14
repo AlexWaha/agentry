@@ -48,11 +48,11 @@ with the actual state of the project. Used by the Technical Writer agent.
    Check markdown links between documents resolve, and that any Mermaid
    diagrams render (use the Mermaid Chart MCP tool if available). Fix
    inconsistencies in the outdated document; if it is unclear which version
-   is correct, flag it for CEO decision rather than deciding.
+   is correct, flag it for User decision rather than deciding.
 7. **Generate the documentation status summary.** Use the template in
    `references/doc-templates.md`: documents created, documents updated, gaps
    identified, cross-reference fixes, changelog status.
-8. **Present to the CEO.** Show the summary, highlight gaps that need new
+8. **Present to the User.** Show the summary, highlight gaps that need new
    tasks, flag inconsistencies requiring a decision, and confirm all
    documents are current for the completed phase.
 
@@ -66,7 +66,7 @@ with the actual state of the project. Used by the Technical Writer agent.
 - [ ] Mermaid diagrams render correctly; no broken links
 - [ ] Changelog entry added for this pass
 - [ ] Gaps are clearly flagged with action items, not silently dropped
-- [ ] Summary presented to CEO
+- [ ] Summary presented to the User
 
 ## References (read only when needed)
 

@@ -1,6 +1,6 @@
 """task-0122: `approve.py --task T --abandon --reason TEXT` retires a task without a merge.
 
-The CEO drops a task for good; the run goes to stage `done` with stage_status
+The User drops a task for good; the run goes to stage `done` with stage_status
 `abandoned`, the file moves to done/, git is never touched, and the handoff and
 memory debt readers owe nothing for it. Everything runs on a sandbox copy of the
 folder layout and run store (tmproot.sandbox); the live ones are never touched.
@@ -36,7 +36,7 @@ import update
 
 TASK = "task-9500"
 OTHER = "task-9501"
-REASON = "CEO dropped the work"
+REASON = "User dropped the work"
 CMD = f"python .claude/tools/pipeline/approve.py --task {TASK} --abandon --reason x"
 WRAPPED = f"cd .claude && env X=1 python tools/pipeline/approve.py --task {TASK} --abandon --reason x"
 

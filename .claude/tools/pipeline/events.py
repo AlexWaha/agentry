@@ -30,7 +30,7 @@ Row vocabulary. `kind` is a closed set (KINDS). Conventions the writers follow:
   blocked / parked / continued / paused / resumed / merged / closed
                stage = stage at the time, detail = {reason} where one exists
   abandoned    stage = done, from_stage = the stage left, detail = {reason}
-`via` is the stem of the writing script (`approve` = the CEO, `advance` = a
+`via` is the stem of the writing script (`approve` = the User, `advance` = a
 level grant). `at` is UTC, second resolution, written by this module.
 
 CLI:

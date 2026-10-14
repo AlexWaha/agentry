@@ -15,7 +15,7 @@ tool (`{{MIGRATION_TOOL}}`) and database engine (`{{DEFAULT_DB}}`) live in
 
 1. **Classify the change.** New table, add column(s), add index, add foreign
    key, add unique constraint, modify column, rename, or destructive drop.
-   Rename and destructive drops need explicit CEO approval before proceeding -
+   Rename and destructive drops need explicit User approval before proceeding -
    see the classification table in `references/migration-examples.md`.
 2. **Check existing migration state.** Run `<migration tool> status` to see
    applied/pending migrations. Glob `**/migrations/*_create_<table>_table.*`

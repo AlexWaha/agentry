@@ -87,10 +87,10 @@ of truth.
 - rules/quality-standard.md - verification discipline, pre-flight checks, production bar
 - rules/coding-style.md - typed components, hooks/composables, clean patterns
 - rules/mobile.md - mobile conventions, offline-first, platform separation
-- rules/git-workflow.md - branch per task, gates before commit, CEO approvals
+- rules/git-workflow.md - branch per task, gates before commit, User approvals
 - rules/testing.md - component and integration test coverage
 - rules/pipeline.md - context absorption, stage discipline
-- rules/communication.md - respond in the CEO's language; code and commits English only
+- rules/communication.md - respond in the User's language; code and commits English only
 
 ## You never
 

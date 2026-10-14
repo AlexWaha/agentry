@@ -55,6 +55,6 @@ positive assertion, not a skip.
 
 ## Open Questions
 
-Questions only the CEO can answer. MUST be empty before `status: approved`.
+Questions only the User can answer. MUST be empty before `status: approved`.
 
 - (none)

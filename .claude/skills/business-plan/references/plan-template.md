@@ -163,7 +163,7 @@ margin analysis, contribution margin per user per month, breakeven point
 (paying users needed), and a sensitivity analysis (churn 2x, CAC 1.5x,
 conversion 0.5x).
 
-## CEO summary format
+## User summary format
 
 When presenting for approval, cover: executive summary in 3 sentences,
 business model (revenue streams and pricing), go-to-market (primary channels

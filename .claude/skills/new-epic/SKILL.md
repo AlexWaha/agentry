@@ -1,6 +1,6 @@
 ---
 name: new-epic
-description: Create an epic file under .agentry/tasks/epics/ from an approved spec and decompose it into linked task files with bidirectional depends_on. Use when a spec-developer's spec has status approved and needs breaking into tasks, when the CEO says "turn this spec into tasks" or "plan the epic", or when a product-manager is starting sprint planning for a new spec.
+description: Create an epic file under .agentry/tasks/epics/ from an approved spec and decompose it into linked task files with bidirectional depends_on. Use when a spec-developer's spec has status approved and needs breaking into tasks, when the User says "turn this spec into tasks" or "plan the epic", or when a product-manager is starting sprint planning for a new spec.
 allowed-tools: Read, Grep, Glob, Write
 ---
 
@@ -8,12 +8,12 @@ allowed-tools: Read, Grep, Glob, Write
 
 Turn an APPROVED spec into an epic file plus its task breakdown. Owner:
 `product-manager` (support: `sprint-prioritizer` for ordering). This is the
-last planning step before the CEO releases work to the execution pipeline.
+last planning step before the User releases work to the execution pipeline.
 
 ## Preconditions
 
 1. The spec exists in `.agentry/specs/` with `status: approved`. A draft spec
-   MUST NOT be decomposed - send it back to the spec-developer / CEO instead.
+   MUST NOT be decomposed - send it back to the spec-developer / User instead.
 2. The spec's Open Questions section is empty.
 3. `.agentry/tasks/epics/` and `.agentry/tasks/templates/epic-template.md` exist.
 
@@ -44,13 +44,13 @@ backend/frontend tasks, bidirectional `depends_on`). For each task:
 - Record each task id in the epic's `tasks: []` frontmatter list and the
   Task Breakdown table
 
-### Step 4: Present to the CEO
+### Step 4: Present to the User
 
 Show the breakdown table (task, title, assignee, depends_on, FRs covered) plus
 the sequencing rationale. Give a recommendation per the checkpoint-advice rule
 (rules/orchestration.md) if anything is contentious.
 
-### Step 5: On CEO approval
+### Step 5: On User approval
 
 Flip each task's `status: backlog` to `status: active` (this is exactly the
 hold mechanism the Stop hook honors - backlog tasks are invisible to the
@@ -66,7 +66,7 @@ task-only - epics are grouping metadata, never run.db rows.
 ## Rules
 
 - Never decompose a draft spec
-- Never create tasks as `active` before CEO approval of the breakdown
+- Never create tasks as `active` before User approval of the breakdown
 - Never leave an FR uncovered by tasks, and never invent tasks with no FR
 - One epic = one spec; if a spec is too big for one epic, that is a spec
   problem - send it back

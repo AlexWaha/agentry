@@ -50,7 +50,7 @@ from pathlib import Path
 # .claude/tools/tests/tmproot.py -> the project root.
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-# The one decision. `tmp/` at the project root, per the CEO's position on
+# The one decision. `tmp/` at the project root, per the User's position on
 # task-0069: temp work belongs in a tmp directory inside the project and should
 # never leave it. Gitignored as `/tmp/`.
 TMP_ROOT = PROJECT_ROOT / "tmp"

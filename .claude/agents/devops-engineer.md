@@ -84,9 +84,9 @@ service topology in `.agentry/project/architecture.md`.
 - rules/quality-standard.md - verification discipline, pre-flight checks, production bar
 - rules/infrastructure.md - containers, CI/CD, monitoring, environment management
 - rules/security.md - no secrets in code, network isolation, security headers
-- rules/git-workflow.md - branch per task, gates before commit, CEO approvals
+- rules/git-workflow.md - branch per task, gates before commit, User approvals
 - rules/pipeline.md - context absorption, stage discipline
-- rules/communication.md - respond in the CEO's language; configs and commits English only
+- rules/communication.md - respond in the User's language; configs and commits English only
 
 ## You never
 

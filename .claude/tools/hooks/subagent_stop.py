@@ -37,7 +37,7 @@ def main() -> int:
         if not name:
             return 0
         print(f"Subagent {name} finished. If its report contains a mistake, surprise, or "
-              f"CEO correction, record it now (skills/self-learning): python "
+              f"User correction, record it now (skills/self-learning): python "
               f".claude/tools/memory/memory.py --record --kind lesson --signature <tag> "
               f"--trigger <when it applies> --what <one sentence> --why <root cause> "
               f"--fix <checkable rule> --agent {name} --task <task-id>. A reusable code "

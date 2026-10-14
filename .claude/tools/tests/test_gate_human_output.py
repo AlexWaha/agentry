@@ -22,9 +22,9 @@ becomes an allow, least of all on a commit, a push or a plan. Every test below t
 says "keeps the deny" pins that for one gate.
 
 N of N: the table in DenySiteAccountingTest is every `deny(` call in pretool_gate.py
-(52) and agent_gate.py (27), classified. Five pretool_gate sites ask the CEO for
+(52) and agent_gate.py (27), classified. Five pretool_gate sites ask the User for
 something (a plan, a commit, a push, a merge's commit approval, a step left to the
-human by an unattended session); the rest are policy denies and say nothing to him.
+human by an unattended session); the rest are policy denies and say nothing to the User.
 agent_gate asks nobody: its denies are role boundaries.
 """
 
@@ -62,7 +62,7 @@ from test_conveyor_gaps import BUILD_PIPELINE
 from test_pretool_gate_git import denial_reason
 from test_trunk_push_by_ref import BRANCH, TASK, task_branch_checked_out, trunk_checked_out
 
-# The model's vocabulary. If one of these shows up in a sentence meant for the CEO
+# The model's vocabulary. If one of these shows up in a sentence meant for the User
 # the two audiences have been merged again (same list as test_human_output.py).
 MODEL_ONLY = ("advance.py", "approve.py", "AskUserQuestion", "Do not ask", "--reject")
 DASHES = tuple(chr(code) for code in (0x2014, 0x2013))
@@ -187,7 +187,7 @@ class DenySiteAccountingTest(unittest.TestCase):
         every, asking, via_plan = deny_sites(PIPELINE_DIR / "pretool_gate.py")
         self.assertEqual(PRETOOL_DENIES, every,
                          "a deny() was added or removed in pretool_gate.py: decide whether "
-                         "it asks the CEO for something (then give it human=) and update "
+                         "it asks the User for something (then give it human=) and update "
                          "this table")
         self.assertEqual(52, sum(every.values()))
         self.assertEqual(PRETOOL_ASKING, asking)
@@ -197,7 +197,7 @@ class DenySiteAccountingTest(unittest.TestCase):
         every, asking, via_plan = deny_sites(PIPELINE_DIR / "agent_gate.py")
         self.assertEqual(AGENT_DENIES, every,
                          "a deny() was added or removed in agent_gate.py: a role boundary "
-                         "asks the CEO for nothing; if this one does, it needs a human= "
+                         "asks the User for nothing; if this one does, it needs a human= "
                          "channel that agent_gate does not have yet")
         self.assertEqual(27, sum(every.values()))
         self.assertEqual({}, asking)
@@ -257,7 +257,7 @@ class AskingDenyReachesTheHumanTest(unittest.TestCase):
 
 
 class PolicyDenyStaysSilentTest(unittest.TestCase):
-    """A deny that asks the CEO for nothing prints nothing on stdout."""
+    """A deny that asks the User for nothing prints nothing on stdout."""
 
     TRAILER = 'git commit -m "x\n\nCo-Authored-By: Claude <noreply@anthropic.com>"'
 
@@ -416,7 +416,7 @@ class RealProcessTest(unittest.TestCase):
 
 SPEC = "spec-9000"
 NEW_TASK = "task-9000"
-CRITERIA = "## Acceptance Criteria\n\n- [ ] the refusal reaches the CEO\n"
+CRITERIA = "## Acceptance Criteria\n\n- [ ] the refusal reaches the User\n"
 
 
 class RefusalHarness(unittest.TestCase):
@@ -478,7 +478,7 @@ class UnapprovedSpecRefusalReachesTheHumanTest(RefusalHarness):
         self.assertEqual(0, code)
         self.assertEqual("refused", doc["action"])
         self.assertIn("only an approved spec may be implemented", doc["message"])
-        self.assertIn("Surface it to the CEO", doc["message"])
+        self.assertIn("Surface it to the User", doc["message"])
         self.assertIn(NEW_TASK, doc["human"])
         self.assertIn("spec is not approved", doc["human"])
         for word in MODEL_ONLY:
@@ -495,7 +495,7 @@ class UnapprovedSpecRefusalReachesTheHumanTest(RefusalHarness):
         _code, out = self.advance()
         self.assertEqual(
             f"{NEW_TASK}: spec '{SPEC}' has status 'draft' - only an approved spec may be "
-            f"implemented. Surface it to the CEO.", json.loads(out)["message"])
+            f"implemented. Surface it to the User.", json.loads(out)["message"])
 
     def test_a_template_that_cannot_be_built_drops_the_sentence_and_keeps_the_refusal(self):
         with unittest.mock.patch.object(advance, "SPEC_NOT_APPROVED_HUMAN", "{nothing_fills}"):

@@ -10,7 +10,7 @@ It is derived from the blader/humanizer methodology (33 patterns across five cat
 
 **Does NOT apply to:**
 - **Code** - logic, identifiers, and code comments are governed by `coding-style.md`, not this rule. (Comment prose can borrow the "say something specific" spirit, but no humanization pass.)
-- **Chat with the CEO/Orchestrator** - governed by `communication.md` (friendly, energetic, emoji welcome). This rule is about artifacts that ship, not the working conversation.
+- **Chat with the User/Orchestrator** - governed by `communication.md` (friendly, energetic, emoji welcome). This rule is about artifacts that ship, not the working conversation.
 - **Structured data** - tables, YAML/JSON, OpenAPI specs, Mermaid diagrams, code blocks, metric rows. Never "humanize" data.
 
 The split matters: `communication.md` keeps chat warm and emoji-friendly; this rule keeps shipped documents clean and forensic. They do not conflict because they cover different surfaces.
@@ -80,7 +80,7 @@ If a sentence states a fact but not why it matters, chain the consequence or cut
 
 ## Voice Calibration
 
-When a deliverable has a target voice (a founder's pitch, a CEO-signed vision doc, a customer-facing post in an established brand voice), calibrate to a real sample.
+When a deliverable has a target voice (a founder's pitch, a founder-signed vision doc, a customer-facing post in an established brand voice), calibrate to a real sample.
 1. Ask for 2-3 paragraphs the person/brand actually wrote.
 2. Read for sentence rhythm, word choices, formality, how they open/close.
 3. Rewrite to match, without inventing facts.

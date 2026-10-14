@@ -99,7 +99,7 @@ Every document **must** include the following header:
 - **Author**: Who created or last updated the document
 - **Status**: Current lifecycle state
   - `Draft` - work in progress
-  - `In Review` - awaiting CEO/team review
+  - `In Review` - awaiting User/team review
   - `Approved` - reviewed and accepted
   - `Superseded` - replaced by a newer version (link to replacement)
 - **Version**: Semantic versioning for major documents (1.0, 1.1, 2.0)
@@ -362,7 +362,7 @@ When documents reference each other:
 
 1. **Agent creates** document → status: `Draft`
 2. **Orchestrator reviews** for completeness → status: `In Review`
-3. **CEO/CTO approves** → status: `Approved`
+3. **User approves** → status: `Approved`
 4. **If rejected** → back to `Draft` with feedback
 5. **If outdated** → update and re-submit for review
 

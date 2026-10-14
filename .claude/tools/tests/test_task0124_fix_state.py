@@ -111,7 +111,7 @@ class ClosureReadsTheFrozenBranchTest(Sandbox):
         self.write("active", TASK)
         self.register(TASK)
         out, _report = self.finish()
-        self.assertIn("The CEO decides", out["message"])
+        self.assertIn("The User decides", out["message"])
         self.assertIn("re-registers the task", out["message"])
         self.assertIn(f"retags the carrying commit '[{TASK}]'", out["message"])
         self.assertNotIn("BEFORE registration", out["message"])

@@ -279,7 +279,7 @@ def task_in_main(repo: Path, task: str) -> bool | None:
 
     Not ported: `fin.local`'s fourth arm, `sub-task-0004:`. It serves the
     one-branch-per-epic convention, which the FR-4 inventory flagged as needing
-    a CEO decision and did NOT port - an arm matching a convention this template
+    a User decision and did NOT port - an arm matching a convention this template
     does not have would be dead on arrival."""
     code, out = _git(repo, "log", trunk(repo), "--oneline", "-E",
                      f"--grep=(^[[:space:]]*\\[{task}\\]|^{task}:"

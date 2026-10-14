@@ -1,6 +1,6 @@
 ---
 name: gtm-strategy
-description: Produce a go-to-market strategy - target segments, channel selection and budget, referral system mechanics, launch timeline, and KPI targets - plus a supporting marketing plan (content, email, social, SEO, paid). Use when the CEO asks for a go-to-market plan, launch strategy, marketing channel plan, referral/growth loop design, or marketing budget allocation, or when revenue-model and unit-economics docs are ready and need a channel plan to hit them.
+description: Produce a go-to-market strategy - target segments, channel selection and budget, referral system mechanics, launch timeline, and KPI targets - plus a supporting marketing plan (content, email, social, SEO, paid). Use when the User asks for a go-to-market plan, launch strategy, marketing channel plan, referral/growth loop design, or marketing budget allocation, or when revenue-model and unit-economics docs are ready and need a channel plan to hit them.
 allowed-tools: Read, Grep, Glob, Write
 ---
 
@@ -8,7 +8,7 @@ allowed-tools: Read, Grep, Glob, Write
 
 > STATUS: DEFERRED. Not active in current project phase (backend API only).
 > Will be activated when business planning/analysis work begins. Do not
-> invoke until explicitly activated by CEO.
+> invoke until explicitly activated by the User.
 
 Comprehensive go-to-market strategy: target segments, channel selection,
 referral mechanics, budget, timeline, KPIs, and content plan. Full segment
@@ -60,10 +60,10 @@ marked assumptions.
    channels, referral system, budget, timeline, KPIs, risks) and
    `docs/marketing/marketing-plan.md` (content strategy, email marketing,
    social plan, SEO, paid advertising, partnerships, tools, team).
-10. **Present a summary to the CEO and wait for approval.** Beachhead segment
+10. **Present a summary to the User and wait for approval.** Beachhead segment
     and primary channel, top 3 channels by expected ROI, referral K-factor
     target, total budget and blended CAC target, 3/6/12-month user and MRR
-    targets, and the decisions that need CEO input (budget, channel
+    targets, and the decisions that need User input (budget, channel
     priority, referral rewards, launch date).
 
 ## Output checklist
@@ -77,7 +77,7 @@ marked assumptions.
 - [ ] KPIs have specific targets and measurement frequency
 - [ ] Content plan covers at least 3 months, email sequences defined
 - [ ] Both output files complete
-- [ ] Summary presented to CEO with clear decision points, approval requested
+- [ ] Summary presented to the User with clear decision points, approval requested
 
 ## References (read only when needed)
 

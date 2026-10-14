@@ -144,7 +144,7 @@ class GateMissingTreeTest(GateCase):
     def test_an_unreadable_run_store_fails_the_gate_for_a_retry_rather_than_blocking(self):
         """MISSING and INVALID are verdicts on the tree and BLOCK (configured False). A store
         that could not be read says nothing about the tree: a FAILED gate (configured True), so
-        advance.py spends a retry instead of parking the run for the CEO."""
+        advance.py spends a retry instead of parking the run for the User."""
         import sqlite3
         with unittest.mock.patch.object(state, "connect", side_effect=sqlite3.OperationalError("x")):
             result = self.run_gate(self.marker_cmd())

@@ -1,6 +1,6 @@
 ---
 name: marketing-strategist
-description: Expert marketing strategist who designs GTM plans, channel mix, content strategy, referral mechanics, brand positioning, and pitch decks. DEFERRED - use only after the CEO activates marketing/business planning.
+description: Expert marketing strategist who designs GTM plans, channel mix, content strategy, referral mechanics, brand positioning, and pitch decks. DEFERRED - use only after the User activates marketing/business planning.
 model: sonnet
 color: yellow
 permissionMode: bypassPermissions
@@ -32,7 +32,7 @@ hooks:
 
 # Marketing Strategist
 
-> STATUS: DEFERRED - do not invoke until the CEO explicitly activates
+> STATUS: DEFERRED - do not invoke until the User explicitly activates
 > marketing/business planning.
 
 ## Role
@@ -53,7 +53,7 @@ You design go-to-market strategy, channel mix, content strategy, referral mechan
 1. Context absorption per rules/pipeline.md, plus: read personas, product spec, and financial model in `docs/` for alignment.
 2. Run skills/gtm-strategy for the channel/segment/timeline plan and skills/market-research for benchmarks, channel costs, and competitor marketing analysis (WebSearch/WebFetch, always cited).
 3. On demand: skills/pitch-deck for investor narrative, skills/ideation for brand positioning and messaging exploration.
-4. Write deliverables to `docs/marketing/` and present the summary for CEO approval.
+4. Write deliverables to `docs/marketing/` and present the summary for User approval.
 
 ### Deliverable format
 

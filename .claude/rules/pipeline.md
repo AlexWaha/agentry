@@ -13,14 +13,14 @@ Both are gated stage machines driven by the same `advance.py`, over different
 stages (`pipeline.json` `pipelines.build` / `pipelines.plan`). Which one a new
 task follows is picked by the session mode (`.agentry/state/mode`, see
 `skills/pipeline/SKILL.md`) unless `advance.py --pipeline` is passed
-explicitly. Neither pipeline asks the CEO a clarifying question mid-flow - the
+explicitly. Neither pipeline asks the User a clarifying question mid-flow - the
 `plan` pipeline is where all questions get answered, before any task registers
 on `build`. `pipelines.plan`'s stock stages are `formalize -> draft ->
 plan-review -> approval -> breakdown -> done`; this project layers its richer
 epic/spec-developer workflow on top of that skeleton (knowledge -> plan
 (`architect`) -> spec (`spec-developer`, `.agentry/specs/`, `status: draft`) ->
 epic + task breakdown (`product-manager` via skills/new-epic, support:
-`sprint-prioritizer`) -> CEO approval, spec flips to `approved`). Output: an
+`sprint-prioritizer`) -> User approval, spec flips to `approved`). Output: an
 approved spec, an epic in `.agentry/tasks/epics/`, and task files queued in
 `.agentry/tasks/backlog/`. This is where ALL questions are answered - a spec
 cannot be approved with a non-empty Open Questions section.
@@ -55,12 +55,12 @@ refused until that spec is approved.
 | Stage | Owner agent | Exit gate (deterministic) | Human checkpoint |
 |-------|-------------|---------------------------|------------------|
 | plan | `senior-backend-dev` / `senior-frontend-dev` (the task's assignee) | `artifact_gate.py --kind plan`: `.agentry/plans/*<task>*.md` exists, names the task, at least 400 characters | - |
-| plan-approval | Orchestrator | the `plan` checkpoint: `approve.py --task X --gate plan` recorded in `run.db`; no approvals level and no `auto_approve` list grants it | **CEO approves the plan before any code is written**; rejecting sends the task back to `plan` and costs nothing but the plan |
+| plan-approval | Orchestrator | the `plan` checkpoint: `approve.py --task X --gate plan` recorded in `run.db`; no approvals level and no `auto_approve` list grants it | **User approves the plan before any code is written**; rejecting sends the task back to `plan` and costs nothing but the plan |
 | implement | `senior-backend-dev` / `senior-frontend-dev` | `{{BUILD_CMD}}` succeeds; code in task scope | - |
 | test | `qa-engineer` | `{{TEST_CMD}}` green; required cases per `testing.md` | - |
 | review | `reviewer` (+ `security-engineer`) | `{{LINT_CMD}}` clean; all Critical/High findings resolved; read-only (no code edits) | - |
-| ready | Orchestrator | gates green; diff prepared | **CEO reads the diff (`/diff`) and approves the commit**; rejecting sends the task back to `implement` |
-| done | CEO in `pr` mode; the pipeline in `solo` mode | merged into `main` (confirmed by `git_state.py`, not just pushed) | **CEO approves push** (`pr` mode only; in `solo` mode the local merge follows the commit approval, see `git-workflow.md`); task file moved to `done/` once the merge is confirmed, then the task's worktree, if any, is removed and its branch kept; next registration is blocked until this task's handoff doc exists AND its memory review is stamped - both refused by `advance.py` at registration, both blocking the Stop hook before it lets the session end (`tools/pipeline/handoff.py`, `tools/memory/update.py`) |
+| ready | Orchestrator | gates green; diff prepared | **User reads the diff (`/diff`) and approves the commit**; rejecting sends the task back to `implement` |
+| done | User in `pr` mode; the pipeline in `solo` mode | merged into `main` (confirmed by `git_state.py`, not just pushed) | **User approves push** (`pr` mode only; in `solo` mode the local merge follows the commit approval, see `git-workflow.md`); task file moved to `done/` once the merge is confirmed, then the task's worktree, if any, is removed and its branch kept; next registration is blocked until this task's handoff doc exists AND its memory review is stamped - both refused by `advance.py` at registration, both blocking the Stop hook before it lets the session end (`tools/pipeline/handoff.py`, `tools/memory/update.py`) |
 
 UI-bearing tasks add a `senior-frontend-dev` implement pass and an
 `evidence-collector` screenshot check inside review. Performance-sensitive work
@@ -79,8 +79,8 @@ Every dispatched agent reads, in this order, BEFORE producing anything:
 2. `.agentry/project/project-context.md` - the overall project context.
 3. The task's spec (`spec:` in the task frontmatter -> `.agentry/specs/`), or the
    task file's acceptance criteria when `spec: none`.
-4. Any `## CEO Review Feedback` sections at the end of the task file - comments
-   the CEO recorded when sending the task back from the commit checkpoint; each
+4. Any `## User Review Feedback` sections at the end of the task file - comments
+   the User recorded when sending the task back from the commit checkpoint; each
    comment must be addressed before the task returns there.
 
 When the Orchestrator dispatches you to WRITE a handoff doc for the previous
@@ -152,7 +152,7 @@ passes.
   while a run sits in an editing stage that is not `blocked`, so a blocked run
   does not suppress it; and the Stop hook reports the debt only after it has
   declined to drive an in-flight run, then repeats up to three stops before
-  handing it to the CEO and going quiet.
+  handing it to the User and going quiet.
 - **Subagent limits.** What the hooks hold subagents to, and what they do not, is
   stated in `orchestration.md`, "Subagent enforcement". Read its NOT COVERED list
   before relying on a hook as a boundary.
@@ -162,7 +162,7 @@ passes.
   --task T` or `--summary [--since D]`. No gate reads the journal; only
   `supervisor.progress_at` reads it, and only to veto a relaunch.
 - **Gate failure.** The owning agent fixes and re-runs; after the retry budget
-  (`pipeline.json`), the task is parked `blocked` and surfaced to the CEO.
+  (`pipeline.json`), the task is parked `blocked` and surfaced to the User.
 - **Self-learning.** At each stage/session end, capture lessons per
   `self-learning.md` (shared rules for universal policy, a `lesson` row in the
   memory store for anything project- or role-specific). A finished task with zero

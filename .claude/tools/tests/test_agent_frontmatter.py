@@ -27,7 +27,7 @@ AGENT_COUNT = 31
 # Claude Code subagent color palette.
 COLORS = {"red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"}
 EFFORTS = {"low", "medium", "high", "xhigh", "max"}
-# Routing rule, CEO decision 2026-09-29 (.agentry/project/token-policy.md,
+# Routing rule, User decision 2026-09-29 (.agentry/project/token-policy.md,
 # "Routing"): every agent defaults to sonnet; the only named exception is
 # architect (opus). fable is not an accepted model anywhere (task-0093).
 MODELS = {"opus", "sonnet"}
@@ -35,7 +35,7 @@ DEFAULT_MODEL = "sonnet"
 MODEL_EXCEPTIONS = {"architect": "opus"}
 # rules/communication.md: an agent that inherits a prompting session mode routes
 # its permission prompts through the main conversation, where they read as the
-# orchestrator interrupting the CEO. Recorded incident, so the value is pinned.
+# orchestrator interrupting the User. Recorded incident, so the value is pinned.
 PERMISSION_MODE = "bypassPermissions"
 # NFR-5 forbids em dash and en dash everywhere. Built from codepoints, never
 # written literally, so this file passes the same gate it pins.
@@ -232,7 +232,7 @@ class AgentFrontmatterTest(unittest.TestCase):
     def test_allow_script_flags_are_on_exactly_the_three_named_readonly_agents(self):
         # task-0116 D3: the readonly and docs profiles are default-deny on Bash, and
         # the measuring agents get their tools by name on the hook line. A fourth
-        # agent growing a flag, or one of these losing it, is a change the CEO decides.
+        # agent growing a flag, or one of these losing it, is a change the User decides.
         found = {}
         for name, text in self.agents.items():
             command = re.search(r"command: '(.*agent_gate\.py.*)'", text)

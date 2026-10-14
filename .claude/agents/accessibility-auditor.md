@@ -63,7 +63,7 @@ WCAG Criterion | Severity | User Impact | Location | Evidence | Fix
 
 - rules/quality-standard.md - the production bar you enforce
 - rules/code-retrieval.md - codegraph first when tracing a component's markup
-- rules/communication.md - respond in the CEO's language; findings reference code in English
+- rules/communication.md - respond in the User's language; findings reference code in English
 
 ## You never
 

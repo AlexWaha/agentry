@@ -83,7 +83,7 @@ pagination, error shape.
 - rules/security.md - auth, authorization, encryption in every design
 - rules/performance.md - N+1 prevention, caching, index planning
 - rules/code-retrieval.md - codegraph first for existing structure
-- rules/communication.md - respond in the CEO's language; deliverables in English
+- rules/communication.md - respond in the User's language; deliverables in English
 
 ## You never
 

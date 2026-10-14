@@ -1,6 +1,6 @@
 ---
 name: new-task
-description: Create a new task file in .agentry/tasks/backlog/ with auto-incrementing ID and template-complete frontmatter (depends_on, epic, spec). Use when the CEO or orchestrator asks to create/add/file a task, when a product-manager is decomposing an epic into tasks, or when a standalone piece of work (not tied to a spec) needs a work order before an agent can start it.
+description: Create a new task file in .agentry/tasks/backlog/ with auto-incrementing ID and template-complete frontmatter (depends_on, epic, spec). Use when the User or orchestrator asks to create/add/file a task, when a product-manager is decomposing an epic into tasks, or when a standalone piece of work (not tied to a spec) needs a work order before an agent can start it.
 allowed-tools: Read, Grep, Glob, Write
 ---
 
@@ -47,7 +47,7 @@ Description and Acceptance Criteria in Step 4, don't create a separate file.
 
 ### Step 3: Gather task information
 
-Derive from context where possible; ask the CEO only for genuinely missing
+Derive from context where possible; ask the User only for genuinely missing
 requirements (and only during planning - never mid-pipeline).
 
 | Field | Description | Example |
@@ -76,7 +76,7 @@ mandates - including Frontend Impact / Backend Dependencies (per
 `status:` or `branch:` field - the task's folder is its state, and the branch
 is created only when `advance.py` starts the task.
 
-### Step 5: Present to the CEO
+### Step 5: Present to the User
 
 ```
 Task created:
@@ -92,7 +92,7 @@ Task created:
   - [ ] ...
 ```
 
-Never create a task without CEO visibility. During epic decomposition the
+Never create a task without User visibility. During epic decomposition the
 whole breakdown table is presented at once instead (skills/new-epic step 4).
 
 ## Error handling
@@ -100,7 +100,7 @@ whole breakdown table is presented at once instead (skills/new-epic step 4).
 - **Template missing**: recreate `.agentry/tasks/` structure from the template
   repo before proceeding - do not improvise a format.
 - **Number conflict** (file already exists): re-scan, take next number, note
-  the conflict to the CEO.
+  the conflict to the User.
 
 ## Rules
 
@@ -108,6 +108,6 @@ whole breakdown table is presented at once instead (skills/new-epic step 4).
 - One task = one future branch = one concern
 - The task file is the work order: no work starts without it
 - A task's state is its folder - never add a `status:` field back in
-- Tasks born from an epic sit in `.agentry/tasks/backlog/` until the CEO
+- Tasks born from an epic sit in `.agentry/tasks/backlog/` until the User
   approves the breakdown (skills/new-epic step 5) and `advance.py` moves them
   to `active/`

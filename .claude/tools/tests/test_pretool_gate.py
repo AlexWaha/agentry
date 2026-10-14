@@ -546,8 +546,8 @@ class QuotingAwareRedirectTest(unittest.TestCase):
         and has been removed: measured on this host 2026-09-14 under git-bash
         MINGW64, /dev/null IS a real character device here, ...
 
-    The rule itself is untouched - `gates.forbid_dev_null` is the CEO's and only
-    he relaxes it. What changed is that the gate now asks whether a REDIRECT
+    The rule itself is untouched - `gates.forbid_dev_null` is the User's and only
+    the User relaxes it. What changed is that the gate now asks whether a REDIRECT
     OPERATOR sits outside quotes, instead of asking whether the literal appears
     anywhere in the command text.
 
@@ -619,7 +619,7 @@ class HeredocBodyIsDataTest(unittest.TestCase):
         This push cannot be resolved to a target branch, so the gate refuses
         rather than guessing (an unresolvable push gates). Run git push
         directly instead of wrapping it in another shell, and name the branch:
-        git push -u origin <type>/task-<id>. The CEO merges via a PR.
+        git push -u origin <type>/task-<id>. The User merges via a PR.
 
     The command wrote markdown; no git ran."""
 

@@ -181,7 +181,7 @@ class RunRowFreezeEndToEndTest(unittest.TestCase):
 class PauseReasonBoundTest(ew.Harness):
     def test_a_pause_reason_is_stored_bounded_and_without_control_characters(self):
         self.seed(stage="implement")
-        dirty = "preempted\nby\x1b[31m the CEO " + "z" * 2000
+        dirty = "preempted\nby\x1b[31m the User " + "z" * 2000
         with unittest.mock.patch.object(approve, "assess_pause",
                                         return_value=(approve.PAUSE_CLEAN, "")):
             code, _out = self.approve("--pause", dirty)

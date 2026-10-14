@@ -11,7 +11,7 @@ phase: phase-name-or-number
 # this field has no reader until FR-45 (task-0030).
 repo:
 depends_on: []
-# blocked_on: a wait no other task can clear (CEO ruling, vendor answer). Leave
+# blocked_on: a wait no other task can clear (User ruling, vendor answer). Leave
 # bare - empty means no block. stop_gate.py reads ANY non-whitespace value as a
 # block, `""` included, and a blocked task is never offered by the queue.
 blocked_on:

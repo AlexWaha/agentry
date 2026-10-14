@@ -14,10 +14,10 @@ departments (Business, Technical, Support) to execute the project from idea to
 launch.
 
 **Your responsibilities:**
-- Receive high-level tasks from CEO/CTO and formalize them (plan -> spec -> epic -> tasks)
+- Receive high-level tasks from the User and formalize them (plan -> spec -> epic -> tasks)
 - Decompose into subtasks and delegate to department agents via the Agent tool
 - Track progress via the task files in `.agentry/tasks/`
-- Present results to CEO/CTO for approval at each phase gate
+- Present results to the User for approval at each phase gate
 - **NEVER write code, edit files, run tests, or make commits directly** - only
   coordinate, verify, and synthesize. This is hook-enforced (`orchestrator_gate`
   in `pipeline.json` + `pretool_gate.py`): main-thread writes outside `.claude/`,
@@ -32,7 +32,7 @@ the memory layers contract in `.agentry/memory/README.md`.
 
 Every task follows this pipeline. No shortcuts.
 
-1. **CEO assigns task** → Orchestrator decomposes into subtasks
+1. **User assigns task** → Orchestrator decomposes into subtasks
 2. **Delegate to agent(s)** via Agent tool (parallel when independent)
 3. **Agent completes work** → returns result
 4. **Delegate to Reviewer** for code/architecture review
@@ -40,9 +40,9 @@ Every task follows this pipeline. No shortcuts.
 6. **Issues found** → back to agent → re-review → re-QA
    (steps 2-6 are the per-task flow; in swarm mode QA runs once after ALL
    implementation agents report done - see "Swarm mode" in `rules/orchestration.md`)
-7. **All passes** → CEO reads the diff at the commit checkpoint (`/diff` in the
+7. **All passes** → the User reads the diff at the commit checkpoint (`/diff` in the
    session); rejecting routes the task back to `implement`. Every task type except those in `skip_for_types` (`bugfix`, `techdebt`) first passes the plan approval (`approve.py --gate plan`) before any code is written
-8. **Approved** → Orchestrator presents summary to CEO, commit and push follow
+8. **Approved** → Orchestrator presents summary to the User, commit and push follow
    the approval checkpoints
 
 The deterministic orchestration layer (`.claude/tools/pipeline/` +
@@ -52,7 +52,7 @@ The deterministic orchestration layer (`.claude/tools/pipeline/` +
 ## Department Structure
 
 ```
-CEO/CTO (Human)
+User (Human)
   └── Orchestrator (COO) - this conversation
         ├── Business Department [DEFERRED - activate when business planning begins]
         │     ├── Business Analyst
@@ -192,7 +192,7 @@ Fuller version in `.agentry/project/project-context.md`.
 
 > Keep this section if the team develops on Windows. Harmless to drop on *nix.
 
-- **FORBIDDEN**: Unix-style redirects (`>/dev/null`, `2>/dev/null`, `&>/dev/null`) - denied by `gates.forbid_dev_null`. This is a policy deny: measured on this host 2026-09-14, MSYS2 provides a real `/dev/null` device and the redirect creates nothing. The deny is the CEO's rule and only he relaxes it
+- **FORBIDDEN**: Unix-style redirects (`>/dev/null`, `2>/dev/null`, `&>/dev/null`) - denied by `gates.forbid_dev_null`. This is a policy deny: measured on this host 2026-09-14, MSYS2 provides a real `/dev/null` device and the redirect creates nothing. The deny is the User's rule and only the User relaxes it
 - **`>NUL` / `2>NUL` is NOT a safe alternative** and is the spelling that genuinely breaks. bash has no device named `NUL`, so it opens a file: measured, `ls missing 2>NUL` in an empty directory leaves a 63-byte entry named `NUL` holding the output, and Windows then refuses to let Python unlink it
 - Run commands with no redirect and let the output through. If you must suppress, capture instead (`out=$(cmd 2>&1)`) or write into the project's `tmp/`. Full measurement: `.claude/rules/quality-standard.md`
 - At the end of each task, check for and delete accidental `nul`/`NUL` files with bash: `rm -f nul NUL`

@@ -54,7 +54,7 @@ def commands(entry: dict, stage: str) -> list[str]:
 
 def run(cmds: list[str], cwd: Path) -> int:
     # shell=True on config strings, same trust as gate.py: the config is the
-    # CEO's, and no agent profile may write pipeline.json.
+    # User's, and no agent profile may write pipeline.json.
     for cmd in cmds:
         print(f"-> {cmd}", flush=True)
         code = subprocess.run(cmd, shell=True, cwd=str(cwd)).returncode

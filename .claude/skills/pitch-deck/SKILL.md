@@ -1,6 +1,6 @@
 ---
 name: pitch-deck
-description: Generate complete investor pitch deck content (12 slides with speaker notes) plus a runnable Python script that builds the PPTX file. Use when the CEO asks for a pitch deck, investor deck, fundraising presentation, or "deck for the raise", and only after product-vision, business-plan, market-research, and financial-model documents already exist.
+description: Generate complete investor pitch deck content (12 slides with speaker notes) plus a runnable Python script that builds the PPTX file. Use when the User asks for a pitch deck, investor deck, fundraising presentation, or "deck for the raise", and only after product-vision, business-plan, market-research, and financial-model documents already exist.
 allowed-tools: Read, Grep, Glob, Write
 ---
 
@@ -9,7 +9,7 @@ allowed-tools: Read, Grep, Glob, Write
 > STATUS: DEFERRED
 > Not active in current project phase (backend API only).
 > Will be activated when business planning/analysis work begins.
-> Do not invoke until explicitly activated by CEO.
+> Do not invoke until explicitly activated by the User.
 
 Produces complete investor pitch deck content (structured slide content with
 speaker notes) and a Python script that generates a professional PPTX file,
@@ -44,11 +44,11 @@ following the standard 10-12 slide investor deck format.
 6. **Create supporting directories.** `docs/presentations/pitch-deck/`,
    `scripts/`, `output/` (gitignored), `assets/` with a README listing
    expected asset files (logo, screenshots, team photos).
-7. **Present the summary to the CEO.** Deck structure, key narrative flow
+7. **Present the summary to the User.** Deck structure, key narrative flow
    (Problem -> Solution -> Market -> Business Model -> Traction -> Ask),
    strongest and weakest slides, PPTX generator status, what's still needed
-   from the CEO (team bios, screenshots, branding), and request explicit
-   approval. Wait for CEO/CTO approval before considering the work done.
+   from the User (team bios, screenshots, branding), and request explicit
+   approval. Wait for User approval before considering the work done.
 
 ## Output checklist
 
@@ -65,7 +65,7 @@ following the standard 10-12 slide investor deck format.
 - [ ] The Ask slide has a specific dollar amount and use-of-funds breakdown
 - [ ] Competition slide uses a positioning matrix, not a feature checklist
 - [ ] README.md explains how to use the deck and generator
-- [ ] Summary presented to CEO; approval requested
+- [ ] Summary presented to the User; approval requested
 
 ## References (read only when needed)
 

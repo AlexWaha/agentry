@@ -4,8 +4,8 @@ and a heredoc body is data.
 
 The failure this closes: agent_gate and pretool_gate recognised writes LEXICALLY, so a
 Python one-liner, a script the agent wrote itself, an NTFS stream suffix, a junction or
-a `cd` reached `.agentry/pipeline.json` and `.agentry/state/` (the CEO's approval
-records) while every check passed. Scope decided by the CEO (plan
+a `cd` reached `.agentry/pipeline.json` and `.agentry/state/` (the User's approval
+records) while every check passed. Scope decided by the User (plan
 2026-10-09-task-0116-options.md, D1 a, D3, D4):
 
   * readonly and docs: PREVENTED. Default-deny argv0 allowlist (agent_gate.ALLOWED_PROGRAMS)
@@ -597,11 +597,11 @@ class RealHookTest(unittest.TestCase):
 
 
 class DevInterpreterResidualTest(unittest.TestCase):
-    """NOT COVERED (CEO decision D1 a, 2026-10-09). A dev agent's job is to run code, so
+    """NOT COVERED (User decision D1 a, 2026-10-09). A dev agent's job is to run code, so
     the dev profile cannot be default-deny: an interpreter one-liner, a script the agent
     wrote, `python -m` and `node -e` all pass the gate with exit 0 and can write
     `.agentry/pipeline.json` or `.agentry/state/*`. The residual is bounded only
-    off-box (server-side branch protection, which the CEO declined, D2), so a push by a
+    off-box (server-side branch protection, which the User declined, D2), so a push by a
     dev agent is stopped by the commit/push approval gates and the never-granted list,
     not by this profile. These tests PIN that exit 0: if one turns red, the gap was
     closed or a regression made the gate stricter - update rules/orchestration.md

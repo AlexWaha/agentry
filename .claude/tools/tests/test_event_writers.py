@@ -54,12 +54,12 @@ PIPELINE = {
         "editing_stages": ["plan", "implement", "test", "review"],
         "stages": [
             {"name": "plan", "owner": "dev"},
-            {"name": "plan-approval", "owner": "ceo", "checkpoints": ["plan"]},
+            {"name": "plan-approval", "owner": "user", "checkpoints": ["plan"]},
             {"name": "implement", "owner": "dev"},
             {"name": "test", "owner": "qa-engineer"},
             {"name": "review", "owner": "reviewer"},
             {"name": "ready", "owner": "orchestrator", "checkpoints": ["commit", "push"]},
-            {"name": "done", "owner": "ceo", "terminal": True},
+            {"name": "done", "owner": "user", "terminal": True},
         ],
     }},
 }
@@ -346,11 +346,11 @@ class ApproveWritersTest(Harness):
         self.seed(stage="implement")
         with unittest.mock.patch.object(approve, "assess_pause",
                                         return_value=(approve.PAUSE_CLEAN, "")):
-            self.assertEqual(0, self.approve("--pause", "CEO force majeure")[0])
+            self.assertEqual(0, self.approve("--pause", "User force majeure")[0])
         self.assertEqual(0, self.approve("--resume")[0])
         paused, resumed = self.journal()
         self.assertEqual("paused", paused["kind"])
-        self.assertEqual({"reason": "CEO force majeure", "kind": "clean"}, paused["detail"])
+        self.assertEqual({"reason": "User force majeure", "kind": "clean"}, paused["detail"])
         self.assertEqual(("resumed", "approve"), (resumed["kind"], resumed["via"]))
 
     def test_the_trunk_push_approval_appends_a_taskless_row(self):

@@ -1,6 +1,6 @@
 ---
 name: risk-assessment
-description: Identify, score, and mitigate project risks across business, technical, market, legal, and operational categories into a scored risk matrix with mitigation and contingency plans. Use when the CEO asks for a risk assessment, before a funding or investor conversation, when starting a phase with major unknowns, when a "what could go wrong" review is requested, or when a security/compliance audit surfaces new threats.
+description: Identify, score, and mitigate project risks across business, technical, market, legal, and operational categories into a scored risk matrix with mitigation and contingency plans. Use when the User asks for a risk assessment, before a funding or investor conversation, when starting a phase with major unknowns, when a "what could go wrong" review is requested, or when a security/compliance audit surfaces new threats.
 allowed-tools: Read, Grep, Glob, Write, Bash
 ---
 
@@ -8,7 +8,7 @@ allowed-tools: Read, Grep, Glob, Write, Bash
 
 > STATUS: DEFERRED. Not active in the current project phase (backend API
 > only). Will be activated when business planning/analysis work begins. Do
-> not invoke until explicitly activated by CEO.
+> not invoke until explicitly activated by the User.
 
 Comprehensive risk identification and analysis covering all risk categories.
 Produces a scored risk matrix with mitigation strategies and contingency
@@ -54,11 +54,11 @@ plans for the highest risks.
    map, category distribution, detailed descriptions) and
    `docs/risk/mitigation-plan.md` (mitigation strategies, contingency plans,
    review schedule). Full file templates in `references/risk-register.md`.
-9. **Present a summary to the CEO.** Total risks and distribution by
+9. **Present a summary to the User.** Total risks and distribution by
    category/level, top 3 Critical/High risks in one line each, mitigation
    actions needing budget or decision, any currently unmitigable risks, and
    the recommended review cadence (weekly Critical/High, bi-weekly Medium,
-   monthly full review). Wait for CEO/CTO approval before finalizing the
+   monthly full review). Wait for User approval before finalizing the
    documents.
 
 ## Output checklist
@@ -70,7 +70,7 @@ plans for the highest risks.
 - [ ] Risk scores are internally consistent (similar risks, similar scores)
 - [ ] Mermaid diagrams render correctly
 - [ ] Both `docs/risk/risk-matrix.md` and `docs/risk/mitigation-plan.md` are complete and cross-referenced
-- [ ] Summary presented to CEO with clear action items; approval requested
+- [ ] Summary presented to the User with clear action items; approval requested
 
 ## References (read only when needed)
 

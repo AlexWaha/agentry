@@ -4,7 +4,7 @@ advance.py read `if pending in auto and approvals.granted(pending, sorted(auto))
 where `auto` is the stage's `auto_approve` array from pipeline.json - which ships
 empty. The leading conjunct made the stage list MANDATORY, so the level dial
 could never approve anything on its own: `manual`, `assisted` and `auto` behaved
-identically at `ready`, and a CEO who set `auto` for a night run was asked for
+identically at `ready`, and a User who set `auto` for a night run was asked for
 the commit anyway.
 
 These tests pin both halves: the level alone clears the commit, and nothing -
@@ -103,7 +103,7 @@ class LevelDrivesTheCheckpointTest(unittest.TestCase):
 
     def test_auto_level_clears_the_commit_with_an_empty_auto_approve(self):
         """RED before the fix: `pending in auto` was False, so nothing was
-        approved and the run parked on the CEO at level `auto`."""
+        approved and the run parked on the User at level `auto`."""
         self._level(approvals.AUTO)
         self._seed("task-0700")
 
@@ -135,7 +135,7 @@ class LevelDrivesTheCheckpointTest(unittest.TestCase):
 
         self.assertEqual("park", out["action"])
         self.assertEqual("commit", out["awaiting_human"])
-        self.assertIn("CEO commit approval", out["message"])
+        self.assertIn("User commit approval", out["message"])
 
     def test_a_stage_list_alone_still_clears_the_commit_at_manual(self):
         """The layering the conjunction was hiding behind: with the level at its
@@ -161,7 +161,7 @@ class LevelDrivesTheCheckpointTest(unittest.TestCase):
         self.assertEqual("park", out["action"])
         self.assertEqual("push", out["awaiting_human"])
         self.assertEqual(0, self._row("task-0703")["push_approved"])
-        self.assertIn("CEO push approval", out["message"])
+        self.assertIn("User push approval", out["message"])
 
     def _push_approved_after_two_advances(self, task):
         self._seed(task)

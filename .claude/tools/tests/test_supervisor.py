@@ -196,8 +196,8 @@ class ClassificationTest(Sandbox):
         self.assertIn("implement", why)
 
     def test_healthy_when_parked_on_a_human_however_old(self):
-        # A task waiting for the CEO's commit approval is correct, not stalled.
-        # Getting this wrong would relaunch a session while he reads the diff.
+        # A task waiting for the User's commit approval is correct, not stalled.
+        # Getting this wrong would relaunch a session while the User reads the diff.
         for awaiting in ("commit", "push", "merge"):
             with self.subTest(awaiting_human=awaiting):
                 label, why = supervisor.classify(
@@ -1829,7 +1829,7 @@ class OutsideTheSessionTest(unittest.TestCase):
 
     This test used to assert the supervisor was NOT wired as a hook, on the
     reasoning that a hook would put it back inside the session lifecycle it
-    exists to observe from outside. The CEO then required it to start itself
+    exists to observe from outside. The User then required it to start itself
     ("он должен быть встроенным инструментом и раниться при старте сессии"), and
     the reasoning survives the requirement with one change: it is the LAUNCH that
     happens on the session event, and what the launcher starts is detached. So
@@ -2198,7 +2198,7 @@ class SlowLoopBoundaryTest(Sandbox):
         self.assertEqual(supervisor.ACTION_RELAUNCH, events[20]["action"])
         self.assertIn("no continuations growth", events[20]["why"])
         self.assertNotIn(supervisor.LOOPING, labels)
-        # Not parked: a stalled run is restarted, not surfaced to the CEO.
+        # Not parked: a stalled run is restarted, not surfaced to the User.
         self.assertEqual(state.ST_IN_PROGRESS, self.read_row()["stage_status"])
 
 
@@ -2963,7 +2963,7 @@ class DocstringIntegrityTest(unittest.TestCase):
 class StaleClimbEvidenceTest(Sandbox):
     """task-0067: a climb count that outlives the counter it was derived from.
 
-    `stage_climbs` used to be reset by one event, a stage change. A CEO rejection
+    `stage_climbs` used to be reset by one event, a stage change. A User rejection
     sends a task back to the FIRST stage - which for a task already sitting at
     `implement` is no stage change at all - and zeroes `continuations` on the way.
     So the count survived a reset of the very thing it counted, and nothing could
@@ -3032,7 +3032,7 @@ class StaleClimbEvidenceTest(Sandbox):
 
         Measured while breaking them: with the coherence test in place, deleting
         the decrease branch left the test above green, because a drop to zero is
-        incoherent anyway. A drop to a NON-zero value is not: a CEO rejection
+        incoherent anyway. A drop to a NON-zero value is not: a User rejection
         zeroes `continuations`, and if the Stop hook then nags five times before
         the next poll, the poll sees 9 -> 5 while `stage_climbs` is 3 - coherent
         on its face (3 <= 5), and entirely about a previous incarnation of the
@@ -4115,7 +4115,7 @@ class DaemonLifecycleTest(Sandbox):
         # events kept the counter at zero for ever. The event is there; the run is
         # not in flight.
         parked = {"task": "task-0010", "stage": "implement", "classification": "HEALTHY",
-                  "why": "already parked blocked for the CEO", "action": "", "stop": ""}
+                  "why": "already parked blocked for the User", "action": "", "stop": ""}
         slept = []
 
         def sleeper(_seconds):

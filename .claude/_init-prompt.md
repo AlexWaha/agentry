@@ -105,7 +105,7 @@ instead. The gate commands per repo are step B2's job and land in
 `repos.<key>.stages`.
 
 **B1. Pipeline stages.** "Which execution stages, in order? [implement, test,
-review, ready, done]" - confirm or edit the list. The CEO reads the diff at the
+review, ready, done]" - confirm or edit the list. The User reads the diff at the
 `ready` stage's commit checkpoint using Claude Code's built-in `/diff`, so no
 separate review stage is needed.
 
@@ -182,7 +182,7 @@ explicitly opts out of the gate.
 layers before the next task; `memory.baseline` = highest pre-existing done task
 id when adopting mid-project, else empty) and `handoff.document_latest_on_start`
 (single-task backlog requires the latest main commit documented first). Ask for
-`{{COMM_LANG}}` - the language agents use when reporting to the CEO (e.g.
+`{{COMM_LANG}}` - the language agents use when reporting to the User (e.g.
 English, Russian) - and replace it in `rules/communication.md`.
 
 After the interview, write the finalized `.agentry/pipeline.json` and confirm it has
@@ -194,7 +194,7 @@ python .claude/tools/pipeline/state.py --show       # should print [] (no runs y
 ## Finish
 
 **First artifacts.** If the project starts with feature work, run the planning
-pipeline: architect plan -> `spec-developer` writes `spec-0001` -> after CEO
+pipeline: architect plan -> `spec-developer` writes `spec-0001` -> after User
 approval `product-manager` runs skills/new-epic -> `epic-0001` + tasks. For an
 infrastructure/setup start, create `.agentry/tasks/backlog/task-0001.md` directly
 via skills/new-task ("Draft architecture" or "Set up infrastructure").

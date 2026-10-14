@@ -219,7 +219,7 @@ Create the whitepaper as a single, well-structured document at
 
 **Version:** 1.0
 **Date:** [Current date]
-**Status:** Draft - Pending CEO Approval
+**Status:** Draft - Pending User Approval
 
 ---
 

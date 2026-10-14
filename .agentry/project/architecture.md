@@ -7,7 +7,7 @@
 
 Agentry has no application layers (no controllers, services or models) and no
 request cycle. Its architecture is the set of scripts that sit between the
-CEO's instruction and the model's next tool call. This file describes the tree
+User's instruction and the model's next tool call. This file describes the tree
 as it is. Product context is in `project-context.md`; commands and versions are
 in `stack.md`.
 
@@ -141,7 +141,7 @@ the token budget can be checked against numbers.
 
 ```mermaid
 flowchart TD
-    CEO[CEO instruction] --> ORCH[Orchestrator session]
+    USR[User instruction] --> ORCH[Orchestrator session]
     ORCH -->|Agent tool| AG[Subagent]
     ORCH -->|advance.py| ADV[advance.py]
     ADV -->|reads stages and gates| CFG[(.agentry/pipeline.json)]
@@ -195,7 +195,7 @@ denial does not depend on what the model remembers.
 | Project-specific fact | `.agentry/project/` |
 
 Check sibling files first and match their naming. Do not add a new top-level
-folder under `.claude/tools/` without CEO approval.
+folder under `.claude/tools/` without User approval.
 
 ## State and storage
 

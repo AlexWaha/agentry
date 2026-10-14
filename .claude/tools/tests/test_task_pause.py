@@ -1,6 +1,6 @@
 """task-0059: the pipeline can represent a preempted task.
 
-A run can be PAUSED: registered, set aside by the CEO's force-majeure call, not
+A run can be PAUSED: registered, set aside by the User's force-majeure call, not
 driven, not holding the working tree. These tests pin the state, the supported
 way in and out, the Stop hook's silence about it, and the approval-flag
 invariant in both directions.
@@ -105,13 +105,13 @@ class PauseAndResumeTest(PauseHarness):
 
     def test_a_task_with_no_commits_and_no_edits_pauses_and_the_record_says_clean(self):
         self.register()
-        code, out = self.cli("--task", TASK, "--pause", "CEO force majeure: task-0058 first")
+        code, out = self.cli("--task", TASK, "--pause", "User force majeure: task-0058 first")
         self.assertEqual(code, 0, out)
         row = self.row()
         self.assertEqual(row["stage_status"], state.ST_PAUSED)
         self.assertEqual(row["stage"], "implement")
         self.assertEqual(row["pause_kind"], "clean")
-        self.assertEqual(row["pause_reason"], "CEO force majeure: task-0058 first")
+        self.assertEqual(row["pause_reason"], "User force majeure: task-0058 first")
         self.assertEqual(row["paused_status"], state.ST_IN_PROGRESS)
         self.assertIn("no commits and no edits", out["message"])
 
@@ -255,7 +255,7 @@ class ApprovalFlagsSurviveAPauseTest(PauseHarness):
 
     def test_resume_at_an_editing_stage_drops_the_preempt_commit_approval(self):
         # The force-majeure sequence records the commit approval to save the work;
-        # it must not let the FINISHED work skip the CEO's read of the diff.
+        # it must not let the FINISHED work skip the User's read of the diff.
         self.register(stage="implement", commit_approved=1)
         self.cli("--task", TASK, "--pause", "preempted")
         self.assertEqual(self.row()["commit_approved"], 1)  # the pause itself keeps it
@@ -394,15 +394,15 @@ class PauseColumnsTest(PauseHarness):
 
     def test_session_start_summary_tells_the_orchestrator_not_to_drive_a_paused_run(self):
         self.register()
-        self.cli("--task", TASK, "--pause", "CEO asked for task-0058")
+        self.cli("--task", TASK, "--pause", "User asked for task-0058")
         conn = state.connect()
         try:
             text = state._resume_text(conn)
         finally:
             conn.close()
-        self.assertIn("PAUSED by the CEO, do not drive", text)
+        self.assertIn("PAUSED by the User, do not drive", text)
         self.assertIn(TASK, text)
-        self.assertIn("CEO asked for task-0058", text)
+        self.assertIn("User asked for task-0058", text)
 
     def test_a_paused_review_run_does_not_freeze_code_edits(self):
         self.register(stage="review")

@@ -1,6 +1,6 @@
 """task-0063: a fresh checkout is a clean slate, not handoff debt.
 
-`.agentry/tasks/handoffs/` and `.agentry/tasks/done/` are gitignored (CEO
+`.agentry/tasks/handoffs/` and `.agentry/tasks/done/` are gitignored (User
 decision 2026-10-06), so a clone carries the tagged history of main and none of
 the documents. `latest_main_task_undocumented()` read that history and demanded
 a doc for a task the checkout never ran.

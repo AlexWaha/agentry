@@ -130,7 +130,7 @@ class CommitFromElsewhereTest(BindingCase):
         code, err = self.commit_verdict(self.dash_c_commit(self.tree), cwd=self.root)
 
         self.assertEqual(2, code)
-        self.assertIn("the tree changed after the CEO approved it", err)
+        self.assertIn("the tree changed after the User approved it", err)
 
 
 class RunStoreTest(BindingCase):

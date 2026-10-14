@@ -6,7 +6,7 @@ allowed-tools: Read, Grep, Glob, Write, WebSearch, WebFetch
 
 # Market Research - Market and Competitive Analysis
 
-> STATUS: DEFERRED. Not active in current project phase (backend API only). Will be activated when business planning/analysis work begins. Do not invoke until explicitly activated by CEO.
+> STATUS: DEFERRED. Not active in current project phase (backend API only). Will be activated when business planning/analysis work begins. Do not invoke until explicitly activated by the User.
 
 Comprehensive market research producing actionable intelligence on market size, competitive landscape, and positioning strategy. Requires the ideation phase to be complete (`docs/business/product-vision.md`, `target-audience.md`, `user-personas.md`). Every claim must be sourced or explicitly marked as an estimate.
 
@@ -20,7 +20,7 @@ Comprehensive market research producing actionable intelligence on market size, 
 6. **Identify market trends.** 5-8 trends with supporting evidence/sources and impact on the product (positive/negative/neutral), plus 3-5 opportunities competitors are not addressing.
 7. **Define the positioning strategy**: positioning statement, value proposition canvas, two-axis positioning map, messaging framework. Templates: references/research-templates.md.
 8. **Write the three deliverables**: `docs/market/market-research.md`, `docs/market/competitive-landscape.md`, `docs/market/positioning.md`. File skeletons: references/research-templates.md.
-9. **Present a summary to the CEO/CTO**: TAM/SAM/SOM Year 1 in one line each, top 3 competitors and our advantage over each, biggest opportunity, biggest risk, recommended positioning in one sentence, and any assumptions needing validation. Wait for explicit approval before proceeding.
+9. **Present a summary to the User**: TAM/SAM/SOM Year 1 in one line each, top 3 competitors and our advantage over each, biggest opportunity, biggest risk, recommended positioning in one sentence, and any assumptions needing validation. Wait for explicit approval before proceeding.
 
 ## Output checklist
 
@@ -34,7 +34,7 @@ Comprehensive market research producing actionable intelligence on market size, 
 - [ ] Positioning statement follows the standard template
 - [ ] Every number sourced or marked "[Estimate: reasoning]"
 - [ ] All three documents created in `docs/market/`
-- [ ] Summary presented to CEO and approval requested
+- [ ] Summary presented to the User and approval requested
 
 ## References (read only when needed)
 

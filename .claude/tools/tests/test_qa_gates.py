@@ -239,7 +239,7 @@ class PreludeOrderAgainstTheSuiteGuardTest(unittest.TestCase):
     """readonly and docs ran: approve, waive, setter, piped suite, protected write, memory
     target. bash_prelude puts the piped-suite check after the whole prelude. A command with
     two causes may therefore name the other cause first for these two profiles: accepted by
-    the CEO in the plan (D1), pinned here as the behaviour (finding QA-G1)."""
+    the User in the plan (D1), pinned here as the behaviour (finding QA-G1)."""
 
     PIPED = "python -m unittest discover -s tests | tail"
     MEMORY = "python .claude/tools/memory/memory.py --export --out /etc/x.json"
@@ -400,7 +400,7 @@ class AbbreviatedWaiveFlagTest(unittest.TestCase):
     """Finding QA-G4 (High, present on main before task-0125): handoff.py takes its options
     through argparse, which accepts any unambiguous prefix, so `--wai TASK` records a waiver
     exactly like `--waive TASK`. runs_waive used to read the literal token only, and handoff.py
-    is on the readonly and docs allowlists, so every profile could record a CEO waiver this
+    is on the readonly and docs allowlists, so every profile could record a User waiver this
     way. It now asks the shared is_long_option_prefix."""
 
     H = "python .claude/tools/pipeline/handoff.py"

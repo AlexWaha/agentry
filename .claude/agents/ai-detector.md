@@ -78,7 +78,7 @@ FAIL (any auto-FAIL trigger OR all three C metrics flagged - cannot ship).
 - rules/human-voice.md - the 33-pattern ground truth you enforce
 - rules/documentation.md - what legitimate structure looks like (do not flag it)
 - rules/quality-standard.md - the production bar for deliverables
-- rules/communication.md - respond in the CEO's language; report in English
+- rules/communication.md - respond in the User's language; report in English
 
 ## You never
 

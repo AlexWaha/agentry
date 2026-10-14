@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Record a human checkpoint decision for a task.
 
-The orchestrator runs this only after the CEO explicitly approves in chat. It
+The orchestrator runs this only after the User explicitly approves in chat. It
 flips the deterministic flag that pretool_gate.py checks before allowing
 `git commit` / `git push`. `--reject` sends the task back: to `implement` from
 the commit checkpoint, to the plan step while the plan is still unapproved. It
 needs `--reason`: the reason is what the event journal records against the
 rejection, and a rejection nobody explained cannot be learned from.
 
-A commit approval for a run in its own worktree is bound to the change set the CEO was
+A commit approval for a run in its own worktree is bound to the change set the User was
 shown (pretool_gate.tree_binding, recorded by advance.py at the commit park): the tree is
 read again here, and an approval for a tree that moved since, or that cannot be read, is
 refused and nothing is recorded. The hook checks the same binding at the commit and at
@@ -23,9 +23,9 @@ CLI:
     python approve.py --task task-0007 --gate push
     python approve.py --task task-0007 --gate plan
     python approve.py --task task-0007 --reject --reason "diff touches an unrelated file"
-    python approve.py --task task-0007 --pause "CEO force majeure: task-0058 first"
+    python approve.py --task task-0007 --pause "User force majeure: task-0058 first"
     python approve.py --task task-0007 --resume
-    python approve.py --task task-0007 --abandon --reason "CEO dropped the work"
+    python approve.py --task task-0007 --abandon --reason "User dropped the work"
     python approve.py --trunk-push [--remote NAME]
 """
 
@@ -74,7 +74,7 @@ def trunk_name() -> str:
 
 
 def record_trunk_push(remote: str = pretool_gate.TRUNK_PUSH_DEFAULT_REMOTE) -> int:
-    """Record the CEO's approval to publish the trunk once, to `remote`.
+    """Record the User's approval to publish the trunk once, to `remote`.
 
     The remote is part of the approval: a push of the trunk to any other remote
     name or URL is a different push and does not spend or use it.
@@ -159,7 +159,7 @@ def assess_pause(task: str) -> tuple[str, str]:
         if dirty:
             shown = ", ".join(dirty[:5]) + (f" (+{len(dirty) - 5} more)" if len(dirty) > 5 else "")
             return "", (f"{task} has uncommitted work in {repo}: {shown}. Commit it first - "
-                        f"force-majeure step 1 in rules/orchestration.md (the CEO's declaration "
+                        f"force-majeure step 1 in rules/orchestration.md (the User's declaration "
                         f"is the commit approval: approve.py --task {task} --gate commit) - then "
                         f"pause again.")
         ref = git_state.branch_for(repo, task)
@@ -256,7 +256,7 @@ def resume_run(conn, run: dict) -> tuple[str, str]:
     restored = run.get("paused_status") or state.ST_IN_PROGRESS
     # An approval flag on a run that has not reached its checkpoint can only be
     # the force-majeure commit approval (a normal one is recorded AT the
-    # checkpoint). Left set, the finished work would skip the CEO's read of the
+    # checkpoint). Left set, the finished work would skip the User's read of the
     # diff, so it is cleared here. A run paused at a checkpoint keeps its flags.
     stale = {}
     if (run["stage"] in state.editing_stages(pipeline, which)
@@ -288,7 +288,7 @@ def live_dependents(task: str) -> list[str]:
 
 
 def abandon_run(conn, run: dict, reason: str) -> tuple[str, str]:
-    """Retire a run on the CEO's decision, without a merge. (message, "") on success,
+    """Retire a run on the User's decision, without a merge. (message, "") on success,
     ("", error) on refusal; every refusal comes before any write.
 
     The run goes to stage `done` with stage_status `abandoned`, the task file moves
@@ -296,7 +296,7 @@ def abandon_run(conn, run: dict, reason: str) -> tuple[str, str]:
     are cleared (the gates read them; an abandoned run must not leave a standing
     permission). A run parked at `done` awaiting its merge (file still in active/)
     can be abandoned; a merged one cannot. No git command runs here - the branch,
-    its commits and the working tree stay for the CEO to deal with."""
+    its commits and the working tree stay for the User to deal with."""
     task = run["task"]
     reason = clean_reason(reason)
     if not reason:
@@ -327,7 +327,7 @@ def reject_target(pipeline: dict, run: dict) -> tuple[str, bool]:
     with one exception that exists for the build flow's plan step (task-0045): a
     build run that is already PAST its plan checkpoint was rejected on its code,
     at the commit checkpoint, not on its plan. It goes to the stage after the
-    checkpoint (`implement`) and keeps the approval, so the CEO is not asked to
+    checkpoint (`implement`) and keeps the approval, so the User is not asked to
     sign the same approach twice. A run still in the plan phase stays there and
     loses nothing but the plan. A flow without a plan checkpoint, or a stage the
     config no longer knows, takes the old answer."""
@@ -346,7 +346,7 @@ def commit_binding(run: dict) -> tuple[dict, str]:
     works in a worktree, ({}, "") for one that does not, ({}, refusal) when the approval
     must not be recorded.
 
-    The binding is the change set the CEO is approving. advance.py recorded the one it
+    The binding is the change set the User is approving. advance.py recorded the one it
     showed at the commit park; the tree is read again now, and an approval is recorded
     only when it is still that one (a run approved with no park behind it, force majeure,
     has nothing stored and takes the fresh value). A tree that cannot be read records
@@ -376,17 +376,17 @@ def main() -> int:
                         help="send the task back (implement, or plan while the plan is "
                              "unapproved), clearing approvals")
     parser.add_argument("--reason", metavar="TEXT",
-                        help="with --reject or --abandon: why the CEO sent the task back or "
+                        help="with --reject or --abandon: why the User sent the task back or "
                              "dropped it (required); "
                              "recorded in the event journal, capped at 500 characters, "
                              "control characters become spaces")
     parser.add_argument("--pause", metavar="REASON",
-                        help="set the task aside (CEO force majeure): refused while it has "
+                        help="set the task aside (User force majeure): refused while it has "
                              "uncommitted work; records REASON and whether it had commits")
     parser.add_argument("--resume", action="store_true",
                         help="bring a paused task back at the stage it was paused at")
     parser.add_argument("--abandon", action="store_true",
-                        help="retire the task without a merge (CEO decision): run closed, file "
+                        help="retire the task without a merge (User decision): run closed, file "
                              "moved to done/, git untouched; needs --reason")
     parser.add_argument("--trunk-push", action="store_true",
                         help="solo mode only: allow ONE push of the trunk to the remote")

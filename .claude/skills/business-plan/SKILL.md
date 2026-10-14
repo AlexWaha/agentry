@@ -1,6 +1,6 @@
 ---
 name: business-plan
-description: Produce a full business plan (executive summary, problem/solution, market analysis, business model, go-to-market, operations, milestones, risks, unit economics) synthesizing prior ideation and market research into one strategy document. Use when the CEO asks for a business plan, investor-ready strategy doc, revenue model writeup, or unit economics analysis, or when ideation and market research phases are complete and need to be turned into a cohesive plan.
+description: Produce a full business plan (executive summary, problem/solution, market analysis, business model, go-to-market, operations, milestones, risks, unit economics) synthesizing prior ideation and market research into one strategy document. Use when the User asks for a business plan, investor-ready strategy doc, revenue model writeup, or unit economics analysis, or when ideation and market research phases are complete and need to be turned into a cohesive plan.
 allowed-tools: Read, Grep, Glob, Write
 ---
 
@@ -8,7 +8,7 @@ allowed-tools: Read, Grep, Glob, Write
 
 > STATUS: DEFERRED. Not active in current project phase (backend API only).
 > Will be activated when business planning/analysis work begins. Do not
-> invoke until explicitly activated by CEO.
+> invoke until explicitly activated by the User.
 
 Synthesizes ideation and market research documents into an investor-ready
 business plan. Section-by-section templates and full output examples live in
@@ -62,7 +62,7 @@ summary and pricing context.
     pricing rationale, projections), `docs/business/unit-economics.md` (CAC,
     LTV, LTV:CAC ratio, payback period, churn, gross margin, breakeven,
     sensitivity analysis).
-12. **Present a summary to the CEO and wait for approval.** Executive summary
+12. **Present a summary to the User and wait for approval.** Executive summary
     in 3 sentences, business model, GTM channels and early traction, top 5
     milestones, funding ask, top 3 risks, unit economics headline. Never
     proceed past this without explicit approval.
@@ -80,7 +80,7 @@ summary and pricing context.
 - [ ] At least 8 risks identified with mitigations
 - [ ] Unit economics calculated with explicit assumptions, LTV:CAC analyzed
 - [ ] All three output documents created
-- [ ] Summary presented to CEO, approval requested
+- [ ] Summary presented to the User, approval requested
 
 ## References (read only when needed)
 

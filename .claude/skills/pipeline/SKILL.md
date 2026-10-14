@@ -1,6 +1,6 @@
 ---
 name: pipeline
-description: Semantics of the pipeline dials (mode, approval level, swarm flag) and the /pipeline-* command family. Use when the CEO asks to switch mode, approvals or swarm, or types "/pipeline", "переключи режим", "смени уровень одобрения", "включи swarm", "давай обсудим", "просто поговорим".
+description: Semantics of the pipeline dials (mode, approval level, swarm flag) and the /pipeline-* command family. Use when the User asks to switch mode, approvals or swarm, or types "/pipeline", "переключи режим", "смени уровень одобрения", "включи swarm", "давай обсудим", "просто поговорим".
 ---
 
 # Pipeline dials and commands
@@ -14,10 +14,10 @@ edited here. Project commands and paths live in the adapter
 | Dial | Values | Meaning |
 |---|---|---|
 | mode | `build`, `plan`, `talk` | which flow runs: implementation, design (brief, plan, spec, task files; no product code), or plain discussion (nothing tracked) |
-| approvals | `manual`, `assisted`, `auto` | how many checkpoints the CEO must still answer (default grants below) |
+| approvals | `manual`, `assisted`, `auto` | how many checkpoints the User must still answer (default grants below) |
 | swarm | `on`, `off` | build only: `on` runs each epic as a parallel agent swarm (`.claude/skills/swarm/SKILL.md`), `off` runs one task at a time |
 
-Default grants per approval level (what passes WITHOUT asking the CEO):
+Default grants per approval level (what passes WITHOUT asking the User):
 
 | Level | Take a task | Commit | Push |
 |---|---|---|---|
@@ -40,7 +40,7 @@ Trunk-based projects (adapter key `trunk_based`) commit and push on the main bra
 
 Adapter key `approvals_grants` names the config that lists checkpoints never
 granted at any level, enforced in code. Never answered by any level: planning
-questions and moving a task to done. Merging into main needs the CEO unless the
+questions and moving a task to done. Merging into main needs the User unless the
 adapter defines a local merge mode (e.g. `solo`) and its trigger.
 
 All three dials persist across sessions until changed; the SessionStart hook
@@ -80,9 +80,9 @@ rollout and rollback: "Parallel tasks in worktrees" in `rules/orchestration.md`.
 
 ## Behaviour per mode
 
-- **build**: drive the build flow through the project's gated scripts; with swarm on follow the swarm skill, with swarm off one task at a time. The build flow is `plan -> plan-approval -> implement -> test -> review -> ready -> done`; every type except those in `skip_for_types` (`bugfix`, `techdebt`) starts at `plan` and needs the CEO's plan approval (`approve.py --gate plan`) before any edit outside `.agentry/`, while `bugfix` and `techdebt` start at `implement`.
-- **abandon** (inside build): when the CEO drops a task, after a card, run `approve.py --task T --abandon --reason "<why>"`. It closes the run as done/abandoned, moves the file to `done/`, touches no git and owes no handoff doc or memory stamp. Details: "Abandon" in `rules/orchestration.md`.
+- **build**: drive the build flow through the project's gated scripts; with swarm on follow the swarm skill, with swarm off one task at a time. The build flow is `plan -> plan-approval -> implement -> test -> review -> ready -> done`; every type except those in `skip_for_types` (`bugfix`, `techdebt`) starts at `plan` and needs the User's plan approval (`approve.py --gate plan`) before any edit outside `.agentry/`, while `bugfix` and `techdebt` start at `implement`.
+- **abandon** (inside build): when the User drops a task, after a card, run `approve.py --task T --abandon --reason "<why>"`. It closes the run as done/abandoned, moves the file to `done/`, touches no git and owes no handoff doc or memory stamp. Details: "Abandon" in `rules/orchestration.md`.
 - **plan**: gated design flow; task files land in the backlog; no product code.
 - **talk**: answer, investigate, prototype in scratch; no task files, no branches, no product edits. Offer to capture anything worth keeping.
 
-When the CEO asks to implement something while `plan` or `talk` is active, say which mode is on and ask before switching. Safety gates stay on in every mode: no push to protected branches, no destructive commands, no AI attribution, no em dash.
+When the User asks to implement something while `plan` or `talk` is active, say which mode is on and ask before switching. Safety gates stay on in every mode: no push to protected branches, no destructive commands, no AI attribution, no em dash.

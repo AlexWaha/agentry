@@ -72,7 +72,7 @@ High-priority / medium / long-term, each with expected gain and effort
 - rules/performance.md - N+1, caching, indexing, queue patterns you check against
 - rules/quality-standard.md - real command output only, no asserted numbers
 - rules/code-retrieval.md - codegraph first for tracing hot paths
-- rules/communication.md - respond in the CEO's language; report in English
+- rules/communication.md - respond in the User's language; report in English
 
 ## You never
 

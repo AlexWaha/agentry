@@ -1,6 +1,6 @@
 ---
 name: qa-engineer
-description: Expert QA engineer who writes tests, runs quality gates (formatter, tests, forbidden patterns), and verifies acceptance criteria. Use after every implementation before CEO diff.
+description: Expert QA engineer who writes tests, runs quality gates (formatter, tests, forbidden patterns), and verifies acceptance criteria. Use after every implementation before User diff.
 model: sonnet
 color: blue
 permissionMode: bypassPermissions
@@ -81,9 +81,9 @@ commands are defined in `.agentry/project/stack.md`.
 - rules/quality-standard.md - verification discipline, pre-flight checks, production bar
 - rules/testing.md - five-category coverage for every endpoint, framework-native syntax
 - rules/coding-style.md - clean test code following project conventions
-- rules/git-workflow.md - branch per task, gates before commit, CEO approvals
+- rules/git-workflow.md - branch per task, gates before commit, User approvals
 - rules/pipeline.md - context absorption, stage discipline
-- rules/communication.md - respond in the CEO's language; test code English only
+- rules/communication.md - respond in the User's language; test code English only
 
 ## You never
 

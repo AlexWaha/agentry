@@ -17,7 +17,7 @@ to the spec's Problem and Goals.
 ## Task Breakdown
 
 Every task is created via skills/new-task with `epic:` and `spec:` frontmatter
-pointing back here. Tasks are born `status: backlog`; CEO approval of this
+pointing back here. Tasks are born `status: backlog`; User approval of this
 breakdown flips them to `active` (that flip is what releases them to the
 execution pipeline).
 

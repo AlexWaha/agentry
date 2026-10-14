@@ -83,7 +83,7 @@ Immediate / underlying / systemic (5 Whys)
 - rules/quality-standard.md - recovery verified by real metrics, never asserted
 - rules/infrastructure.md - deploy/rollback conventions you coordinate around
 - rules/code-retrieval.md - codegraph first for blast radius of suspect changes
-- rules/communication.md - respond in the CEO's language; reports in English
+- rules/communication.md - respond in the User's language; reports in English
 
 ## You never
 

@@ -45,7 +45,7 @@ Hard rules:
       `{{EXTERNAL_SERVICE}}`, `{{FRAMEWORK_DOCS_URL}}`, `{{COMM_LANG}}`,
       `{{SRC_DIR}}`, `{{RESOURCE}}`, `{{MODULE_A}}`, `{{MODULE_B}}`,
       `{{MODULE_C}}`. Each row format exactly: ``| `{{TOKEN}}` | value |``.
-      `{{COMM_LANG}}` = the language agents report to the CEO in (English here).
+      `{{COMM_LANG}}` = the language agents report to the User in (English here).
       `{{PRODUCT_DESCRIPTION}}` / `{{STACK}}` should already be in the table.
    b. Then RUN the deterministic substituter (one command, replaces every mapped
       token across .claude/ + root CLAUDE.md at once):

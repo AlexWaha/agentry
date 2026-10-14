@@ -1221,7 +1221,7 @@ class EnvironmentHermeticityTest(unittest.TestCase):
 class TrunkPushApprovalTest(unittest.TestCase):
     """task-0092: in solo mode the trunk is written only by the gated local
     merge, so a push OF the trunk is the only way its commits reach the remote.
-    It is allowed by a recorded, one-shot CEO approval and by nothing else."""
+    It is allowed by a recorded, one-shot User approval and by nothing else."""
 
     SPELLINGS = ("git push origin main", "git push origin HEAD:main",
                  "git push -u origin main", "git push")
@@ -1291,7 +1291,7 @@ class TrunkPushApprovalTest(unittest.TestCase):
                     code, _ = denial_reason("git push origin main", path)
                 self.assertEqual(2, code)
 
-    # A rewrite or a deletion of the trunk is not what the CEO approved when he
+    # A rewrite or a deletion of the trunk is not what the User approved when they
     # approved publishing it, and all six spellings below were denied
     # unconditionally before the approval existed. They stay denied, and the
     # approval stays unspent for the push it was actually meant for.
@@ -1402,7 +1402,7 @@ class GatedToolNamedNotRunTest(unittest.TestCase):
 
     was refused with
 
-        approve.py is orchestrator-only. Recording CEO approval from a dev
+        approve.py is orchestrator-only. Recording User approval from a dev
         agent is self-approval - report readiness to the orchestrator instead.
 
     The regex matched the guarded filename anywhere in the command text, so a

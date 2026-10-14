@@ -2,8 +2,8 @@
 """PreToolUse brain - deterministic backstop for the human checkpoints.
 
 Wired to Claude Code's `PreToolUse` event (matchers: Bash, Edit|Write|MultiEdit|NotebookEdit). It denies
-(exit code 2, reason on stderr; a deny that waits on the CEO also prints a
-{"systemMessage": ...} document on stdout for him - see HUMAN_NOTICES) when:
+(exit code 2, reason on stderr; a deny that waits on the User also prints a
+{"systemMessage": ...} document on stdout for the User - see HUMAN_NOTICES) when:
   - `git commit` runs while the current task's commit is not yet approved;
   - `git commit` / `git push` runs on a task branch whose run row cannot be
     read, or is absent from the lane's run store - the approval cannot be
@@ -1555,7 +1555,7 @@ def path_forms(path: str, cwd: str = "") -> list:
 # every agent loads as instructions. A dev or docs agent that can write them can
 # switch the gates off for the next call (hook edits are live) or rewrite what the
 # next agent is told. Only the project ROOT's copy counts (D4): a checkout under
-# src/ is ordinary code the CEO reads at the commit checkpoint, and the
+# src/ is ordinary code the User reads at the commit checkpoint, and the
 # orchestrator deploys it.
 LIVE_HARNESS_RE = re.compile(
     r"\.claude/(?:(?:tools|rules|skills|commands)(?:/.*)?|agents|agents/[^/]+\.md|settings[^/]*\.json)")
@@ -1716,7 +1716,7 @@ GIT_C_RE = re.compile(r"git\s+-C\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)")
 CD_RE = re.compile(r"(?:^|&&|\|\||;)\s*cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)")
 
 
-# What the CEO owes the run, for the denies that wait on him (task-0114, FR-50).
+# What the User owes the run, for the denies that wait on the User (task-0114, FR-50).
 # `reason` on stderr is for the MODEL ("do X next"); a deny that asks the human
 # carries one more sentence, printed by emit_human() as the hook's stdout JSON
 # {"systemMessage": ...}. Measured on claude.exe 2.1.295 with a real PreToolUse
@@ -1747,7 +1747,7 @@ PENDING_HUMAN: list = []
 
 
 def human_notice(kind: str, **fields) -> str:
-    """The sentence for the CEO, or "" when it cannot be built.
+    """The sentence for the User, or "" when it cannot be built.
 
     NEVER raises. A message that fails to build is dropped and the deny it rides
     on stands: a formatting error must not turn a commit, push or plan deny into
@@ -2796,7 +2796,7 @@ def merge_staleness(command: str, cwd: str, source: str, trunk: str) -> str:
 
 
 # --- Change-set binding of the commit approval (task-0134) ---------------------------------
-# A task in its own worktree stays writable after the CEO read its diff (the review freeze
+# A task in its own worktree stays writable after the User read its diff (the review freeze
 # ends at review and a parked task holds no queue), so the approval is bound to what was
 # read: the SHA-256 of the task's change set against its merge-base with the trunk, the
 # sorted `<new mode> <new blob> <path>` of every file the task adds, changes or deletes.
@@ -2910,7 +2910,7 @@ REAPPROVE = ("surface the diff again (python .claude/tools/pipeline/advance.py -
 def check_commit_binding(task: str, run: dict, command: str, cwd: str, placed: bool) -> int:
     """0, or a deny, for a commit of a task that works in a worktree: it must run in THAT
     tree (a commit tagged for this task from another tree would spend its approval) and
-    the tree's change set must be the one the CEO approved. `placed` says `cwd` is the
+    the tree's change set must be the one the User approved. `placed` says `cwd` is the
     directory this one call runs in; otherwise the command's own placement is read."""
     try:
         where = (cwd or str(state.ROOT)) if placed else str(repo_candidates(command, cwd)[0])
@@ -2936,9 +2936,9 @@ def check_commit_binding(task: str, run: dict, command: str, cwd: str, placed: b
     except Exception as exc:
         return binding_deny(f"Commit for {task} refused: the change set of its worktree "
                             f"cannot be read ({exc}), so it cannot be shown to be the one "
-                            f"the CEO approved.")
+                            f"the User approved.")
     if current != stored:
-        return binding_deny(f"Commit for {task} refused: the tree changed after the CEO "
+        return binding_deny(f"Commit for {task} refused: the tree changed after the User "
                             f"approved it (approved change set {stored[:12]}, now "
                             f"{current[:12]}). Anything that changes a byte after the diff "
                             f"was surfaced (a formatter, a late edit) needs a new approval: "
@@ -2949,7 +2949,7 @@ def check_commit_binding(task: str, run: dict, command: str, cwd: str, placed: b
 def check_merge_binding(task: str, run: dict, source: str, trunk: str, command: str,
                         cwd: str) -> int:
     """0, or a deny, for the merge of a task that works in a worktree: the change set the
-    branch holds must be the one the CEO approved (merge condition 3)."""
+    branch holds must be the one the User approved (merge condition 3)."""
     head = f"Merge into protected branch '{trunk}' refused - condition 3 of 3 failed "
     stored = str(run.get("approved_tree") or "")
     if not stored:
@@ -2970,7 +2970,7 @@ def check_merge_binding(task: str, run: dict, source: str, trunk: str, command: 
         return binding_deny(f"{head}(commit approval): the change set of '{source}' could not "
                             f"be read, so the merge is refused rather than guessed.")
     if current != stored:
-        return binding_deny(f"{head}(commit approval): '{source}' holds a change set the CEO "
+        return binding_deny(f"{head}(commit approval): '{source}' holds a change set the User "
                             f"did not approve (approved {stored[:12]}, branch {current[:12]}). "
                             f"Take the unapproved changes off the branch, or "
                             f"{REAPPROVE.format(task=task)}.")
@@ -3011,7 +3011,7 @@ def check_merge_source(source: str, trunk: str, command: str = "", cwd: str = ""
         return deny(
             f"Merge into protected branch '{trunk}' refused - condition 3 of 3 failed "
             f"(commit approval): the commit checkpoint for {task} was never approved. "
-            f"After the CEO approves: python .claude/tools/pipeline/approve.py --task "
+            f"After the User approves: python .claude/tools/pipeline/approve.py --task "
             f"{task} --gate commit.",
             human=human_notice("merge", task=task, trunk=trunk))
     if run.get("worktree"):
@@ -3065,7 +3065,7 @@ def check_trunk_merge(command: str, trunk: str, cwd: str = "") -> int:
 # branch, a run row and that flag - so the trunk gets written by a process
 # nobody is watching. The push stays held by approvals.never_granted() (this
 # project lists it in approvals_never_granted), so nothing leaves the machine,
-# but the CEO reads the trunk before it moves and that is the point.
+# but the User reads the trunk before it moves and that is the point.
 #
 # The spawn therefore marks itself, and these steps are refused for as
 # long as the mark is set, at every approvals level and in every workflow mode.
@@ -3094,7 +3094,7 @@ def check_unattended(command: str) -> int:
         f"This session was started UNATTENDED by the supervisor ({UNATTENDED_ENV}=1), so "
         f"{step} is refused - whatever the approvals level and workflow mode allow, there "
         f"is no human here to approve it. Finish the stage work, run advance.py, and stop: "
-        f"the CEO reads the diff and takes this step himself. See "
+        f"the User reads the diff and takes this step. See "
         f".claude/rules/orchestration.md and .claude/tools/pipeline/supervisor.py.",
         human=human_notice("unattended", step=step))
 
@@ -3401,7 +3401,7 @@ def pushed_tasks(command: str, branch: str, local: list | None = None) -> list |
 # measured at 55 commits behind). The refusal's stated reason ("a pull request
 # reaches the trunk") does not exist in solo mode.
 #
-# What it needs is what every push needs: the CEO's explicit approval, recorded
+# What it needs is what every push needs: the User's explicit approval, recorded
 # where the gate can read it. The marker is ONE-SHOT - the push that it allows
 # deletes it - so an approval covers a push rather than a mode. In `pr` mode the
 # marker means nothing: approve.py refuses to write one, and this reader refuses
@@ -3418,7 +3418,7 @@ TRUNK_PUSH_DEFAULT_REMOTE = "origin"
 
 
 def trunk_push_remote(target: str) -> str | None:
-    """The remote the CEO approved publishing `target` to from this lane, or None
+    """The remote the User approved publishing `target` to from this lane, or None
     when no approval stands. A marker written before the remote was recorded names
     none, which reads as the default remote.
 
@@ -3439,7 +3439,7 @@ def trunk_push_remote(target: str) -> str | None:
 
 
 def trunk_push_approved(target: str, remote: str | None) -> bool:
-    """True when the CEO approved publishing `target` to `remote` from this lane.
+    """True when the User approved publishing `target` to `remote` from this lane.
     `remote` is what the push names (push_remote); a push that names none cannot
     be matched to the approval and is not covered by it."""
     approved = trunk_push_remote(target)
@@ -3566,11 +3566,11 @@ def check_push_target(command: str, branch: str, local: list | None = None,
 
     The marker is NOT consumed here: handle_bash can still refuse the command
     afterwards (wrong branch, no run row, task push unapproved), and an approval
-    burned by a push that never happened is an approval the CEO has to give
+    burned by a push that never happened is an approval the User has to give
     twice. The caller spends it only on the way out through allow().
 
     `orch` is False for a subagent payload. The marker belongs to the orchestrator
-    (the CEO approved the ORCHESTRATOR's push), and nothing binds it to a caller, so
+    (the User approved the ORCHESTRATOR's push), and nothing binds it to a caller, so
     a subagent that pushed the trunk would spend it. Subagents never push the trunk:
     that is denied before the marker, allow_push_to_main or the remote is read."""
     protected = push_protected_branches()
@@ -3601,7 +3601,7 @@ def check_push_target(command: str, branch: str, local: list | None = None,
         if name not in protected:
             continue
         # A subagent has no approval to use: neither the marker nor allow_push_to_main
-        # is read for it, and the marker is left as the CEO recorded it.
+        # is read for it, and the marker is left as the User recorded it.
         subagent_trunk = not orch and name in push_trunk_names()
         if remote is None and not destructive and not subagent_trunk and trunk_push_remote(name):
             remote = implicit_push_remote(command, cwd, branch)
@@ -3619,7 +3619,7 @@ def check_push_target(command: str, branch: str, local: list | None = None,
             f"mode or by an approved local merge in 'solo' mode, never by a push. "
             f"See .claude/rules/git-workflow.md."
             + (" A subagent never pushes the trunk, approved or not: the approval is the "
-               "CEO's for the orchestrator's one push and is left unspent. Report to the "
+               "User's for the orchestrator's one push and is left unspent. Report to the "
                "orchestrator instead." if subagent_trunk else "")
             + (f" An approved trunk push cannot cover this one: {destructive}, and "
                f"publishing the trunk is neither rewriting nor deleting it - the "
@@ -3824,7 +3824,7 @@ def check_destructive_and_repl(command: str, low: str) -> int:
                     "wrong and has been removed: measured on this host 2026-09-14 under "
                     "git-bash MINGW64, /dev/null IS a real character device here, the "
                     "output is discarded and NO file is created. The deny stands anyway - "
-                    "it is the CEO's standing rule and only he relaxes it. `>NUL` / "
+                    "it is the User's standing rule and only the User relaxes it. `>NUL` / "
                     "`2>NUL` is NOT the fix, and is the spelling that genuinely breaks: "
                     "measured the same day, `ls missing 2>NUL` in an empty directory "
                     "leaves an entry named NUL holding the 63 bytes of output that was "
@@ -4125,7 +4125,7 @@ def handoff_freeze_task() -> str:
 
 # --- per-task plan approval (task-0045) ---------------------------------------
 # The build flow's first steps are `plan` (the owning agent writes what it intends
-# to change and why) and `plan-approval` (the CEO's checkpoint). Until the plan
+# to change and why) and `plan-approval` (the User's checkpoint). Until the plan
 # approval is recorded in run.db, nothing outside .agentry/ may be written for
 # that task: the commit gate cannot stand in for it, because by the time a commit
 # is attempted every stage has already run. Edit and Write are denied here, the
@@ -4301,7 +4301,7 @@ def plan_bash_write(command: str) -> str:
 
 
 def plan_deny(task: str, what: str) -> int:
-    return deny(f"{task} is at its plan step and the CEO has not approved the plan, so nothing "
+    return deny(f"{task} is at its plan step and the User has not approved the plan, so nothing "
                 f"outside .agentry/ may be written yet ({what}). Write the plan to "
                 f".agentry/plans/<date>-<slug>-{task}.md, run advance.py, and wait for the "
                 f"approval (approve.py --task {task} --gate plan). Rejecting the plan costs "
@@ -4359,7 +4359,7 @@ def judge_git(command: str, cwd: str, orch: bool, placed: bool = False) -> int:
 
     def finish() -> int:
         """Allow, spending the trunk-push approval if this push earned it. Every
-        deny between here and the end leaves the marker for the push the CEO
+        deny between here and the end leaves the marker for the push the User
         actually approved."""
         # Spent BEFORE the allow, and a spend that fails is a deny: allowing on a
         # marker that could not be taken out of the way would leave the one-shot
@@ -4368,7 +4368,7 @@ def judge_git(command: str, cwd: str, orch: bool, placed: bool = False) -> int:
             return deny(
                 f"The trunk-push approval ({trunk_push_marker_path().name}) could not be "
                 f"spent, so this push is refused: it was already spent by another push, or "
-                f"the state directory is not writable. Ask the CEO to record a new "
+                f"the state directory is not writable. Ask the User to record a new "
                 f"approval (approve.py --trunk-push) once the cause is fixed.")
         return allow()
 
@@ -4448,7 +4448,7 @@ def judge_git(command: str, cwd: str, orch: bool, placed: bool = False) -> int:
                             f"{task} really shares it, ask the orchestrator: the declaration "
                             f"('branch:' in the task file) is frozen into the run row at "
                             f"registration, so editing the file now changes nothing and only "
-                            f"the CEO can have the task registered again with it.")
+                            f"the User can have the task registered again with it.")
             borrowed.append(f"{task} (branch is {head_task}'s)")
         if run is None:
             return deny(
@@ -4463,7 +4463,7 @@ def judge_git(command: str, cwd: str, orch: bool, placed: bool = False) -> int:
             via = (f" (the commit is tagged [{task}]; the branch '{branch}' belongs to "
                    f"{head_task})" if tagged_elsewhere else "")
             return deny(f"Commit for {task} is not approved yet{via}. Surface the diff and wait "
-                        f"for CEO approval, then: python .claude/tools/pipeline/approve.py "
+                        f"for User approval, then: python .claude/tools/pipeline/approve.py "
                         f"--task {task} --gate commit.",
                         human=human_notice("commit", task=task))
         if task in commit_ts and run.get("worktree"):
@@ -4471,7 +4471,7 @@ def judge_git(command: str, cwd: str, orch: bool, placed: bool = False) -> int:
             if bound != 0:
                 return bound
         if task in push_tasks and push_needs_approval() and not run["push_approved"]:
-            return deny(f"Push for {task} is not approved yet. Wait for CEO approval, then: "
+            return deny(f"Push for {task} is not approved yet. Wait for User approval, then: "
                         f"python .claude/tools/pipeline/approve.py --task {task} --gate push.",
                         human=human_notice("push", task=task))
     for note in borrowed:

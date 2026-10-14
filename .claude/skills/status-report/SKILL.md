@@ -1,6 +1,6 @@
 ---
 name: status-report
-description: Generate a project status report covering phase progress, task summary, blockers, risks, and next steps, sourced from actual task files rather than memory. Use when the CEO asks "what is the status", when the Orchestrator needs to brief the CEO, before a phase gate review, or after a batch of tasks completes and progress needs to be summarized.
+description: Generate a project status report covering phase progress, task summary, blockers, risks, and next steps, sourced from actual task files rather than memory. Use when the User asks "what is the status", when the Orchestrator needs to brief the User, before a phase gate review, or after a batch of tasks completes and progress needs to be summarized.
 allowed-tools: Read, Grep, Glob, Write, Bash
 ---
 
@@ -8,7 +8,7 @@ allowed-tools: Read, Grep, Glob, Write, Bash
 
 Generate a project status report by analyzing the task management system,
 documentation state, and current phase progress. Used by the Orchestrator to
-keep the CEO informed.
+keep the User informed.
 
 ## Steps
 
@@ -33,7 +33,7 @@ keep the CEO informed.
 4. **Identify blockers.** A task is blocked if: it is in `active/` with no
    recent commits on its branch (`git log --oneline --since="3 days ago"
    <branch>`); it depends on a task (via `depends_on`) that is not yet
-   `done`; it is finished but awaiting CEO approval; it needs an external
+   `done`; it is finished but awaiting User approval; it needs an external
    resource not yet available; or its Notes section records a technical
    problem. Document what is blocked, why, how long, and a suggested fix.
 5. **Identify risks.** Phase delay (current phase started longer ago than
@@ -46,9 +46,9 @@ keep the CEO informed.
    `references/templates.md`: phase status, task summary, completed this
    session, in progress, blockers, risks, next steps, recommendations.
    Quantify everything (counts, percentages), never "some" or "several."
-7. **Present to the CEO.** Show the report in the conversation (do not save
+7. **Present to the User.** Show the report in the conversation (do not save
    to a file unless explicitly asked). Call out any Critical blockers or
-   risks needing a CEO decision. Recommend next actions and ask for
+   risks needing a User decision. Recommend next actions and ask for
    direction. If the current phase is complete and all deliverables are
    verified, recommend a phase gate review.
 
@@ -61,7 +61,7 @@ keep the CEO informed.
 - [ ] Blockers and risks are real, not hypothetical
 - [ ] Next steps are specific and actionable, not "continue working"
 - [ ] Report presented in clean table format, scannable in 2 minutes
-- [ ] Any CEO decisions needed are clearly called out
+- [ ] Any User decisions needed are clearly called out
 
 ## References (read only when needed)
 

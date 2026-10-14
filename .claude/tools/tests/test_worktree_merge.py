@@ -159,7 +159,7 @@ class FreshnessTest(MergeCase):
             self.at("review", commit_approved=1)
         out = self.advance()
         self.assertEqual("blocked", out["action"], out)
-        self.assertIn("BLOCKED, needs CEO", out["message"])
+        self.assertIn("BLOCKED, needs the User", out["message"])
         row = self.row()
         self.assertEqual((state.ST_BLOCKED, "review", budget), (row["stage_status"], row["stage"],
                                                                 row["stale_sendbacks"]))
