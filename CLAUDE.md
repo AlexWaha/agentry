@@ -25,7 +25,7 @@ launch.
   owning agent.
 
 The team roster (31 agents: who to dispatch, when, with which gate profile)
-lives in `.claude/CLAUDE.md`; the skills catalog in `.claude/skills/README.md`;
+lives in `.claude/CLAUDE.md`; the skills catalog in `$AGENTRY_ROOT/skills/README.md` (`AGENTRY_ROOT` is the plugin root, see `docs/technical/plugin-layout.md`);
 the memory layers contract in `.agentry/memory/README.md`.
 
 ## Delegation Protocol
@@ -45,7 +45,7 @@ Every task follows this pipeline. No shortcuts.
 8. **Approved** → Orchestrator presents summary to the User, commit and push follow
    the approval checkpoints
 
-The deterministic orchestration layer (`.claude/tools/pipeline/` +
+The deterministic orchestration layer (`$AGENTRY_ROOT/tools/pipeline/` +
 `.agentry/pipeline.json`) drives this loop. See `rules/orchestration.md` and
 `rules/pipeline.md` for the contract.
 

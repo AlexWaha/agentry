@@ -2,9 +2,19 @@
 
 This rule defines how the orchestrator runs tasks **without babysitting**. The
 pipeline state and the gate checks live in deterministic code (SQLite + Python
-hooks under `.claude/tools/pipeline/`), not in the model's context. The model
+hooks under `$AGENTRY_ROOT/tools/pipeline/`), not in the model's context. The model
 proposes a transition; only the hook scripts record one. Read this alongside
 `pipeline.md` (the stage machine) and `git-workflow.md` (the sacred git rules).
+
+**Two roots.** `AGENTRY_ROOT` in every command below is the plugin root, the
+directory that holds `tools/` and `skills/` (source: `plugin/` in this repository,
+`${CLAUDE_PLUGIN_ROOT}` inside the plugin's own hooks and skills). The plugin's
+`session_start` hook exports `AGENTRY_ROOT` and `CLAUDE_PROJECT_DIR` to
+`$CLAUDE_ENV_FILE`, so both are set in every Bash call, subagents included. Until
+task-0039 switches the live harness to the plugin, `AGENTRY_ROOT` is the workspace
+root `.claude`, which still carries `tools/` and `skills/`. Everything the project
+owns (`.agentry/`, rules, agents, both `CLAUDE.md`, `settings.json`) resolves from
+`CLAUDE_PROJECT_DIR`. Layout and resolution: `docs/technical/plugin-layout.md`.
 
 ## The orchestrator's narrowed role (hard-gated)
 
@@ -37,7 +47,7 @@ reports that no memory block reached it, treat that as a live defect, not as an
 empty store. The practical consequence for a dispatch: what reaches the agent
 follows from what the task file says, so a thin task file retrieves thin. When
 a dispatch needs more than the injected rows, the agent queries the store
-itself (`python .claude/tools/memory/memory.py --query "<topic>"`), in addition
+itself (`python "$AGENTRY_ROOT/tools/memory/memory.py" --query "<topic>"`), in addition
 to the context-absorption chain from `pipeline.md`.
 
 ## The autonomy contract
@@ -81,7 +91,7 @@ to the context-absorption chain from `pipeline.md`.
   `pipeline` (`build` or `plan`), `stage`, `stage_status`, `awaiting_human`,
   `commit_approved`, `push_approved`, `retries`, `continuations`. This is the
   single source of truth for where a task is. Inspect with
-  `python .claude/tools/pipeline/state.py --show`.
+  `python "$AGENTRY_ROOT/tools/pipeline/state.py" --show`.
 - `.agentry/pipeline.json` - the declarative stage machine, split into
   `pipelines.build` (plan -> plan-approval -> implement -> test -> review ->
   ready -> done; the types in `skip_for_types`, `bugfix` and `techdebt`, skip the first two) and
@@ -148,7 +158,7 @@ scripts run. What that block looks like has not been measured here.
 
 For each task, drive the deterministic FSM - never hand-wave a stage as done:
 
-0. **Handoff first.** Run `python .claude/tools/pipeline/handoff.py --check`. It
+0. **Handoff first.** Run `python "$AGENTRY_ROOT/tools/pipeline/handoff.py" --check`. It
    exits non-zero for two different reasons and they need different answers, so
    read the JSON rather than the exit code alone. `thread_problems` is an epic
    thread document that is malformed or over `handoff.thread_max_bytes`: fix
@@ -171,7 +181,7 @@ For each task, drive the deterministic FSM - never hand-wave a stage as done:
    the start message until the doc validates. `handoff.py --waive` is the
    User-approved escape hatch - orchestrator-only, run it only after the User
    explicitly approves in chat (same trust boundary as `approve.py`).
-   Then run `python .claude/tools/memory/update.py --check` and clear what it
+   Then run `python "$AGENTRY_ROOT/tools/memory/update.py" --check` and clear what it
    reports the same way: registration is refused on an unstamped completed task
    as flatly as on an undocumented one, and the Stop hook will not let the
    session end while either debt stands. Distill first, stamp second - the
@@ -179,7 +189,7 @@ For each task, drive the deterministic FSM - never hand-wave a stage as done:
 1. **Start.** Create the branch per `git-workflow.md` - **from up-to-date `main`
    only, never from another branch** (verify with
    `git merge-base --is-ancestor origin/main HEAD`, which must exit `0`). Then run
-   `python .claude/tools/pipeline/advance.py --task task-XXXX --type <type>`.
+   `python "$AGENTRY_ROOT/tools/pipeline/advance.py" --task task-XXXX --type <type>`.
    This records the run at the first stage: `plan` for every type except those in
    `skip_for_types`, `implement` for a `bugfix` or `techdebt`. A task started on a non-`main` base,
    or not registered via `advance.py`, is OUTSIDE the pipeline - the gates are not
@@ -286,14 +296,14 @@ order and without improvising:
    - **The User's force-majeure declaration IS the commit approval** for the
      preempted task. It is not a second question to ask them, and you do not park
      waiting for one. Record it the normal way and say what it was for: `python
-     .claude/tools/pipeline/approve.py --task task-XXXX --gate commit`. That is
+     "$AGENTRY_ROOT/tools/pipeline/approve.py" --task task-XXXX --gate commit`. That is
      the only step between the declaration and the commit.
    - **The pre-commit test gate is waived for a preempt commit, and for nothing
      else.** A mid-stage tree is expected to be red; the commit exists to lose
      no work, not to claim a green stack. Say so in the commit message ("gates
      not run - preempted mid-stage"), and run the full gate normally when the
      task resumes at step 4. No other commit in this pipeline may skip it.
-2. **Pause the preempted task:** `python .claude/tools/pipeline/approve.py
+2. **Pause the preempted task:** `python "$AGENTRY_ROOT/tools/pipeline/approve.py"
    --task task-XXXX --pause "<why>"`. The run keeps its stage, `retries`,
    `continuations` and approval flags and gets `stage_status=paused` plus a
    record of the reason and of whether the branch had commits (`committed`) or
@@ -345,7 +355,7 @@ does.
 ### Abandon: retiring a task without a merge
 
 When the User drops a task for good (the work is cancelled, not preempted), the
-only way to close it cleanly is `python .claude/tools/pipeline/approve.py --task
+only way to close it cleanly is `python "$AGENTRY_ROOT/tools/pipeline/approve.py" --task
 task-XXXX --abandon --reason "<why>"`. Like every approve.py action it is the
 orchestrator's alone and runs only after the User has decided, in an
 `AskUserQuestion` card; the gate denies it to every subagent profile. It:
@@ -534,7 +544,8 @@ edits it, and the solo merge runs there. Every task works in
 `<type>/<task>`. Pipeline state (`run.db`, task files, plans, markers) already
 lives in the workspace-root `.agentry/`, outside every repo, so a worktree
 carries code and nothing else. Hooks always run the LIVE harness scripts under
-the workspace-root `.claude/`; the copies of `.claude/tools` and
+the plugin root (`$AGENTRY_ROOT`; until task-0039 the workspace-root `.claude/`); the
+copies of `tools/` (`plugin/tools` in a tree) and
 `.agentry/pipeline.json` inside a tree are inert for hooks and are exactly what
 the exit gates test. Each tree gets its own `tmp/`.
 
@@ -708,7 +719,7 @@ leftover is cleared with `shutil.rmtree`; a leftover found by a LATER call is
 reported `left` and never deleted blind, since it could hold unregistered edits.
 A git-bash shell whose cwd is inside the tree does not block removal, and
 `remove()` first moves its own process out of the tree. Fix for a left tree: end
-whatever holds it, then `python .claude/tools/pipeline/worktree.py --remove --task T`.
+whatever holds it, then `python "$AGENTRY_ROOT/tools/pipeline/worktree.py" --remove --task T`.
 
 **`worktree.py` CLI** (orchestrator use, JSON on stdout):
 
@@ -740,7 +751,9 @@ its tree is not in the graph until it merges; read the tree with Grep and Read.
    `python {root}/.claude/tools/pipeline/artifact_gate.py --task {task} --kind plan`
    and the `ui_evidence.py` call in the test stage to
    `python {root}/.claude/tools/pipeline/ui_evidence.py --task {task}`. Verify
-   `advance.py` still passes both gates on a legacy run.
+   `advance.py` still passes both gates on a legacy run. (Those two `{root}` commands
+   address the frozen workspace-root copy of the tools; task-0038 leaves them as they
+   are and task-0039 replaces `{root}/.claude` with the `{plugin}` placeholder.)
 4. Flip `enabled` to true only with `src/` on `main`, no LEGACY run in flight,
    and task-0134 done. Do not enable worktrees before then.
 5. Watch the first two tasks end to end (registration, parallel gates, stale
@@ -787,13 +800,13 @@ and it may not be yours.
 ## Swarm mode
 
 For an epic with two or more subtasks. The protocol is the skill
-`.claude/skills/swarm/SKILL.md`, owned by this project and edited here. Everything project-specific (commands, paths, roles) is the
+`$AGENTRY_ROOT/skills/swarm/SKILL.md`, owned by this project and edited here. Everything project-specific (commands, paths, roles) is the
 key table in `.claude/pipeline-adapter.md`, and the prompt and board templates
-are `.claude/skills/swarm/references/templates.md`. Fill them from the adapter:
+are `$AGENTRY_ROOT/skills/swarm/references/templates.md`. Fill them from the adapter:
 where a template hard-codes another project's path or command, the adapter's
 value wins.
 
-The dial is `python .claude/tools/pipeline/swarm.py on|off` (default `off`,
+The dial is `python "$AGENTRY_ROOT/tools/pipeline/swarm.py" on|off` (default `off`,
 persisted per lane next to the mode and the approvals level, shown by
 `mode.py --show`, printed by SessionStart whenever it is on). Swarm applies in
 `build` mode with the dial on and an approved epic. With it off, and for any
@@ -847,7 +860,7 @@ This project's specifics:
   a zone id like `0060-S2`, paths comma-separated, each an exact repo-relative
   path or a trailing `dir/**`; a mid-path glob, `*.md`, trailing `/`, `..`, an
   absolute path or a bare `**` is rejected). Before the first wave the
-  orchestrator freezes it with `python .claude/tools/pipeline/zones.py --prove
+  orchestrator freezes it with `python "$AGENTRY_ROOT/tools/pipeline/zones.py" --prove
   --task task-<epic>`: exit 0 frozen, 1 refused with the overlaps named, 2
   usage; it also refuses when the task is not at `implement` or `test`. Shared
   files (`swarm.shared_paths` in `pipeline.json`, else the in-code default) must
@@ -882,7 +895,7 @@ This project's specifics:
   was measured only for a headless foreground dispatch. Before wave 1, dispatch
   ONE zoned agent in the background and confirm its zone write succeeds; only
   then launch the wave. To unfreeze a frozen map (a finished or abandoned
-  wave, a corrected board), run `python .claude/tools/pipeline/zones.py
+  wave, a corrected board), run `python "$AGENTRY_ROOT/tools/pipeline/zones.py"
   --release --task T`. It is orchestrator-only: a dispatched agent cannot
   release the map that binds it.
 - **One agent per zone, one writer for the shared set (task-0060).** The
@@ -906,10 +919,10 @@ This project's specifics:
   agents included, so wherever the skill text has a QA agent run the suite,
   here that agent runs narrowed runs only (single modules or `-k`) and the gate
   runs the suite. The implement-stage build gate is
-  `python -m compileall -q .claude/tools`; there is no other build.
+  `python -m compileall -q plugin/tools`; there is no other build.
 - **Roles and turns.** Dev, QA and fixer agents carry `SendMessage` and run at
   `maxTurns: 150`; read-only agents, the reviewer included, at 100 (set per gate
-  profile in `.claude/tools/setup/apply_optimization.py`). Both load only after a
+  profile in `$AGENTRY_ROOT/tools/setup/apply_optimization.py`). Both load only after a
   session restart.
 - **Checkpoints are unchanged.** The commit checkpoint is the User's, the shipped
   `approvals_never_granted` withholds the push at every approvals level, and in `solo` mode the local merge
@@ -1063,7 +1076,7 @@ profile). What each layer does and does not cover (task-0116):
 - **Capability cost.** A docs agent can no longer run a generator script it
   wrote (the pitch-deck skill's `docs/presentations/scripts/generate_pitch.py`);
   the orchestrator or a dev agent runs it until the User decides on a vetted
-  generator under `.claude/tools`. Also lost to readonly and docs agents:
+  generator under `$AGENTRY_ROOT/tools`. Also lost to readonly and docs agents:
   - Flags: sort `-o --output --compress-program -T --parallel --files0-from`;
     rg `--pre --pre-glob -z --search-zip --hostname-bin --generate`; find
     `-exec -execdir -ok -okdir -delete -fprint* -fls -files0-from`; file `-C -z
@@ -1133,7 +1146,7 @@ History lives in `.agentry/state/events.db` (SQLite, WAL), written by
 stage transition, gate result (command, exit status, duration; never the gate
 output), park, block, approval, rejection (with its reason), continuation,
 pause, resume, abandon, merge and close. Read it with
-`python .claude/tools/pipeline/events.py --task T` (one task) or `--summary
+`python "$AGENTRY_ROOT/tools/pipeline/events.py" --task T` (one task) or `--summary
 [--since DATE]` (all tasks); both print JSON. Handoff authors run the `--task`
 form instead of reconstructing a task's history by hand.
 

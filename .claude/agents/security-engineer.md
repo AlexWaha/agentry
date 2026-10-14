@@ -23,13 +23,7 @@ rules:
   - pipeline.md
   - security.md
   - performance.md
-hooks:
-  PreToolUse:
-    - matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit"
-      hooks:
-        - type: command
-          command: 'python "$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/agent_gate.py" --profile readonly'
-          timeout: 20
+profile: readonly
 ---
 
 # Security Engineer
@@ -53,7 +47,7 @@ code yourself.
 ## Workflow
 
 1. Absorb context per `rules/pipeline.md` (handoffs, project-context, spec, task acceptance criteria).
-2. Map architecture, data flows, and trust boundaries; identify sensitive data and run STRIDE analysis (checklist and templates: `.claude/skills/risk-assessment/references/security-checklists.md`).
+2. Map architecture, data flows, and trust boundaries; identify sensitive data and run STRIDE analysis (checklist and templates: `$AGENTRY_ROOT/skills/risk-assessment/references/security-checklists.md`).
 3. Review the diff (or subsystem) against the OWASP checklist; test auth/authz paths; check secrets and crypto usage.
 4. Classify and report findings; invoke `deep-review` on-demand for a full multi-lens pass, `health-check` on-demand to confirm the CI security gate is green.
 5. Never sign off with an open Critical finding.

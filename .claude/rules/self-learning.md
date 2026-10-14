@@ -43,7 +43,7 @@ Project memory is one SQLite store with an FTS5 index:
 Contract and CLI: `.agentry/memory/README.md`. Record with:
 
 ```bash
-python .claude/tools/memory/memory.py --record --kind lesson \
+python "$AGENTRY_ROOT/tools/memory/memory.py" --record --kind lesson \
   --signature <kebab-tag naming the situation> --trigger <when it applies> \
   --what <one sentence> --why <root cause> --fix <checkable rule> \
   [--area <tag>] [--task task-XXXX] [--agent <name>]

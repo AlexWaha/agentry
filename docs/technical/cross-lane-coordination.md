@@ -228,7 +228,7 @@ The lane does this:
 2. **Messages a heads-up** if the file is one the other lane will need, naming
    the file and the reason.
 3. **Pauses its own task** if the work cannot continue without the file:
-   `python .claude/tools/pipeline/approve.py --task <id> --pause "<reason>"`.
+   `python "$AGENTRY_ROOT/tools/pipeline/approve.py" --task <id> --pause "<reason>"`.
    The pause is refused while the tree has uncommitted work, which keeps it
    from hiding a dirty tree. A paused run holds nothing and is left alone by the
    Stop hook. `--resume` restores the stage when the file is free.

@@ -18,8 +18,8 @@ backend/frontend stacks, test framework, formatter, container tool, CI tool,
 default DB, auth method, main branch, and the canonical commands (test, format,
 lint, build, dev). Read `.agentry/project/stack.md` for the placeholder table.
 In a workspace with more than one git repository, apply this per repo. The
-manifest-to-stack table for that lives in `.claude/tools/setup/repo_scan.py`
-(`python .claude/tools/setup/repo_scan.py --root . --json`); it is the same
+manifest-to-stack table for that lives in `$AGENTRY_ROOT/tools/setup/repo_scan.py`
+(`python "$AGENTRY_ROOT/tools/setup/repo_scan.py" --root . --json`); it is the same
 inspection, run once per `.git` directory, and step B0 turns its result into
 `repos{}` and `lanes{}`. Do not keep a second detector.
 
@@ -60,11 +60,11 @@ gracefully.
 
 **A7.5. Seed the memory store.** Generate the module map: for each top-level
 module/directory, one row in the store - `python
-.claude/tools/memory/memory.py --record --kind module --path <dir>
+"$AGENTRY_ROOT/tools/memory/memory.py" --record --kind module --path <dir>
 --responsibility <one line> --symbols <entry points>` - using codegraph queries
 and `project/architecture.md`. Lessons and patterns start empty; they accumulate
 as tasks complete. Then stamp freshness: `python
-.claude/tools/memory/codebase_sync.py --stamp`. The store contract is in
+"$AGENTRY_ROOT/tools/memory/codebase_sync.py" --stamp`. The store contract is in
 `.agentry/memory/README.md`.
 
 **A8. Verify.** Run and report:
@@ -76,7 +76,7 @@ grep -rE '\{\{[A-Z_]+\}\}' .claude/        # must be empty (ignore _onboarding.m
 grep -r 'PROJECT-SPECIFIC - REPLACE ME' .agentry/project/   # must be empty
 grep -rn 'WORKSPACE_ROOT' .claude/settings.json .claude/agents/  # must be empty; hook paths use $CLAUDE_PROJECT_DIR (leave as-is)
 grep -rnE '[A-Za-z]:/[^"]*\.claude/' .claude/settings.json .claude/agents/  # must be empty - no machine-local absolute paths
-python .claude/tools/pipeline/state.py --show               # engine loads: prints []
+python "$AGENTRY_ROOT/tools/pipeline/state.py" --show      # engine loads: prints []
 ```
 
 ## Phase B - interactive pipeline interview (ASK the user)
@@ -86,7 +86,7 @@ time** (offer the default in brackets; accept it on a bare "yes"). Then write th
 answers into `.agentry/pipeline.json`, replacing its `{{PLACEHOLDERS}}` with the
 concrete values. Do not guess - this is the user's chance to shape autonomy.
 
-**B0. Repositories and lanes.** Run `python .claude/tools/setup/repo_scan.py
+**B0. Repositories and lanes.** Run `python "$AGENTRY_ROOT/tools/setup/repo_scan.py"
 --root .` and show the table it prints (key, path, stack, manifests) to the user
 through `AskUserQuestion` as a proposal, never as a fact: options "Looks right
 [recommended]" and "Correct it". A directory with a `.git` and no recognised
@@ -94,7 +94,7 @@ manifest shows as stack `unknown` - ask what it is. A single-repo workspace is a
 one-row table, not an error. Whatever the user corrects (key, path, stack, lane
 name, or a row to drop) is the input: save the corrected rows as a JSON list in
 `tmp/repos.json` (a row may also carry `stages` and `lane`), then run
-`AGENTRY_MAIN_THREAD=1 python .claude/tools/setup/repo_scan.py --root . --table
+`AGENTRY_MAIN_THREAD=1 python "$AGENTRY_ROOT/tools/setup/repo_scan.py" --root . --table
 tmp/repos.json --write .agentry/pipeline.json` (main thread only; subagents are
 denied this write) (no `--table` writes the scan unchanged). It rewrites only
 `repos` and `lanes`, keeps the file's layout, reads the result back through the
@@ -188,7 +188,7 @@ English, Russian) - and replace it in `rules/communication.md`.
 After the interview, write the finalized `.agentry/pipeline.json` and confirm it has
 no remaining `{{...}}` placeholders. Verify the engine loads it:
 ```bash
-python .claude/tools/pipeline/state.py --show       # should print [] (no runs yet)
+python "$AGENTRY_ROOT/tools/pipeline/state.py" --show      # should print [] (no runs yet)
 ```
 
 ## Finish

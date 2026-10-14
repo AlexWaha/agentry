@@ -7,13 +7,8 @@ permissionMode: bypassPermissions
 effort: low
 maxTurns: 100
 tools: Read, Bash, Glob, Grep
-hooks:
-  PreToolUse:
-    - matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit"
-      hooks:
-        - type: command
-          command: 'python "$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/agent_gate.py" --profile readonly --allow-script playwright --allow-script npx'
-          timeout: 20
+profile: readonly
+allow_scripts: [playwright, npx]
 ---
 
 # Evidence Collector

@@ -17,13 +17,7 @@ rules:
   - pipeline.md
   - documentation.md
   - human-voice.md
-hooks:
-  PreToolUse:
-    - matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit"
-      hooks:
-        - type: command
-          command: 'python "$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/agent_gate.py" --profile readonly'
-          timeout: 20
+profile: readonly
 ---
 
 # AI Detector

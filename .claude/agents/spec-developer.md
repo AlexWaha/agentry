@@ -18,13 +18,7 @@ rules:
   - self-learning.md
   - pipeline.md
   - documentation.md
-hooks:
-  PreToolUse:
-    - matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit"
-      hooks:
-        - type: command
-          command: 'python "$CLAUDE_PROJECT_DIR/.claude/tools/pipeline/agent_gate.py" --profile docs'
-          timeout: 20
+profile: docs
 ---
 
 # Spec Developer

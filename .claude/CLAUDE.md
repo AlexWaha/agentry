@@ -12,7 +12,7 @@ piece of work to the owning agent (roster below), **verify** gate results, and
 **Your responsibilities:**
 - Receive high-level tasks from the User and formalize them (plan -> spec -> epic -> tasks)
 - Decompose into subtasks and delegate to department agents via the Agent tool
-- Track progress via task files in `.agentry/tasks/backlog/`, `active/`, `done/` and `python .claude/tools/pipeline/state.py --show`
+- Track progress via task files in `.agentry/tasks/backlog/`, `active/`, `done/` and `python "$AGENTRY_ROOT/tools/pipeline/state.py" --show`
 - Present results to the User for approval at each phase gate
 - **NEVER write code, edit files, run tests, or make commits directly** - and
   this is hook-enforced, not a promise: `orchestrator_gate` (pipeline.json +
@@ -52,7 +52,7 @@ Every task follows this pipeline. No shortcuts.
 ## Autonomous Execution (deterministic pipeline)
 
 Once a task enters execution, you run it **without babysitting**. The pipeline
-state and gate checks live in deterministic hooks (`.claude/tools/pipeline/` +
+state and gate checks live in deterministic hooks (`$AGENTRY_ROOT/tools/pipeline/` +
 `.agentry/state/run.db`), not in your context. Full contract in
 `rules/orchestration.md`; the stage machine in `rules/pipeline.md`. The essentials:
 
@@ -123,7 +123,7 @@ state and gate checks live in deterministic hooks (`.claude/tools/pipeline/` +
 ## Team Roster (who to dispatch, when)
 
 Every agent's full definition (frontmatter, preloaded skills, gate profile)
-lives in `.claude/agents/<name>.md`. Skills catalog: `.claude/skills/README.md`.
+lives in `.claude/agents/<name>.md`. Skills catalog: `$AGENTRY_ROOT/skills/README.md`.
 Gate profiles: `dev` (writes code), `docs` (writes only .claude/, .agentry/
 except .agentry/state/, docs/, README and the root CLAUDE.md), `readonly`
 (analyzes, never writes).
@@ -200,16 +200,16 @@ rows (reusable code shapes) and `module` rows (the module map).
   all (task-0081 - which also found that the hook had been printing its block
   as plain stdout, which this event discards, so retrieval delivered nothing to
   anybody until then).
-- **Record / query by hand:** `python .claude/tools/memory/memory.py --record
+- **Record / query by hand:** `python "$AGENTRY_ROOT/tools/memory/memory.py" --record
   --kind lesson --signature <tag> --trigger <when> --what <mistake> --why <cause>
   --fix <rule>`; `--query "<topic>"`, `--export`, `--stats`.
 - **Session start:** `codebase_sync.py --check` detects module-map drift against
   git heads and instructs an update.
 - **After every completed task** (the next registration is refused and the Stop
   hook will not release the session until this is done): distill the handoff doc
-  into rows, then `python .claude/tools/memory/update.py --stamp --task
+  into rows, then `python "$AGENTRY_ROOT/tools/memory/update.py" --stamp --task
   task-XXXX` (refused unless the store gained a row, or `--none`) and `python
-  .claude/tools/memory/codebase_sync.py --stamp`. Procedure:
+  "$AGENTRY_ROOT/tools/memory/codebase_sync.py" --stamp`. Procedure:
   `skills/self-learning` (mode: distill).
 
 ## Project Context
@@ -228,7 +228,17 @@ If `project/` files are missing or empty, the template has not been initialized 
 
 **All packages, frameworks, and dependencies must be the latest stable version** compatible with the project's chosen language / framework. No pinning to old versions without User approval.
 
-**The harness lives in `.claude/`; the project's own work product lives in `.agentry/` at the workspace root.**
+**The harness is split between two roots; the project's own work product lives in `.agentry/` at the workspace root.**
+
+`AGENTRY_ROOT` is the plugin root: the directory that holds `tools/` and `skills/`
+(the `agentry` plugin, source in `plugin/` of this repository, which hooks and
+skills see as `${CLAUDE_PLUGIN_ROOT}`). The plugin's `session_start` hook exports
+it, together with `CLAUDE_PROJECT_DIR`, into `$CLAUDE_ENV_FILE`, so it is set in
+every Bash call of the main thread and of subagents. Until task-0039 switches the
+live harness to the plugin, `AGENTRY_ROOT` is the workspace root `.claude`, which
+still carries `tools/` and `skills/`. The skill `verify` is the one exception: it
+stays in `.claude/skills/verify`. Layout and path resolution:
+`docs/technical/plugin-layout.md`.
 
 | What | Where |
 |------|-------|
@@ -240,7 +250,8 @@ If `project/` files are missing or empty, the template has not been initialized 
 | Memory | `.agentry/memory/` |
 | Agents | `.claude/agents/` |
 | Rules | `.claude/rules/` |
-| Skills | `.claude/skills/` |
+| Skills | `$AGENTRY_ROOT/skills/` (and `.claude/skills/verify`) |
+| Tools (pipeline, hooks, memory) | `$AGENTRY_ROOT/tools/` |
 | Specs | `.agentry/specs/` |
 | Epics | `.agentry/tasks/epics/` |
 | Code knowledge graph | `.codegraph/` at project root (built by codegraph CLI, gitignored) |
@@ -287,7 +298,7 @@ it sits in - there is no `status:` frontmatter field:
 - `.agentry/tasks/templates/task-template.md` - template for new tasks
 
 New tasks are created directly in `backlog/` (`skills/new-task`).
-`python .claude/tools/pipeline/advance.py --task task-XXXX --type <type>` moves
+`python "$AGENTRY_ROOT/tools/pipeline/advance.py" --task task-XXXX --type <type>` moves
 the file `backlog/ -> active/` itself when the User says to start it, and moves
 it `active/ -> done/` itself once git confirms the branch is merged into
 `main` - never before.
@@ -354,7 +365,7 @@ once, and the `@rules/` lines add no second copy; design record
 `.agentry/plans/2026-09-14-task-0014-rules-split-matrix.md`), and the `@rules/`
 lines name the same files as a live include so the set survives a build without
 that walk. The main thread has no frontmatter, so
-`.claude/tools/hooks/inject_rules.py` cannot serve it, and this list is what it
+`$AGENTRY_ROOT/tools/hooks/inject_rules.py` cannot serve it, and this list is what it
 runs on. A rule that leaves the list is named in `claudeMdExcludes` in
 `.claude/settings.json` - that is what stops it loading everywhere - and reaches
 only the agents whose `rules:` key declares it. Those patterns match by
@@ -393,7 +404,7 @@ the only check that a repo-specific rule has not crept into the core set.
 
 ### Delivered to the main thread only
 
-`.claude/tools/hooks/main_thread_rules.py` prints the two rules below on
+`$AGENTRY_ROOT/tools/hooks/main_thread_rules.py` prints the two rules below on
 `SessionStart`, which is a main-thread-only channel: its stdout is pushed into
 the opening message list and re-fires on `/compact`, and no subagent ever
 receives it (measured, task-0088). They are therefore NOT in the `@rules/` list

@@ -10,7 +10,7 @@
   "branch_pattern": "{type}/{task}",
   "_approvals_never_granted_comment": "Read by tools/pipeline/approvals.py never_granted(): checkpoints withheld from EVERY approvals level and from any stage auto_approve list. The level table grants `push` (work branch only) at `auto`; listing it here is what keeps the User's standing rule (the push is never automatic) true. `trunk_push` and `plan` are withheld in code whatever this says. A missing key, a non-list value or an unreadable file withholds `push` and `trunk_push` too (fail-safe), so only an explicit list can loosen anything, and an explicit [] is the one way to let `auto` push the work branch. Editing this is a User decision.",
   "approvals_never_granted": ["push", "trunk_push"],
-  "repos": {"agentry": {"path": ".", "stack": "python", "stages": {"implement": ["python -m compileall -q .claude/tools"], "test": [], "review": ["ruff check .claude/tools"]}}},
+  "repos": {"agentry": {"path": ".", "stack": "python", "stages": {"implement": ["python -m compileall -q plugin/tools"], "test": [], "review": ["ruff check plugin/tools"]}}},
   "lanes": {
     "_comment": "Contract C-4 (FR-45). Read by state.lanes() / state.lane_repo(); stop_gate.read_backlog() offers a lane only the backlog tasks whose repo: equals the lane's repo. Exactly one repo per lane (a key of repos{}). The lane named default also receives tasks whose repo: is empty. A lane is selected with PIPELINE_LANE=<name>; unset is default. A missing lanes{} object offers the whole backlog to every lane (fail open, NFR-4); a session in a lane that is not declared here is offered nothing.",
     "default": {"repo": "agentry"}
@@ -109,7 +109,7 @@
           "name": "implement",
           "owner": "dev",
           "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
-          "exit_gate": { "cmd": "python -m compileall -q .claude/tools", "expect_exit": 0 }
+          "exit_gate": { "cmd": "python -m compileall -q plugin/tools", "expect_exit": 0 }
         },
         {
           "name": "test",
@@ -117,13 +117,13 @@
           "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
           "ui_evidence": true,
           "_comment": "ui_evidence: true appends 'python .claude/tools/pipeline/ui_evidence.py --task {task}' to the exit gate at onboarding, so UI-touching tasks require real-browser evidence in .agentry/state/evidence/<task>.json. Set false for API-only projects.",
-          "exit_gate": { "cmd": "python -m unittest discover -s .claude/tools && python {root}/.claude/tools/pipeline/ui_evidence.py --task {task}", "expect_exit": 0 }
+          "exit_gate": { "cmd": "python -m unittest discover -s plugin/tools && python {root}/.claude/tools/pipeline/ui_evidence.py --task {task}", "expect_exit": 0 }
         },
         {
           "name": "review",
           "owner": "reviewer",
           "tools": ["Read", "Glob", "Grep", "Bash"],
-          "exit_gate": { "cmd": "ruff check .claude/tools", "expect_exit": 0 }
+          "exit_gate": { "cmd": "ruff check plugin/tools", "expect_exit": 0 }
         },
         {
           "name": "ready",
@@ -156,7 +156,7 @@
           "_comment": "Write the problem statement: what hurts, scope, non-goals, open questions. Parks on the User until the questions are answered - that information exists nowhere else.",
           "artifact": ".agentry/plans/*-brief.md",
           "exit_gate": {
-            "cmd": "python .claude/tools/pipeline/artifact_gate.py --task {task} --kind brief",
+            "cmd": "python {root}/.claude/tools/pipeline/artifact_gate.py --task {task} --kind brief",
             "expect_exit": 0
           }
         },
@@ -166,7 +166,7 @@
           "tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
           "artifact": ".agentry/plans/*.md",
           "exit_gate": {
-            "cmd": "python .claude/tools/pipeline/artifact_gate.py --task {task} --kind plan",
+            "cmd": "python {root}/.claude/tools/pipeline/artifact_gate.py --task {task} --kind plan",
             "expect_exit": 0
           }
         },
@@ -190,7 +190,7 @@
           "artifact": ".agentry/specs/*.md",
           "_comment": "Spec with testable acceptance criteria, then task files written into tasks/backlog/. A spec that is not sliced into tasks is half done.",
           "exit_gate": {
-            "cmd": "python .claude/tools/pipeline/artifact_gate.py --task {task} --kind spec",
+            "cmd": "python {root}/.claude/tools/pipeline/artifact_gate.py --task {task} --kind spec",
             "expect_exit": 0
           }
         },

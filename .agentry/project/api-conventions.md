@@ -8,7 +8,7 @@
 Agentry has no HTTP surface: no server, no routes, no request or response
 bodies. There are no API conventions to record, and none are written here.
 
-The interfaces it does have are command-line scripts under `.claude/tools/` and
+The interfaces it does have are command-line scripts under `$AGENTRY_ROOT/tools/` and
 the Claude Code hook protocol. Both are listed in `stack.md` (Commands) and
 `architecture.md` (Modules).
 

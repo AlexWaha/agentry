@@ -1,9 +1,9 @@
 # Architecture
 
-**Date:** 2026-10-13
-**Author:** technical-writer (task-0052, swarm task-0118; task-0132)
+**Date:** 2026-10-14
+**Author:** technical-writer (task-0052, swarm task-0118; task-0132; task-0038)
 **Status:** Draft
-**Version:** 2.1
+**Version:** 2.2
 
 Agentry has no application layers (no controllers, services or models) and no
 request cycle. Its architecture is the set of scripts that sit between the
@@ -27,11 +27,16 @@ in `stack.md`.
 
 ```
 src/                              # git repository root; commands run here
-├── .claude/                      # the harness (what Agentry ships)
+├── .claude/                      # project side of the harness: stays in each adopting project
 │   ├── CLAUDE.md                 # orchestrator doc and team roster
-│   ├── settings.json             # hook wiring, statusLine, claudeMdExcludes
+│   ├── settings.json             # statusLine, permissions, env, claudeMdExcludes
 │   ├── agents/                   # 31 agent definitions (profile: dev, docs, readonly)
 │   ├── rules/                    # policy the hooks enforce
+│   ├── pipeline-adapter.md       # project values for the swarm skill
+│   └── skills/verify/            # the one skill that stays project-side
+├── plugin/                       # the plugin root: ${CLAUDE_PLUGIN_ROOT}, $AGENTRY_ROOT
+│   ├── .claude-plugin/           # plugin.json
+│   ├── hooks/                    # hooks.json (every hook registration)
 │   ├── skills/                   # procedures agents invoke
 │   └── tools/                    # all executable code, stdlib only
 │       ├── payload.py            # measures what a dispatch costs
@@ -52,8 +57,14 @@ src/                              # git repository root; commands run here
 └── README.md
 ```
 
-The Agentry workspace holds a second copy of `.claude/` and `.agentry/` one
-level up, with `"cwd": "src"` in its `pipeline.json` and `repos.agentry.path`
+The harness has two roots. The plugin root (`plugin/`, exported to prose and Bash
+as `$AGENTRY_ROOT`) holds code and skills; the project root (`$CLAUDE_PROJECT_DIR`)
+holds everything the project owns. Until task-0039 switches the live harness to
+the plugin, `AGENTRY_ROOT` is the workspace root `.claude`. Layout, path
+resolution and what stays project-side and why: `docs/technical/plugin-layout.md`.
+
+The Agentry workspace holds a second copy of `.claude/` (still carrying `tools/`
+and `skills/`) and `.agentry/` one level up, with `"cwd": "src"` in its `pipeline.json` and `repos.agentry.path`
 set to `src`. The code lives in `src/`; the workspace copy is the harness the
 orchestrator session itself runs.
 
@@ -69,7 +80,7 @@ E:/Personal/Agenty/              # workspace root (not a git repo); live .claude
 ```
 
 Pipeline state stays at the workspace root, so a tree carries code only. Hooks run
-the live scripts at the root; the `.claude/tools` and `pipeline.json` copies inside
+the live scripts at the root; the `plugin/tools` and `pipeline.json` copies inside
 a tree are inert for hooks and are what the exit gates test. Swarm umbrellas and
 runs registered before the flag keep working in `src/` and are exclusive. Codegraph
 indexes the trunk only (`.codegraph/` at the root), so a tree's unmerged symbols
@@ -77,7 +88,7 @@ are not in the graph.
 
 ## Modules
 
-All code is under `.claude/tools/`. Each script is standard-library Python and
+All code is under `plugin/tools/` (`$AGENTRY_ROOT/tools/`). Each script is standard-library Python and
 runs as its own process (a hook or a CLI). There are no packages and no
 `__init__.py` outside `tests/`, so scripts import their siblings by extending
 `sys.path`.
@@ -177,7 +188,7 @@ denial does not depend on what the model remembers.
   read-only `worktree` function never starts a subprocess (hook budget).
 - `pretool_gate.normalize` is the one path normaliser; `agent_gate` re-exports
   it rather than keeping a copy.
-- Nothing in `.claude/tools/` imports a third-party package. `ruff` is a
+- Nothing in `plugin/tools/` imports a third-party package. `ruff` is a
   development tool, not a dependency.
 - Tests import the module under test; no module imports from `tests/`.
 
@@ -185,17 +196,17 @@ denial does not depend on what the model remembers.
 
 | Type | Location |
 |---|---|
-| New stage logic or gate | `.claude/tools/pipeline/` |
-| New hook script | `.claude/tools/hooks/`, then wire it in `.claude/settings.json` |
-| New memory behaviour | `.claude/tools/memory/` |
-| Onboarding or rollout script | `.claude/tools/setup/` |
-| Test | `.claude/tools/tests/test_<concern>.py` (use `tmproot.sandbox()`, not `tempfile`) |
+| New stage logic or gate | `plugin/tools/pipeline/` |
+| New hook script | `plugin/tools/hooks/`, then register it in `plugin/hooks/hooks.json` |
+| New memory behaviour | `plugin/tools/memory/` |
+| Onboarding or rollout script | `plugin/tools/setup/` |
+| Test | `plugin/tools/tests/test_<concern>.py` (use `tmproot.sandbox()`, not `tempfile`) |
 | Stage or gate configuration | `.agentry/pipeline.json`, orchestrator only |
 | New policy | `.claude/rules/`, then list it in `claudeMdExcludes` if it is not core |
 | Project-specific fact | `.agentry/project/` |
 
 Check sibling files first and match their naming. Do not add a new top-level
-folder under `.claude/tools/` without User approval.
+folder under `plugin/tools/` without User approval.
 
 ## State and storage
 
@@ -228,9 +239,9 @@ the orchestrator applies configuration changes.
 
 The module rows in `.agentry/memory/memory.db` were recorded from the real
 tree and can be compared with this layout through
-`python .claude/tools/memory/memory.py --query "module"` (exit status 0 on
+`python "$AGENTRY_ROOT/tools/memory/memory.py" --query "module"` (exit status 0 on
 2026-10-12). The module list above was taken from a directory listing of
-.claude/tools/ on 2026-10-09 and the responsibilities from each script's
+the tools directory (then `.claude/tools/`, now `plugin/tools/`) on 2026-10-09 and the responsibilities from each script's
 docstring and the swarm board. Any module present in one and missing from
 the other is a defect in this file.
 
@@ -238,5 +249,6 @@ the other is a defect in this file.
 
 | Version | Date | Change |
 |---|---|---|
+| 2.2 | 2026-10-14 | Plugin layout (task-0038): `tools/` and `skills/` move to `plugin/`, hook registration moves to `plugin/hooks/hooks.json`, project structure and "where new code goes" redrawn, two-roots paragraph added. |
 | 2.1 | 2026-10-13 | Added `worktree.py`, the worktree layout, the import rule and the `worktree` run column (task-0132, epic-0004). |
 | 2.0 | 2026-10-09 | Replaced the onboarding template (Laravel-style layers, module and database sections) with the real Agentry module layout (task-0052). |
