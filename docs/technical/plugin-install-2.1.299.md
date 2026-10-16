@@ -3,7 +3,7 @@
 **Date:** 2026-10-16
 **Author:** Agentry project
 **Status:** Draft
-**Version:** 1.3
+**Version:** 1.4
 
 ---
 
@@ -51,6 +51,7 @@ a scratch project, followed by the post-restart checks in the live workspace.
 - [C7 rollback rehearsal](#c7-rollback-rehearsal)
 - [Live switch (D4)](#live-switch-d4)
 - [First install from GitHub (task-0040)](#first-install-from-github-task-0040)
+- [Pin, re-add, update and rollback (task-0042)](#pin-re-add-update-and-rollback-task-0042)
 - [Findings that change section D](#findings-that-change-section-d)
 - [Not measured](#not-measured)
 - [Cleanup](#cleanup)
@@ -553,6 +554,27 @@ the plugin hooks still fire in an untrusted folder.
 - The plan's per-run spend cap was dropped by the User's amendment (subscription); the
   probe is bounded by `--max-turns 8` instead.
 
+## Pin, re-add, update and rollback (task-0042)
+
+Measured 2026-10-16 on `2.1.299 (Claude Code)` in an isolated plugins root
+(`CLAUDE_CODE_PLUGIN_CACHE_DIR`); the real registry hashes were unchanged. These
+rows back the README sections Pin, Upgrade and Roll back.
+
+| Command | Result |
+|---|---|
+| `claude plugin marketplace add AlexWaha/agentry#<ref> --scope local` | Pins a branch or tag: the ref goes to `git clone --branch`. A commit SHA is rejected ("Remote branch <sha> not found"). Measured with `#main`; the tag form is pending the first tag |
+| `claude plugin install agentry@agentry@<ver>` | The suffix is silently ignored |
+| `claude plugin marketplace add AlexWaha/agentry#<ref> --scope local` again | Prints "Marketplace 'agentry' already on disk" and changes nothing: no re-clone, the ref is unchanged. Moving a pinned project to another tag needs remove and re-add |
+| `claude plugin marketplace update agentry` | Keeps the ref pin |
+| `claude plugin update agentry@agentry --scope local` at the same version | Prints "already at the latest version" |
+| Rollback: `claude plugin uninstall agentry@agentry --scope local`, `claude plugin marketplace remove agentry --scope local`, `claude plugin marketplace add AlexWaha/agentry#<previous tag> --scope local`, `claude plugin install agentry@agentry --scope local`, restart | All four commands exit 0, with a branch ref |
+
+`marketplace remove` cascades: it uninstalls every plugin installed from that
+marketplace, at every scope, not only the local one.
+
+Not measured: the tag form of the pin and of the rollback (no tag exists yet),
+and an upgrade across a real version bump from GitHub.
+
 ## Findings that change section D
 
 1. **The plugin root is the snapshot folder, not the cache.** `AGENTRY_ROOT` and every hook
@@ -642,8 +664,8 @@ the plugin hooks still fire in an untrusted folder.
   the spawned session, not by an interactive one.
 - The install of `agentry@agentry` into the populated real registry (the live migration
   script); the isolated run proves the mechanism, not the merge.
-- `claude plugin update agentry@agentry` pulling a bumped version from GitHub (first
-  release, task-0042).
+- `claude plugin update agentry@agentry` pulling a bumped version from GitHub (needs a
+  real release; the same-version update is measured in task-0042).
 
 ## Cleanup
 
@@ -690,3 +712,4 @@ leftover process of the contaminated first run) and the cache directory
 | 1.1 | 2026-10-14 | Agentry project | Live install and D4 results, live migration script, push-order record, CLI validation and sha-version evidence, corrected scope statement and finding 5 |
 | 1.2 | 2026-10-16 | Agentry project | Semver releases with git tags replace the commit-sha version; release and update procedure corrected |
 | 1.3 | 2026-10-16 | Agentry project | First install from GitHub (task-0040): cache-path proof, headless deny probe, findings 13 to 17; per-run spend caps and cost lines removed |
+| 1.4 | 2026-10-16 | Agentry project | Pin, re-add, marketplace update, plugin update and rollback measurements (task-0042) |

@@ -1,5 +1,5 @@
 {
   "name": "agentry",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agentry harness: gated pipeline tools, hooks and skills for Claude Code."
 }
