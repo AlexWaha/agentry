@@ -60,7 +60,7 @@ distinguishable; plugin agent and a control agent carry identical fields):
 cd $B/proj2
 claude -p --model haiku --setting-sources project --permission-mode default \
   --plugin-dir $B/plugin --agents $B/agents-cli.json --debug-file $B/out/p0-d/debug.log \
-  --output-format stream-json --verbose --max-budget-usd 0.5 \
+  --output-format stream-json --verbose \
   "Dispatch the agent 'probe:pagent', wait for it, then dispatch the agent 'cliagent' ..."
 ```
 

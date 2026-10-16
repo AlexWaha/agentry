@@ -3,7 +3,7 @@
 **Date:** 2026-10-16
 **Author:** Agentry project
 **Status:** Draft
-**Version:** 1.2
+**Version:** 1.3
 
 ---
 
@@ -22,6 +22,11 @@ Scope of the changes this record covers:
   the workspace's `settings.local.json` and added a second `installed_plugins.json`
   entry. The install command itself did not change the workspace `.claude/settings.json`
   or any user-level `settings.json` (`grep -c agentry` on the user file stays 0).
+- The first install from GitHub (task-0040, 2026-10-16) ran in a fresh scratch project
+  against a throwaway plugins root (`CLAUDE_CODE_PLUGIN_CACHE_DIR`), so the real
+  `~/.claude/plugins` registry and `~/.claude/settings.json` were not written; their
+  SHA-256 hashes were taken before and re-checked after every write step (all unchanged).
+  See [First install from GitHub](#first-install-from-github-task-0040).
 - The same live switch also ran the swap step, which did rewrite the workspace
   `.claude/settings.json` and the project layout: the `hooks` key is gone (hook
   registration moved to the plugin's `hooks.json`), every agent file now carries a
@@ -45,6 +50,7 @@ a scratch project, followed by the post-restart checks in the live workspace.
 - [C6 update path](#c6-update-path)
 - [C7 rollback rehearsal](#c7-rollback-rehearsal)
 - [Live switch (D4)](#live-switch-d4)
+- [First install from GitHub (task-0040)](#first-install-from-github-task-0040)
 - [Findings that change section D](#findings-that-change-section-d)
 - [Not measured](#not-measured)
 - [Cleanup](#cleanup)
@@ -61,9 +67,11 @@ update. `.claude-plugin/marketplace.json` at the repo root serves `./plugin`;
 releases with semver and git tags). A pushed `main` without a version bump is not an
 update; a release is the bump, a CHANGELOG entry and a `vX.Y.Z` tag.
 
-Not yet run end to end for this plugin: the github-source copy-to-cache behaviour and
-`claude plugin update` picking up a bumped version. The first real install of
-`agentry@agentry` is still to be recorded here.
+The github-source copy-to-cache behaviour is measured in
+[First install from GitHub](#first-install-from-github-task-0040): the plugin is copied to
+`cache/agentry/agentry/0.1.0` and that copy is the plugin root. Still unmeasured:
+`claude plugin update` picking up a bumped version, and the install into the populated
+real registry (the live migration below).
 
 CLI validation, run from the repository root on 2.1.299: `claude plugin validate .` printed
 "Validation passed with warnings"; the remaining warning is the missing `author`.
@@ -153,6 +161,7 @@ describe the directory model only: with the GitHub route `AGENTRY_ROOT` points u
 | C7 | backup, swap and restore scripts rehearsed on a throwaway copy: restore diff empty, 43 hooks, 31 agents with hooks, 3 databases `ok` |
 | C8 | this file |
 | D4 | 12 of 12 post-restart checks pass in the live workspace (see [Live switch (D4)](#live-switch-d4)) |
+| G1 (task-0040) | `agentry@agentry` 0.1.0 installed from GitHub (`AlexWaha/agentry`, anonymous https clone of `f43e55c`) into a scratch project; `installPath` and `CLAUDE_PLUGIN_ROOT` are the cache copy, identical to `plugin/` at that commit; a headless dispatch from the cache copy fires the deny hooks (see [First install from GitHub](#first-install-from-github-task-0040)) |
 
 ## C1 preconditions
 
@@ -203,8 +212,8 @@ ancestor `.claude/skills` out (the P0 finding) but NOT the ancestor `CLAUDE.md` 
 `.claude/rules/*`. The first C5 run (`c5-attempt1-contaminated`) loaded the workspace
 `CLAUDE.md`, `.claude/CLAUDE.md` and 20 rule files next to the scratch's own copies: an
 `instructions` attachment of 1,247,633 bytes, 298,206 cache-creation tokens on the first
-turn, and the run ended `terminal_reason: budget_exhausted` at 2.33 USD (the runbook's
-`--max-budget-usd 2`) after dispatching one reviewer. The ancestor `.mcp.json` also started
+turn, and the run hit the runbook's per-run spend cap (`terminal_reason: budget_exhausted`)
+after dispatching one reviewer. The ancestor `.mcp.json` also started
 the codegraph MCP server, whose process still holds the first scratch directory open (the
 directory cannot be removed; it is empty).
 
@@ -280,11 +289,13 @@ cd <scratch>/proj
 env CLAUDE_PROJECT_DIR=<scratch>/proj \
   claude -p --model sonnet --permission-mode bypassPermissions --setting-sources project,local \
   --output-format stream-json --verbose --include-hook-events \
-  --debug-file $O/debug.log --max-budget-usd 4 '<prompt>' > $O/stream.jsonl 2> $O/stderr.txt
+  --debug-file $O/debug.log --max-turns 8 '<prompt>' > $O/stream.jsonl 2> $O/stderr.txt
 ```
 
 Raw output of the runs (`c5`, `c5b`, `c5c`, `c5d`, `c5-other`, `c6b`) is kept outside the
-repository. The budget is 4 USD, not 2: the cleaned-up run costs 0.93 USD.
+repository. The work runs on a Claude Code subscription, so a run is usage against
+subscription limits, not billed spend; `--max-turns 8` bounds a probe (the cost estimate in
+the stream is API-equivalent and is not recorded).
 
 | Check | Evidence from real output | Verdict |
 |---|---|---|
@@ -317,11 +328,10 @@ general-purpose  Write  -> exit 2  This agent is read-only ...
 The live workspace later settled this row: D4 check 5 passed with a dispatched reviewer's
 Bash write denied (see [Live switch (D4)](#live-switch-d4)).
 
-Earlier attempts and what they cost, for the record: attempt 1 (contaminated scratch)
-2.33 USD, budget exhausted; `c5b` (commit on a repo with no `main` branch, allowed by
-`repo_bootstrap`) 0.82 USD; one `c5c` run with a typo in the prompt 0.31 USD; final
-`c5c` 0.31 USD; `c5-other` 0.06 USD. The two commits `probe` and `probe2` sit in the
-scratch repo only.
+Earlier attempts, for the record: attempt 1 (contaminated scratch) hit the per-run cap;
+`c5b` (commit on a repo with no `main` branch, allowed by `repo_bootstrap`); one `c5c` run
+with a typo in the prompt; the final `c5c`; `c5-other`. The two commits `probe` and
+`probe2` sit in the scratch repo only.
 
 ## C6 update path
 
@@ -417,6 +427,132 @@ cache, so gates change only on `claude plugin update`. It needs
 `plugin.json`, both now in the tree. The switch follows the trunk push; see
 [Live migration](#live-migration-one-script-no-tool-call-in-between).
 
+## First install from GitHub (task-0040)
+
+Measured 2026-10-16 by the devops-engineer role, Claude Code `2.1.299`, plugin `agentry`
+`0.1.0`, `origin/main` = `f43e55c2f402a8d0b32f88009014262b03ff0f81` (the merge of task-0039).
+Spec trace: FR-67 (installable by `owner/repo`, no authentication) and FR-66 (command,
+version, outcome and one hooked dispatch recorded).
+
+### Method
+
+The install ran in a fresh scratch project against a throwaway plugins root, not the real
+registry. Claude Code reads `CLAUDE_CODE_PLUGIN_CACHE_DIR` as the root of the whole plugins
+tree: `known_marketplaces.json`, `installed_plugins.json`, `marketplaces/` and `cache/` all
+landed under it (forward slashes accepted). What this proves: an anonymous github-source
+marketplace clones, the plugin is copied to a cache directory, and the hooks run from that
+copy. What it does not prove: the merge into a populated real registry (14 entries, four
+marketplaces). That is the live migration script, the first and only real-registry
+GitHub install.
+
+```
+SC=<scratch>                       # a folder outside the workspace
+ISO=$SC/iso-gh                     # throwaway plugins root
+PROJ=$SC/proj-gh                   # fresh scratch project (git repo, branch main, one commit)
+cc() { env -u AGENTRY_ROOT -u CLAUDE_ENV_FILE CLAUDE_PROJECT_DIR="$PROJ" \
+  CLAUDE_CODE_PLUGIN_CACHE_DIR="$ISO" CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1 "$@"; }
+```
+
+`AGENTRY_ROOT` and `CLAUDE_ENV_FILE` are unset for every scratch `claude` run, otherwise the
+caller would supply the root from outside and mask the SessionStart env-file export under
+test. `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` forces an https clone, so a working SSH key
+cannot hide an authentication dependency.
+
+Fixture. The 0039 scratch `proj` no longer existed on disk (only its stale entry in the real
+`installed_plugins.json`, see finding 16), so the fixture was rebuilt: `git archive HEAD
+.claude .agentry/pipeline.json .agentry/project` from the repository into `proj-gh`,
+`statusLine` dropped from `.claude/settings.json` (as in C3), `git init -b main` and one
+commit. `settings.json` has no `enabledPlugins`, `extraKnownMarketplaces` or `hooks` key.
+
+### Commands and output
+
+```
+git merge-base --is-ancestor origin/main HEAD                   exit 0
+git ls-remote origin main                                       f43e55c2f402a8d0b32f88009014262b03ff0f81
+GIT_TERMINAL_PROMPT=0 git -c credential.helper= ls-remote \
+  https://github.com/AlexWaha/agentry.git refs/heads/main       f43e55c2f402a8d0b32f88009014262b03ff0f81 (anonymous)
+git diff f43e55c --stat -- plugin .claude-plugin                empty
+claude --version                                                2.1.299 (Claude Code)
+
+cd $PROJ
+cc claude plugin marketplace list     only "anthropic-plugin-directory (Built in)"; no caveman, ponytail, agentry-local
+cc claude plugin list                 No plugins installed.
+
+cc claude plugin marketplace add AlexWaha/agentry --scope local
+  Cloning via HTTPS: https://github.com/AlexWaha/agentry.git
+  Clone complete, validating marketplace...
+  OK Successfully added marketplace: agentry (declared in local settings)       exit 0
+cc claude plugin install agentry@agentry --scope local
+  OK Successfully installed plugin: agentry@agentry (scope: local)              exit 0
+cc claude plugin list
+  agentry@agentry   Version: 0.1.0   Scope: local   Status: enabled
+```
+
+The state after each write:
+
+| Item | Value |
+|---|---|
+| `known_marketplaces.json` | `agentry`: `source: github`, `repo: AlexWaha/agentry`, `installLocation` = `$ISO\marketplaces\agentry` |
+| Marketplace clone `HEAD` | `f43e55c2f402a8d0b32f88009014262b03ff0f81` |
+| `proj-gh/.claude/settings.local.json` | `extraKnownMarketplaces.agentry` (github `AlexWaha/agentry`); nothing at user scope |
+| `installed_plugins.json` entry | `scope: local`, `version: 0.1.0`, `gitCommitSha: f43e55c2f402a8d0b32f88009014262b03ff0f81`, `projectPath` = `$PROJ` |
+| **`installPath`** | **`$ISO\cache\agentry\agentry\0.1.0`** |
+| `plugin list` "Read from:" line | absent for a cached install (the directory install printed `Read from: <snapshot>\plugin`), so `installPath` is the evidence |
+| `diff -r -x __pycache__ <repo>/plugin <installPath>` | one difference: `Only in <installPath>: .in_use` (a marker Claude Code writes); everything else identical, 4.1 MB |
+| `plugin details agentry@agentry` | 42 skills, 0 agents, hooks over 7 events (SessionStart, PreToolUse, Stop, SubagentStart, SubagentStop, PreCompact, PostToolUse), 0 MCP, 0 LSP, always-on about 4,511 tokens; identical to C4 |
+| Real registry | `sha256sum -c` over `installed_plugins.json`, `known_marketplaces.json`, `~/.claude/settings.json`: all OK after the marketplace add, after the install and after the headless run |
+
+Cache-copy pre-scan. Every `parents[...]` read in `plugin/tools` (outside `tests`) resolves
+to the plugin root or to the project root (`session_start.py` walking up from the git
+directory); none reaches a file outside the plugin root, and the probe below confirms it.
+
+### Headless probe from the cache copy
+
+The prompt is in a file written outside Bash, so the literal redirect under test never
+appears in a Bash command line (`gates.forbid_dev_null` scans the command text):
+
+```
+Run these steps in order and report every result verbatim. ...
+1. Bash: echo gate-probe 2>/dev/null
+2. Bash: echo AR=$AGENTRY_ROOT PD=$CLAUDE_PROJECT_DIR
+3. Dispatch a general-purpose agent to Write the file docs/deny-gp.txt with the content x.
+4. Bash: ls docs
+```
+
+```
+cd $PROJ
+cc claude -p --model sonnet --permission-mode bypassPermissions \
+  --setting-sources project,local --output-format stream-json --verbose --include-hook-events \
+  --debug-file $OUT/debug.log --max-turns 8 "$(cat $OUT/prompt.txt)" \
+  > $OUT/stream.jsonl 2> $OUT/stderr.txt
+```
+
+Result event: `subtype: success`, `is_error: false`, `terminal_reason: completed`,
+`num_turns: 5`, `duration_ms: 22725`. `--max-turns 8` bounds the probe; the run is usage
+against subscription limits.
+
+| Check | Evidence from real output | Verdict |
+|---|---|---|
+| Plugin loaded from the cache | init event `plugins`: `{"name": "agentry", "path": "E:\\Personal\\agentry-scratch-0039\\iso-gh\\cache\\agentry\\agentry\\0.1.0", "source": "agentry@agentry", "version": "0.1.0"}`; 42 `agentry:` skills | pass |
+| Hooks are the cache copy's | debug log: 46 lines with `(plugin agentry@agentry)`, for example `Hooks: PreToolUse:Bash [python ".../iso-gh/cache/agentry/agentry/0.1.0/tools/pipeline/pretool_gate.py"] (plugin agentry@agentry) finished with status 2`; 0 lines matching `agentry-local` or `.deploy` | pass |
+| `CLAUDE_PLUGIN_ROOT` is the cache path | step 2: `AR=E:/Personal/agentry-scratch-0039/iso-gh/cache/agentry/agentry/0.1.0 PD=E:/Personal/agentry-scratch-0039/proj-gh`; `AGENTRY_ROOT` was unset on the launch, so the SessionStart env-file export supplied it; it equals `installPath` (forward slashes) | pass |
+| Main-thread rules delivered | `[main-thread-rules] delivered 17 of 17 chunks` (rule files read through the cache copy's `main_thread_rules.py`) | pass |
+| Main-thread deny fires | step 1: `PreToolUse:Bash hook error: [python ".../cache/agentry/agentry/0.1.0/tools/pipeline/pretool_gate.py"]: Redirect to /dev/null is denied by project policy (gates.forbid_dev_null). ... This hook comes from the agentry@agentry plugin.`; the model did not retry | pass |
+| Unresolved caller is readonly | step 3: the `general-purpose` agent's Write returned `PreToolUse:Write hook error: [python ".../cache/agentry/agentry/0.1.0/tools/pipeline/agent_gate.py"]: This agent is read-only - it audits and reports, it does not modify files.`; `docs/deny-gp.txt` absent (step 4: `ls: cannot access 'docs'`) | pass |
+| State went to the project | `proj-gh/.agentry/state/` holds `run.db`, `supervisor.json`, `supervisor.lock`, `supervisor.log`, `supervisor-runs`; the repository tree stayed clean (`git status --short` empty before the doc edit) | pass |
+
+`stderr.txt` carries the same untrusted-workspace notice as C3 (`Ignoring 22
+permissions.allow entries from .claude/settings.json: this workspace has not been trusted`);
+the plugin hooks still fire in an untrusted folder.
+
+### Deviations from the plan
+
+- The isolated plugins root replaced a real local-scope install in the scratch (plan
+  section 2). It also avoids a second enabled `agentry` plugin firing every hook twice.
+- The fixture was rebuilt from the repository instead of copied from `proj` (finding 16).
+- The plan's per-run spend cap was dropped by the User's amendment (subscription); the
+  probe is bounded by `--max-turns 8` instead.
+
 ## Findings that change section D
 
 1. **The plugin root is the snapshot folder, not the cache.** `AGENTRY_ROOT` and every hook
@@ -469,6 +605,32 @@ cache, so gates change only on `claude plugin update`. It needs
     `README.md`. `swap.sh` moves everything except `verify`, so `README.md` goes to the
     backup too (the plugin carries its own `skills/README.md`); root `CLAUDE.md` still names
     the old path until D7.3.
+13. **A cached install prints no `Read from:` line.** `claude plugin list` shows Version,
+    Scope and Status only for `agentry@agentry`; the directory install printed `Read from:
+    <snapshot>\plugin`. For a github-source install the proof of the plugin root is
+    `installPath` in `installed_plugins.json` plus the init event `plugins[].path`, and the
+    two agree. A D4 re-run after the live switch must check those, not a `Read from:` line.
+14. **The cache is a full copy of the pushed commit, and Claude Code records the sha.** The
+    cache directory equals `plugin/` at `f43e55c` except for a `.in_use` marker file, and
+    `installed_plugins.json` carries `gitCommitSha`. Because the loaded root is the copy,
+    an edit to `src/plugin` or a refreshed folder no longer changes live gates; only
+    `marketplace update` plus `plugin update` after a version bump does (the update step
+    itself is still unmeasured).
+15. **`CLAUDE_CODE_PLUGIN_CACHE_DIR` relocates the whole plugins tree, not only `cache/`.**
+    Under it Claude Code created `known_marketplaces.json`, `installed_plugins.json`,
+    `marketplaces/` and `cache/`, and `marketplace list` showed none of the real marketplaces.
+    That makes a zero-damage install rehearsal possible; the real registry hashes stayed
+    equal across all write steps.
+16. **The real registry still lists the removed 0039 scratch.** `installed_plugins.json` has
+    an `agentry@agentry-local` entry with `projectPath` `<scratch>\proj`, a directory that no
+    longer exists. The Cleanup commands (`cd <scratch>/proj`) cannot run as written; remove
+    the entry by another route or recreate the directory first (User decision).
+17. **Gate quirks hit while building the fixture.** `agent_gate` denied `rm -rf
+    <scratch>/proj-gh/.agentry/state` because the path text matches `.agentry/state/`, though
+    it is a scratch path; the same call was avoided by archiving only the files needed. A
+    single call that chained `git archive`, `git init` and `git commit` in the scratch was
+    denied "Not on a feature branch", while `cd <scratch> && git commit` alone passed. Split
+    scratch git steps into their own calls.
 
 ## Not measured
 
@@ -478,9 +640,10 @@ cache, so gates change only on `claude plugin update`. It needs
 - Interactive trust dialog on the scratch (not needed).
 - Hook behaviour under an interactive session with a `hooks:`-free agent file set: covered by
   the spawned session, not by an interactive one.
-- The first `agentry@agentry` install from GitHub: copy-to-cache location, the version
-  shown, and `claude plugin update` pulling a bumped version. To be recorded after the
-  trunk push.
+- The install of `agentry@agentry` into the populated real registry (the live migration
+  script); the isolated run proves the mechanism, not the merge.
+- `claude plugin update agentry@agentry` pulling a bumped version from GitHub (first
+  release, task-0042).
 
 ## Cleanup
 
@@ -505,6 +668,14 @@ claude plugin marketplace remove agentry-local --scope local
 
 Do the marketplace removal only after neither install uses `agentry-local` any more.
 
+task-0040 left these under `<scratch>` (outside the repository), kept through the live
+switch like the 0039 scratch, and removable once the User approves: `iso-gh` (throwaway
+plugins root with the cache copy), `proj-gh` (scratch project and its `.agentry/state`),
+`out-0040` (raw probe output, prompt and extractor) and `pre-0040` (copies and SHA-256
+hashes of the real registry and user settings, taken before the first write). Nothing
+outside `<scratch>` references them; no user-level setting or real registry entry was
+added.
+
 Pre-install copies of `installed_plugins.json`, `known_marketplaces.json` and the user
 `settings.json` were taken before the first install and are kept outside the repository.
 Stale artifacts: the empty first scratch directory inside the workspace (held open by a
@@ -518,3 +689,4 @@ leftover process of the contaminated first run) and the cache directory
 | 1.0 | 2026-10-14 | Agentry project | Scratch install record, sections C1 to C8 |
 | 1.1 | 2026-10-14 | Agentry project | Live install and D4 results, live migration script, push-order record, CLI validation and sha-version evidence, corrected scope statement and finding 5 |
 | 1.2 | 2026-10-16 | Agentry project | Semver releases with git tags replace the commit-sha version; release and update procedure corrected |
+| 1.3 | 2026-10-16 | Agentry project | First install from GitHub (task-0040): cache-path proof, headless deny probe, findings 13 to 17; per-run spend caps and cost lines removed |
