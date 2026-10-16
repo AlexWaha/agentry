@@ -134,6 +134,22 @@ class EnvironmentHandoffTest(unittest.TestCase):
         with unittest.mock.patch.dict(os.environ, env, clear=True):
             session_start.export_roots()
 
+    def test_the_suite_never_writes_into_an_inherited_env_file(self):
+        """A live session exports its own CLAUDE_ENV_FILE and session_start.main()
+        appends to it; tests/__init__.py must clear it (task-0039). The child runs
+        a test that drives main() unpatched on that point, with the variable set."""
+        target = tmproot.sandbox(self, "envfile_") / "host-session-env.sh"
+        target.write_bytes(b"# host session env\n")
+        proc = subprocess.run(
+            [PYTHON, "-m", "unittest", "discover", "-s", "plugin/tools", "-p", "test_human_output.py",
+             "-k", "test_without_a_blocked_run_the_output_is_the_same_plain_text_as_before"],
+            cwd=str(TOOLS_DIR.parent.parent), capture_output=True, text=True, timeout=120,
+            env={**os.environ, "CLAUDE_ENV_FILE": str(target)})
+        out = proc.stdout + proc.stderr
+        self.assertIn("Ran 1 test", out, out)
+        self.assertEqual(0, proc.returncode, out)
+        self.assertEqual(b"# host session env\n", target.read_bytes())
+
     def test_the_supervisor_names_both_roots_for_a_child_it_starts(self):
         self.assertEqual({"CLAUDE_PROJECT_DIR": str(state.ROOT),
                           "AGENTRY_ROOT": state.paths.PLUGIN_ROOT.as_posix()},

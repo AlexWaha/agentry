@@ -25,6 +25,13 @@ therefore SET here, unconditionally, to the checkout that holds these tests
 (plugin/tools/tests -> the repository root, the directory the old `__file__`-derived
 root named), before any tool module is imported. A test that needs another root
 patches state.ROOT or hands a child process its own CLAUDE_PROJECT_DIR.
+
+CLAUDE_ENV_FILE is cleared at the same root. A live session exports the path of
+its own env file, and session_start.export_roots() APPENDS to it, so a test that
+ran the hook (in process or as a child) wrote into the host session's env file -
+and the policy test in test_zz_tmp_policy.py read that write as a creation
+outside the project and failed every gate run made from such a session. Tests
+that exercise export_roots patch their own sandboxed file in with patch.dict.
 """
 
 import os
@@ -35,4 +42,5 @@ from pathlib import Path
 # stays free of sys.path surgery; EnvironmentHermeticityTest in
 # test_pretool_gate_git.py is what proves the clear still works.
 os.environ.pop("AGENTRY_UNATTENDED", None)
+os.environ.pop("CLAUDE_ENV_FILE", None)
 os.environ["CLAUDE_PROJECT_DIR"] = str(Path(__file__).resolve().parents[3])
