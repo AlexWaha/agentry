@@ -91,6 +91,7 @@ task or changes state, so it was deliberately left unexecuted.
 | `python -m unittest discover -s plugin/tools` | The suite alone, for the orchestrator or CI. Dev agents are barred from running it (`gates.dev_forbidden_commands`); they run named modules from `plugin/tools/tests`, for example `python -m unittest test_lanes test_lane_routing`, or let the `test` exit gate run the whole suite | derived from the row above | 3528 tests collected (2026-10-14) |
 | `ruff check plugin/tools` | Lint. The `review` exit gate | `pipelines.build` stage `review`, `repos.agentry.stages.review` | 0 |
 | `ruff check --fix plugin/tools` | Applies the safe lint fixes. This is the nearest thing to a formatter; no gate runs it | `pyproject.toml` rule set | not run (mutating) |
+| `python scripts/test_docs_preview.py` and `ruff check scripts` | `scripts/` is a dev tool (the local docs preview server), checked by these two commands outside the pipeline gates; no stage runs them | `scripts/docs_preview.py` | 0 |
 | `python "$AGENTRY_ROOT/tools/pipeline/advance.py" --task task-XXXX --type <type>` | Registers a task and advances it one stage by running the real exit gate | `rules/orchestration.md` | not run (needs a task) |
 | `python "$AGENTRY_ROOT/tools/pipeline/state.py" --show` | Dumps every run in `run.db` as JSON | `state.py` docstring | 0 |
 | `python "$AGENTRY_ROOT/tools/pipeline/approve.py" --task task-XXXX --gate commit` | Records a checkpoint approval. Orchestrator only, and only after the User approves | `rules/orchestration.md` | not run (changes state) |

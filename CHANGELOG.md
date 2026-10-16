@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Documentation rewritten as a landing README plus a user guide under `docs/`, with a local preview tool (`scripts/docs_preview.py`).
+
 ## [0.2.0] - 2026-10-16
 
 First public release. 0.1.0 was the version on `main` before the first release

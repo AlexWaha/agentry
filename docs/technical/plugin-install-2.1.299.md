@@ -558,7 +558,7 @@ the plugin hooks still fire in an untrusted folder.
 
 Measured 2026-10-16 on `2.1.299 (Claude Code)` in an isolated plugins root
 (`CLAUDE_CODE_PLUGIN_CACHE_DIR`); the real registry hashes were unchanged. These
-rows back the README sections Pin, Upgrade and Roll back.
+rows back the sections Pin, Upgrade and Roll back in `docs/upgrade.md`.
 
 | Command | Result |
 |---|---|

@@ -71,7 +71,9 @@ docs/
 
 ## Document Format
 
-Every document **must** include the following header:
+**Public user-facing docs have no metadata header.** The README, the `docs/` user guide and release notes carry the H1 title and content only: no Date / Author / Status / Version lines and no per-page version-history table. History lives in git and `CHANGELOG.md`. Why: a pushed "Status: Draft" header is public noise that has to be fixed later (User decision, task-0138).
+
+Internal records (`docs/technical/` records, ADRs, business, market, finance and other working documents) must include the following header:
 
 ```markdown
 # Document Title
@@ -272,7 +274,7 @@ paths:
 
 ## Diagrams
 
-Use **Mermaid** for all diagrams. Mermaid renders natively in GitHub markdown.
+Internal records (`docs/technical/` and other non-public docs) use **Mermaid**, which renders natively in GitHub markdown. Public docs (README, the `docs/` user guide, release notes, `docs/technical/design-notes.md`) use PNG diagram images with descriptive alt text, each wrapped in a link to its own file so readers can open it full size.
 
 ### Types of Diagrams
 
