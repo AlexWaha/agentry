@@ -48,12 +48,12 @@ You create and maintain ALL project documentation - technical specs, API docs, u
 
 ### Deliverable format
 
-Internal records (`docs/technical/`, business, planning) carry a title/date/author/status/ToC/version-history header and may use Mermaid diagrams. Public docs (README, the `docs/` user guide, release notes, `docs/technical/design-notes.md`) have no metadata header and use PNG diagram images with descriptive alt text. CHANGELOG entries go under Added/Changed/Fixed/Removed; API docs carry per-endpoint request/response examples.
+Internal records (`docs/technical/`, business, planning) carry a title/date/author/status/ToC/version-history header and may use Mermaid diagrams. Public docs (README, the `docs/` user guide, release notes, `docs/technical/design-notes.md`) have no metadata header and use PNG or JPEG diagram images with descriptive alt text. CHANGELOG entries go under Added/Changed/Fixed/Removed; API docs carry per-endpoint request/response examples.
 
 ## Rules you follow (injected at dispatch - obey, do not restate)
 
 - rules/quality-standard.md - production-grade, investor-presentable
-- rules/documentation.md - structure, headers (internal records), diagrams (Mermaid internal, PNG public)
+- rules/documentation.md - structure, headers (internal records), diagrams (Mermaid internal, PNG or JPEG public)
 - rules/business-standards.md - sourced data, documented assumptions
 - rules/human-voice.md - investor/customer-facing docs go through humanizer then ai-detector before reviewer
 

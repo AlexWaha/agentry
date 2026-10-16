@@ -35,7 +35,7 @@ Claude Code passes the ref to `git clone --branch`, so a tag or a branch should 
 
 Running `marketplace add` again for the existing `agentry` marketplace prints "already on disk" and changes nothing. There is no re-clone and the ref stays. To move a pinned project to another tag, remove and re-add the marketplace, as in [Roll back](#roll-back).
 
-Status: measured on 2.1.299 with the branch form (`#main`) only. The tag form, and a pinned project staying put across a real version bump, are not yet measured; no tag existed when the install record was written.
+Status: measured on 2.1.299 with the branch form (`#main`) only. The tag form, and a pinned project staying put across a real version bump, were not measured at release time; no release tag existed when this was measured.
 
 ## Upgrade
 
@@ -46,7 +46,7 @@ claude plugin update agentry@agentry --scope local
 
 Then restart Claude Code. Read the [changelog](../CHANGELOG.md) first, and run both commands from the project root so the update applies to that project.
 
-Status: on 2.1.299, `marketplace update` keeps the ref pin, and `plugin update` at the same version prints "already at the latest version". An upgrade across a real version bump from GitHub is not yet measured. To change tags, remove and re-add as in [Roll back](#roll-back).
+Status: on 2.1.299, `marketplace update` keeps the ref pin, and `plugin update` at the same version prints "already at the latest version". An upgrade across a real version bump from GitHub was not measured at release time. To change tags, remove and re-add as in [Roll back](#roll-back).
 
 ## Roll back
 
@@ -63,7 +63,7 @@ Restart Claude Code. Release tags from `v0.2.0` onward are listed under the repo
 
 > **Warning.** `marketplace remove` cascades. It uninstalls every plugin installed from that marketplace, at every scope, not only the local one.
 
-Status: all four commands exit 0, measured on 2.1.299 with a branch ref (the tag form is the pending item noted under Pin).
+Status: all four commands exit 0, measured on 2.1.299 with a branch ref (the tag form was not measured at release time, see Pin).
 
 ## Decision flow
 

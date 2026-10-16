@@ -545,19 +545,30 @@ class RootSwitchTest(WorkspaceCase):
                     self.assertEqual(2, result["exit"], result)
                     self.assertIn("CLAUDE_PROJECT_DIR is not set", result["output"])
 
-    def test_the_shipped_config_runs_exactly_those_two_gates_from_the_root(self):
+    def test_the_shipped_config_runs_exactly_those_two_gates_from_the_plugin(self):
         shipped = PIPELINE_DIR.parents[2] / ".agentry" / "pipeline.json"
         config = json.loads(shipped.read_text(encoding="utf-8"))
         stages = {s["name"]: s for s in config["pipelines"]["build"]["stages"]}
         plan = stages["plan"]["exit_gate"]["cmd"]
         test = stages["test"]["exit_gate"]["cmd"]
-        self.assertIn("python {root}/.claude/tools/pipeline/artifact_gate.py --task {task} --kind plan", plan)
-        self.assertIn("python {root}/.claude/tools/pipeline/ui_evidence.py --task {task}", test)
+        self.assertIn("python {plugin}/tools/pipeline/artifact_gate.py --task {task} --kind plan", plan)
+        self.assertIn("python {plugin}/tools/pipeline/ui_evidence.py --task {task}", test)
         for name, stage in stages.items():
             cmd = stage.get("exit_gate", {}).get("cmd", "")
             for script in ("artifact_gate.py", "ui_evidence.py"):
                 if script in cmd:
-                    self.assertIn(f"{{root}}/.claude/tools/pipeline/{script}", cmd, name)
+                    self.assertIn(f"{{plugin}}/tools/pipeline/{script}", cmd, name)
+
+    def test_no_shipped_gate_command_points_at_the_frozen_claude_tools_copy(self):
+        shipped = PIPELINE_DIR.parents[2] / ".agentry" / "pipeline.json"
+        config = json.loads(shipped.read_text(encoding="utf-8"))
+        checked = 0
+        for pipeline_name, pipeline in config["pipelines"].items():
+            for stage in pipeline["stages"]:
+                cmd = stage.get("exit_gate", {}).get("cmd", "")
+                checked += bool(cmd)
+                self.assertNotIn(".claude/tools", cmd, f"{pipeline_name}/{stage['name']}")
+        self.assertGreater(checked, 0)
 
 
 class NoDashTest(unittest.TestCase):

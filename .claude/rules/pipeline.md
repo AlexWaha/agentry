@@ -122,9 +122,9 @@ passes.
   does the cut itself (`git worktree add -b <type>/<task> <repo path>-wt/<task>
   <trunk>`) and records the tree in the run row.
 - **Gates run where the work is.** A run with a recorded worktree has its stage
-  commands run in that tree (`gate.py`, `stack_gate.py`); `{root}` in a command is
-  the workspace root, used by `artifact_gate.py` and `ui_evidence.py` so they read
-  the live plans. A recorded tree that is MISSING or INVALID blocks the gate; it
+  commands run in that tree (`gate.py`, `stack_gate.py`); `{plugin}` in a command is
+  the plugin root, where `artifact_gate.py` and `ui_evidence.py` live, and they read
+  the live plans through `CLAUDE_PROJECT_DIR` (`{root}` is the project root). A recorded tree that is MISSING or INVALID blocks the gate; it
   never falls back to `src/`. At the transition into the commit-checkpoint stage a
   tree that lacks trunk commits sends the run back to `test` (`stale`), commit
   approval kept. Details, the dispatch line every implement, test and review

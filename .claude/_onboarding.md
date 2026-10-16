@@ -312,16 +312,18 @@ unapproved spec.
 
 | Need | Command |
 |---|---|
-| See where the pipeline stands | The status line shows `task | stage | owed | lane | mode | approvals | swarm`; `python "$AGENTRY_ROOT/tools/pipeline/state.py" --show` dumps every run |
+| See where the pipeline stands | `python "$AGENTRY_ROOT/tools/pipeline/state.py" --show` dumps every run |
 | Change the session mode | `python "$AGENTRY_ROOT/tools/pipeline/mode.py" plan` (`build`, `plan` or `talk`) |
 | Run each epic as a parallel swarm | `python "$AGENTRY_ROOT/tools/pipeline/swarm.py" on` (`off` by default) |
 | Set a task aside for an urgent one | `python "$AGENTRY_ROOT/tools/pipeline/approve.py" --task task-XXXX --pause "<reason>"`; refused while the tree has uncommitted work |
 | Bring it back | `python "$AGENTRY_ROOT/tools/pipeline/approve.py" --task task-XXXX --resume` |
 | Stop the background supervisor | `python "$AGENTRY_ROOT/tools/pipeline/supervisor.py" --stop` |
 
-The status line is registered in `.claude/settings.json` and needs a session
-restart the first time it is added. A run waiting on you shows `owed:` with what
-it needs, such as `commit approval` or `plan approval`.
+The template registers no status line: a plugin cannot ship one, and `AGENTRY_ROOT`
+reaches the Bash tool through the env file, so it is not known to be set for a
+status line command. To get the line (`task | stage | owed | lane | mode | approvals
+| swarm`), add a `statusLine` command to your own settings that runs the installed
+plugin's `tools/hooks/status_line.py` by absolute path, and restart the session.
 
 ## Version history
 

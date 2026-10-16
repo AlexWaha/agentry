@@ -23,7 +23,7 @@
     "push_needs_approval": true
   },
   "worktrees": {
-    "_comment": "task-0133 (epic-0004). When enabled is literally true, advance.py registers each non-umbrella build task in its own git worktree <repo>-wt/<task>, exit gates run there, and up to max_parallel tasks may sit in an editing stage at once; legacy runs and swarm umbrellas stay exclusive. Ships false (dark). The build plan and test gates run artifact_gate.py and ui_evidence.py from {root} (the live harness), so they work from inside a task tree. Enabling is a User decision. See .claude/rules/orchestration.md, Parallel tasks in worktrees.",
+    "_comment": "task-0133 (epic-0004). When enabled is literally true, advance.py registers each non-umbrella build task in its own git worktree <repo>-wt/<task>, exit gates run there, and up to max_parallel tasks may sit in an editing stage at once; legacy runs and swarm umbrellas stay exclusive. Ships false (dark). The build plan and test gates run artifact_gate.py and ui_evidence.py from {plugin} (the plugin root) and read plans and evidence through CLAUDE_PROJECT_DIR, so they work from inside a task tree. Enabling is a User decision. See .claude/rules/orchestration.md, Parallel tasks in worktrees.",
     "enabled": false,
     "max_parallel": 2
   },
@@ -94,7 +94,7 @@
           "_comment": "Per-task plan (task-0045): the owning agent writes what it intends to change and why to .agentry/plans/<date>-<slug>-<task>.md. pretool_gate.py denies edits outside .agentry/ until the User's plan approval is recorded. skip_for_types is read once, at registration (advance.py --type): a listed type starts at the stage after the plan step. No approvals level and no auto_approve list grants the plan (approvals.never_granted()).",
           "artifact": ".agentry/plans/*.md",
           "exit_gate": {
-            "cmd": "python {root}/.claude/tools/pipeline/artifact_gate.py --task {task} --kind plan",
+            "cmd": "python {plugin}/tools/pipeline/artifact_gate.py --task {task} --kind plan",
             "expect_exit": 0
           }
         },
@@ -116,8 +116,8 @@
           "owner": "qa-engineer",
           "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
           "ui_evidence": true,
-          "_comment": "ui_evidence: true appends 'python .claude/tools/pipeline/ui_evidence.py --task {task}' to the exit gate at onboarding, so UI-touching tasks require real-browser evidence in .agentry/state/evidence/<task>.json. Set false for API-only projects.",
-          "exit_gate": { "cmd": "python -m unittest discover -s plugin/tools && python {root}/.claude/tools/pipeline/ui_evidence.py --task {task}", "expect_exit": 0 }
+          "_comment": "ui_evidence: true appends 'python {plugin}/tools/pipeline/ui_evidence.py --task {task}' to the exit gate at onboarding, so UI-touching tasks require real-browser evidence in .agentry/state/evidence/<task>.json. Set false for API-only projects.",
+          "exit_gate": { "cmd": "python -m unittest discover -s plugin/tools && python {plugin}/tools/pipeline/ui_evidence.py --task {task}", "expect_exit": 0 }
         },
         {
           "name": "review",
@@ -156,7 +156,7 @@
           "_comment": "Write the problem statement: what hurts, scope, non-goals, open questions. Parks on the User until the questions are answered - that information exists nowhere else.",
           "artifact": ".agentry/plans/*-brief.md",
           "exit_gate": {
-            "cmd": "python {root}/.claude/tools/pipeline/artifact_gate.py --task {task} --kind brief",
+            "cmd": "python {plugin}/tools/pipeline/artifact_gate.py --task {task} --kind brief",
             "expect_exit": 0
           }
         },
@@ -166,7 +166,7 @@
           "tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
           "artifact": ".agentry/plans/*.md",
           "exit_gate": {
-            "cmd": "python {root}/.claude/tools/pipeline/artifact_gate.py --task {task} --kind plan",
+            "cmd": "python {plugin}/tools/pipeline/artifact_gate.py --task {task} --kind plan",
             "expect_exit": 0
           }
         },
@@ -190,7 +190,7 @@
           "artifact": ".agentry/specs/*.md",
           "_comment": "Spec with testable acceptance criteria, then task files written into tasks/backlog/. A spec that is not sliced into tasks is half done.",
           "exit_gate": {
-            "cmd": "python {root}/.claude/tools/pipeline/artifact_gate.py --task {task} --kind spec",
+            "cmd": "python {plugin}/tools/pipeline/artifact_gate.py --task {task} --kind spec",
             "expect_exit": 0
           }
         },

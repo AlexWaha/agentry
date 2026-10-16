@@ -87,7 +87,7 @@ task or changes state, so it was deliberately left unexecuted.
 | Command | What it does | Source | Exit status |
 |---|---|---|---|
 | `python -m compileall -q plugin/tools` | Build: byte-compiles every script, fails on a syntax error. The `implement` exit gate | `pipelines.build` stage `implement`, `repos.agentry.stages.implement` | 0 |
-| `python -m unittest discover -s plugin/tools && python {root}/.claude/tools/pipeline/ui_evidence.py --task {task}` | Test: full suite, then the UI-evidence check for the task. The `test` exit gate; `{task}` and `{root}` are filled in by the gate. `{root}/.claude/tools` is the frozen workspace-root copy, kept through task-0038 and replaced by `{plugin}` in task-0039 | `pipelines.build` stage `test` | 0 (3528 tests collected, 2026-10-14; the last full green run was measured at 1711 on 2026-10-12) |
+| `python -m unittest discover -s plugin/tools && python {plugin}/tools/pipeline/ui_evidence.py --task {task}` | Test: full suite, then the UI-evidence check for the task. The `test` exit gate; `{task}` and `{plugin}` are filled in by the gate (`{plugin}` is the plugin root, task-0137 replaced the frozen `{root}/.claude/tools` copy) | `pipelines.build` stage `test` | 0 (3528 tests collected, 2026-10-14; the last full green run was measured at 1711 on 2026-10-12) |
 | `python -m unittest discover -s plugin/tools` | The suite alone, for the orchestrator or CI. Dev agents are barred from running it (`gates.dev_forbidden_commands`); they run named modules from `plugin/tools/tests`, for example `python -m unittest test_lanes test_lane_routing`, or let the `test` exit gate run the whole suite | derived from the row above | 3528 tests collected (2026-10-14) |
 | `ruff check plugin/tools` | Lint. The `review` exit gate | `pipelines.build` stage `review`, `repos.agentry.stages.review` | 0 |
 | `ruff check --fix plugin/tools` | Applies the safe lint fixes. This is the nearest thing to a formatter; no gate runs it | `pyproject.toml` rule set | not run (mutating) |
@@ -117,7 +117,7 @@ the full suite. The `pipeline.json` `_comment` on `repos` gives the reason:
 the suite is the pipeline's own `test` exit gate and agents may not run it
 directly.
 
-### Worktree config and the `{root}` placeholder
+### Worktree config and the `{plugin}` placeholder
 
 `pipeline.json` takes an optional top-level block, shipped with `enabled` false:
 
@@ -129,18 +129,16 @@ directly.
 1 and anything else reads 1. When on, a task's gate commands run with its worktree
 (`src-wt/task-NNNN`) as cwd, so the commands in the table above need no change.
 Two commands read plans and evidence that live at the workspace root and must not
-run in a tree, so after the rollout they use `{root}`, filled in by `gate.py` with
-the workspace root as a forward-slash path (refused when it holds whitespace or a
-quote):
+run in a tree, so they address the scripts through `{plugin}`, filled in by `gate.py`
+with the plugin root as a forward-slash path (refused when it holds a character
+outside `A-Za-z0-9_./:-`, so a space or a non-ASCII character in the path fails the gate); the scripts find the plans and evidence through `CLAUDE_PROJECT_DIR`:
 
-- plan stage: `python {root}/.claude/tools/pipeline/artifact_gate.py --task {task} --kind plan`
-- test stage, the evidence half: `python {root}/.claude/tools/pipeline/ui_evidence.py --task {task}`
+- plan stage: `python {plugin}/tools/pipeline/artifact_gate.py --task {task} --kind plan`
+- test stage, the evidence half: `python {plugin}/tools/pipeline/ui_evidence.py --task {task}`
 
-Both `{root}` commands address the frozen workspace-root copy of the tools, which
-task-0038 leaves in place; task-0039 replaces `{root}/.claude/tools` with the
-`{plugin}` placeholder (resolved to the plugin root by `gate.py`). `pipeline.json`
-is what the gates run. The `{task}` and `{root}` tokens are both substituted,
-`{task}` first.
+`pipeline.json` is what the gates run. The `{task}`, `{root}` (the project root)
+and `{plugin}` tokens are substituted, `{task}` first. Until task-0137 the two
+commands used `{root}/.claude/tools`, the frozen workspace-root copy of the tools.
 
 Commands that do not exist here: a formatter command, a dev server and a
 production build. `FORMAT_CMD` and `DEV_CMD` therefore resolve to "none", and a

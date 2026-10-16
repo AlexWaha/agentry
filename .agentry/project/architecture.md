@@ -29,7 +29,7 @@ in `stack.md`.
 src/                              # git repository root; commands run here
 ├── .claude/                      # project side of the harness: stays in each adopting project
 │   ├── CLAUDE.md                 # orchestrator doc and team roster
-│   ├── settings.json             # statusLine, permissions, env, claudeMdExcludes
+│   ├── settings.json             # permissions, env, claudeMdExcludes
 │   ├── agents/                   # 31 agent definitions (profile: dev, docs, readonly)
 │   ├── rules/                    # policy the hooks enforce
 │   ├── pipeline-adapter.md       # project values for the swarm skill
