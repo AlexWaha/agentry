@@ -204,7 +204,13 @@ class HooksJsonTest(unittest.TestCase):
     def test_the_manifest_names_the_plugin(self):
         manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual("agentry", manifest["name"])
-        self.assertTrue(manifest["version"])
+        # Releases are semver plus a git tag; `plugin update` follows the version.
+        self.assertRegex(manifest.get("version", ""), r"^\d+\.\d+\.\d+$")
+
+    def test_the_marketplace_serves_the_plugin_folder(self):
+        market = json.loads((REPO / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+        self.assertEqual("agentry", market["name"])
+        self.assertEqual([("agentry", "./plugin")], [(p["name"], p["source"]) for p in market["plugins"]])
 
     def test_every_command_script_exists_inside_the_plugin(self):
         hooks = registered()

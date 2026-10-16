@@ -1,9 +1,9 @@
 # Plugin layout and the two roots
 
-**Date:** 2026-10-14
+**Date:** 2026-10-16
 **Author:** technical-writer (task-0038, subtask S6)
 **Status:** Draft
-**Version:** 1.0
+**Version:** 1.2
 
 ---
 
@@ -63,10 +63,12 @@ The tree in this repository after the move:
 
 ```
 src/
+├── .claude-plugin/
+│   └── marketplace.json          # marketplace "agentry", one plugin, source ./plugin
 ├── plugin/                       # plugin root
-│   ├── .claude-plugin/plugin.json    # name "agentry", version 0.1.0
+│   ├── .claude-plugin/plugin.json    # name "agentry", semver version
 │   ├── hooks/                        # hooks.json, cleanup-nul.sh
-│   ├── skills/                       # 43 skill directories and README.md, except verify
+│   ├── skills/                       # 42 skill directories and README.md, except verify
 │   └── tools/                        # pipeline/, hooks/, memory/, setup/, tests/, payload.py
 ├── .claude/                      # project side
 │   ├── CLAUDE.md  settings.json  pipeline-adapter.md
@@ -95,15 +97,15 @@ Three rules follow from that split:
    `CLAUDE_PROJECT_DIR`. Deriving it from `__file__` is correct only while the
    scripts sit at `<project>/.claude/tools`, which is true for the frozen
    workspace-root copy and false for a plugin cache.
-2. A script may derive the plugin root from its own location (`plugin_root()` is
-   script-relative). A worktree's `plugin/tools` therefore runs its own code,
+2. A script may derive the plugin root from its own location (`PLUGIN_ROOT` in
+   `plugin/tools/paths.py` is computed from `__file__`). A worktree's `plugin/tools` therefore runs its own code,
    while the state it writes still goes to the live project root.
 3. There is no fallback that walks up from the current directory looking for
    `.agentry/pipeline.json`. This repository tracks a template
    `.agentry/pipeline.json` in `src/` and in every `src-wt/<task>/` tree, so such
    a walk would resolve to the template and write state into the wrong tree. When
-   `CLAUDE_PROJECT_DIR` is unset and the old layout does not apply, the script
-   exits 2.
+   `CLAUDE_PROJECT_DIR` is unset, `project_root()` exits 2 with a message; there
+   is no fallback of any kind.
 
 ## How paths resolve
 
@@ -191,7 +193,8 @@ Not measured: a bare name that exists in both the project and the plugin.
 ## Hook registration
 
 Every hook registration moves from `settings.json` to `plugin/hooks/hooks.json`
-(the plan counts 43 settings hooks plus two plugin-level entries, 45 in total).
+(the plan counted 43 settings hooks plus two plugin-level entries, 45 in total;
+`hooks.json` now holds 46 command entries across 7 events, counted on 2026-10-14).
 The two new entries replace the `hooks:` blocks in agent frontmatter, which cannot
 use `${CLAUDE_PLUGIN_ROOT}`:
 
@@ -212,9 +215,9 @@ One visible behavior change: a built-in or foreign agent with no roster file
 (`general-purpose`, `Explore`) used to bypass `agent_gate` and now falls to
 `readonly`. This tightening is decision D3 of the plan.
 
-Chunked rule injection keeps today's counts: 16 `main_thread_rules.py` chunks plus
-the `--index` entry at SessionStart and 14 `inject_rules.py` chunks at
-SubagentStart. A rule that changes size can change a chunk count, and the parity
+Chunked rule injection is wired as follows (counted in `hooks.json` on 2026-10-14):
+17 `main_thread_rules.py` chunks plus the `--index` entry at SessionStart, and 13
+`inject_rules.py` chunks plus the `--index` entry at SubagentStart. A rule that changes size can change a chunk count, and the parity
 tests then fail until `hooks.json` is rewired.
 
 ## Writing paths in documents
@@ -232,6 +235,10 @@ this for the rule set.
 
 ## The interim state until task-0039
 
+Status update, 2026-10-14: the switch described below has happened for the live
+workspace. It runs the plugin (directory marketplace, loaded in place), so the
+bullets below describe the state between task-0038 and that switch.
+
 Task-0038 moves files and rewrites references but deploys nothing. The workspace
 root keeps a frozen copy of the old layout, with `tools/` and `skills/` still
 under `.claude/`, and the live session keeps running from it. Until task-0039
@@ -247,7 +254,16 @@ switches the live harness to a locally installed plugin:
   harness-code task may merge in that window. An emergency fix is a hand patch to
   the root copy, recorded in the task notes.
 
-After the switch, the deploy step is a plugin update plus a session restart.
+After the switch, a release goes in this order (`main` is protected, so nothing is
+committed on it directly):
+
+1. On a task branch: bump `version` in `plugin.json` and add the CHANGELOG.md entry
+   (the file is created at the first release, task-0042).
+2. Gated local merge into `main`.
+3. Tag the merge commit `vX.Y.Z`.
+4. Push `main` and the tag (each push needs the User's approval).
+5. `claude plugin marketplace update agentry`, `claude plugin update agentry@agentry
+   --scope local`, then a session restart.
 Pointing the live session at `--plugin-dir src/plugin` is not part of the plan,
 because it would load whatever sits in the working tree.
 
@@ -255,10 +271,10 @@ because it would load whatever sits in the working tree.
 
 | Item | Owner | Note |
 |---|---|---|
-| Marketplace install path, `enabledPlugins`, and the plugin cache copy of `CLAUDE_PLUGIN_ROOT` | task-0039 | Any file the plugin reads outside its own root breaks in a cached copy |
+| Marketplace install path, `enabledPlugins`, and the plugin cache copy of `CLAUDE_PLUGIN_ROOT` | task-0039 | The live harness now runs from the plugin: installed as a directory marketplace on 2026-10-14 and loaded in place, 12 of 12 post-restart checks passed ([plugin-install-2.1.299.md](plugin-install-2.1.299.md)). The move to the GitHub marketplace (cached copy) follows the trunk push; any file the plugin reads outside its own root breaks in a cached copy |
 | `statusLine` as an optional snippet in the install guide | task-0042 | Cannot ship in the plugin (P5) |
-| Env-file behavior on `resume`, `compact`, `clear`; bare-name collision of a plugin and a project skill | task-0039 | Not measured in S1 |
-| `verify` trigger from a plugin skill | task-0039 | One interactive session with several commits |
+| Env-file behavior on `resume`, `compact`, `clear`; bare-name collision of a plugin and a project skill | task-0137 | Not measured in S1 |
+| `verify` trigger from a plugin skill | task-0137 | One interactive session with several commits |
 | Fate of `tools/setup/` (`fleet_rollout`, `finalize_fleet`, `substitute_tokens`) | not assigned | Moved verbatim by task-0038 |
 
 ## Version history
@@ -266,3 +282,5 @@ because it would load whatever sits in the working tree.
 | Version | Date | Author | Change |
 |---|---|---|---|
 | 1.0 | 2026-10-14 | technical-writer | First version, written with the task-0038 path rewrite |
+| 1.1 | 2026-10-14 | Agentry project | Add repo-root `marketplace.json`; correct skill, hook and chunk counts; update the task-0039 status row |
+| 1.2 | 2026-10-16 | Agentry project | Plugin carries a semver version; release procedure after the switch |
