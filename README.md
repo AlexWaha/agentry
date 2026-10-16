@@ -83,6 +83,7 @@ The plugin is installed once and updated on its own schedule. Everything project
 | [Pipeline and approvals](docs/pipeline.md) | Stages, checkpoints, modes, approval levels, swarm, worktrees |
 | [Agents](docs/agents.md) | The roster, when each agent runs, what each may touch |
 | [Configuration](docs/configuration.md) | The `pipeline.json` keys worth changing |
+| [Extending Agentry](docs/extending.md) | Add an agent, a rule or a skill, and run beside other plugins |
 | [Upgrade, pin and roll back](docs/upgrade.md) | Version control for the plugin |
 | [Troubleshooting](docs/troubleshooting.md) | Hook denies in plain words, Windows notes |
 | [Design notes](docs/technical/design-notes.md) | How enforcement works and where it stops |
