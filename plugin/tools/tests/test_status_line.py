@@ -230,15 +230,14 @@ class ReadOnlyTest(StatusLineCase):
 
 class RegistrationTest(unittest.TestCase):
 
-    def test_settings_register_the_status_line_and_hooks_json_keeps_the_matchers(self):
+    def test_template_settings_ship_no_status_line_and_hooks_json_keeps_the_matchers(self):
         settings_file = TOOLS_DIR.parents[1] / ".claude" / "settings.json"
         settings = json.loads(settings_file.read_text(encoding="utf-8"))
-        entry = settings["statusLine"]
-        self.assertEqual("command", entry["type"])
-        self.assertIn("tools/hooks/status_line.py", entry["command"])
+        # A plugin cannot ship statusLine (probe P5) and AGENTRY_ROOT is not known to be
+        # set for a status line command (task-0137), so the template registers none; the
+        # script stays in the plugin for a project that opts in by absolute path.
+        self.assertNotIn("statusLine", settings)
         self.assertTrue((TOOLS_DIR / "hooks" / "status_line.py").is_file())
-        # A plugin cannot ship statusLine (probe P5), so it stays in settings.json;
-        # the hooks moved to the plugin's hooks.json.
         self.assertNotIn("hooks", settings)
         registered = json.loads((TOOLS_DIR.parent / "hooks" / "hooks.json")
                                 .read_text(encoding="utf-8"))

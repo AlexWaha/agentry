@@ -57,9 +57,9 @@ NEW_PLUGIN_LOCATIONS = re.compile(r"plugin/(?:tools|skills|hooks)\b|CLAUDE_PLUGI
 # verbatim here. Everything else is runtime code and is held to the rule.
 RUNTIME_EXEMPT = ("tools/setup/", "tools/tests/")
 
-# `rules/orchestration.md` carries the deploy runbook for the frozen root copy of the
-# harness, which still sits in `.claude/` until task-0039 switches to the plugin
-# (plan C7). It is the live procedure and is rewritten with the switch.
+# `rules/orchestration.md` carries the release runbook and the history of the move to
+# the plugin, so it names the old `.claude/tools` location on purpose and is exempt
+# from the check that project prose no longer points there.
 PROJECT_PROSE_EXEMPT = {"orchestration.md"}
 
 
@@ -162,13 +162,12 @@ class PluginToProjectTest(unittest.TestCase):
 class ProjectToPluginTest(unittest.TestCase):
     """Direction B: the project never hardcodes a plugin path."""
 
-    def test_settings_json_names_no_plugin_path_except_the_status_line(self):
-        # A plugin cannot ship `statusLine` (probe P5, plugin-probes-2.1.299.md), so
-        # it stays in settings.json and still names the old script location until
-        # task-0039 decides what the live line points at (plan D5). Nothing else may.
+    def test_settings_json_names_no_plugin_path(self):
+        # A plugin cannot ship `statusLine` (probe P5, plugin-probes-2.1.299.md) and the
+        # template registers none (task-0137), so no key may name a plugin location.
         settings = json.loads((CLAUDE / "settings.json").read_text(encoding="utf-8"))
         self.assertNotIn("hooks", settings, "hook registration lives in plugin/hooks/hooks.json")
-        settings.pop("statusLine", None)
+        self.assertNotIn("statusLine", settings)
         text = json.dumps(settings)
         self.assertIsNone(OLD_PLUGIN_LOCATIONS.search(text))
         self.assertIsNone(NEW_PLUGIN_LOCATIONS.search(text))

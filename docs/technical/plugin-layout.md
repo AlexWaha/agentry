@@ -3,7 +3,7 @@
 **Date:** 2026-10-16
 **Author:** technical-writer (task-0038, subtask S6)
 **Status:** Draft
-**Version:** 1.2
+**Version:** 1.3
 
 ---
 
@@ -129,8 +129,8 @@ value. The supervisor's `spawn_cmd` therefore sets `CLAUDE_PROJECT_DIR`
 explicitly in the child environment instead of inheriting it. Only the plugin's
 own `session_start` hook exports `AGENTRY_ROOT`.
 
-Not yet measured: env-file behavior on `resume`, `compact` and `clear`. Task-0039
-runs those checks when it installs the plugin.
+Not yet measured: env-file behavior on `resume`, `compact` and `clear`. The
+task-0139 owns those checks (see Open items).
 
 Quoting. In a shell-form hook command, `${CLAUDE_PLUGIN_ROOT}` arrives with
 forward slashes and works unquoted until the path holds a space (probe P4), so
@@ -147,7 +147,7 @@ Skills and gate commands.
 | Rule, agent body, both `CLAUDE.md`, `pipeline-adapter.md`, overlay, docs, README | `"$AGENTRY_ROOT/tools/..."` |
 | Hook command in `hooks.json` | `python "${CLAUDE_PLUGIN_ROOT}/tools/..."` |
 | Gate command that tests code (`unittest`, `compileall`, `ruff`) | repository-relative `plugin/tools`, so a worktree tests its own code |
-| Gate command that reads live plans (`artifact_gate`, `ui_evidence`) | `{root}/.claude/tools/...` through task-0038 (the frozen workspace-root copy), the `{plugin}` placeholder from task-0039 |
+| Gate command that reads live plans (`artifact_gate`, `ui_evidence`) | `{root}/.claude/tools/...` through task-0038 (the frozen workspace-root copy), the `{plugin}` placeholder from task-0137 |
 
 ## What stays project-side and why
 
@@ -171,8 +171,8 @@ permissions, never grant them. Agents therefore stay in `.claude/agents/`.
 
 The cost of this split: an adopting project needs a seeding step (rules, agents,
 `CLAUDE.md`, `settings.json`, an `.agentry` skeleton) in addition to enabling the
-plugin. That step belongs to task-0039 and task-0042, proposed as
-`plugin/templates/`.
+plugin. That step has no owner yet; it is proposed as `plugin/templates/` (see
+Open items).
 
 ## The verify skill
 
@@ -246,15 +246,16 @@ switches the live harness to a locally installed plugin:
 
 - `AGENTRY_ROOT` is the workspace root `.claude`, so `"$AGENTRY_ROOT/tools/..."`
   resolves in the live workspace and in the plugin alike.
-- The two gate commands that read live plans still use `{root}/.claude/tools/...`.
+- The two gate commands that read live plans still use `{root}/.claude/tools/...`
+  (task-0137 replaced them with `{plugin}/tools/...`).
 - The "Deploying a harness change from `src` to the live workspace" runbook in
   `rules/orchestration.md` stays unedited, because it is the live procedure until
-  the switch replaces it.
+  the switch replaces it (task-0137 rewrote it as the release flow below).
 - The harness is frozen between the task-0038 merge and the task-0039 switch: no
   harness-code task may merge in that window. An emergency fix is a hand patch to
   the root copy, recorded in the task notes.
 
-After the switch, a release goes in this order (`main` is protected, so nothing is
+After the move to the GitHub marketplace, a release goes in this order (`main` is protected, so nothing is
 committed on it directly):
 
 1. On a task branch: bump `version` in `plugin.json` and add the CHANGELOG.md entry
@@ -264,6 +265,7 @@ committed on it directly):
 4. Push `main` and the tag (each push needs the User's approval).
 5. `claude plugin marketplace update agentry`, `claude plugin update agentry@agentry
    --scope local`, then a session restart.
+
 Pointing the live session at `--plugin-dir src/plugin` is not part of the plan,
 because it would load whatever sits in the working tree.
 
@@ -272,9 +274,10 @@ because it would load whatever sits in the working tree.
 | Item | Owner | Note |
 |---|---|---|
 | Marketplace install path, `enabledPlugins`, and the plugin cache copy of `CLAUDE_PLUGIN_ROOT` | task-0039 | The live harness now runs from the plugin: installed as a directory marketplace on 2026-10-14 and loaded in place, 12 of 12 post-restart checks passed ([plugin-install-2.1.299.md](plugin-install-2.1.299.md)). The move to the GitHub marketplace (cached copy) follows the trunk push; any file the plugin reads outside its own root breaks in a cached copy |
-| `statusLine` as an optional snippet in the install guide | task-0042 | Cannot ship in the plugin (P5) |
-| Env-file behavior on `resume`, `compact`, `clear`; bare-name collision of a plugin and a project skill | task-0137 | Not measured in S1 |
-| `verify` trigger from a plugin skill | task-0137 | One interactive session with several commits |
+| `statusLine` as an optional snippet in the install guide | task-0042 | Cannot ship in the plugin (P5). The template `settings.json` registers none since task-0137, because `AGENTRY_ROOT` is not known to be set for a status line command; the script stays in the plugin for an opt-in by absolute path |
+| Env-file behavior on `resume`, `compact`, `clear`; bare-name collision of a plugin and a project skill | task-0139 | Not measured in S1; needs the User for three interactive steps |
+| `verify` trigger from a plugin skill | task-0139 | One interactive session with several commits |
+| Seeding step for an adopting project (rules, agents, `CLAUDE.md`, `settings.json`, an `.agentry` skeleton), proposed as `plugin/templates/` | not assigned | Today a new user copies `.claude/`, `.agentry/` and `CLAUDE.md` by hand (README, release notes) |
 | Fate of `tools/setup/` (`fleet_rollout`, `finalize_fleet`, `substitute_tokens`) | not assigned | Moved verbatim by task-0038 |
 
 ## Version history
@@ -284,3 +287,4 @@ because it would load whatever sits in the working tree.
 | 1.0 | 2026-10-14 | technical-writer | First version, written with the task-0038 path rewrite |
 | 1.1 | 2026-10-14 | Agentry project | Add repo-root `marketplace.json`; correct skill, hook and chunk counts; update the task-0039 status row |
 | 1.2 | 2026-10-16 | Agentry project | Plugin carries a semver version; release procedure after the switch |
+| 1.3 | 2026-10-16 | Agentry project | Owners corrected (task-0137), seeding step added to Open items, template statusLine dropped (task-0137) |

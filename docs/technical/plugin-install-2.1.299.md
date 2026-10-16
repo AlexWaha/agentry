@@ -3,7 +3,7 @@
 **Date:** 2026-10-16
 **Author:** Agentry project
 **Status:** Draft
-**Version:** 1.4
+**Version:** 1.5
 
 ---
 
@@ -132,7 +132,8 @@ Rollout order, no step skipped:
    the D4 checks.
 
 Retiring the old declarations is separate and happens after the new live install works.
-Each project declares `agentry-local` in its own local settings, so remove it from both:
+Each project declares `agentry-local` in its own local settings, so remove it from both.
+The first block is not runnable as written: `<scratch>/proj` no longer exists (finding 16).
 
 ```
 cd <scratch>/proj
@@ -213,7 +214,7 @@ ancestor `.claude/skills` out (the P0 finding) but NOT the ancestor `CLAUDE.md` 
 `.claude/rules/*`. The first C5 run (`c5-attempt1-contaminated`) loaded the workspace
 `CLAUDE.md`, `.claude/CLAUDE.md` and 20 rule files next to the scratch's own copies: an
 `instructions` attachment of 1,247,633 bytes, 298,206 cache-creation tokens on the first
-turn, and the run hit the runbook's per-run spend cap (`terminal_reason: budget_exhausted`)
+turn, and the run hit the runbook's per-run budget limit (`terminal_reason: budget_exhausted`)
 after dispatching one reviewer. The ancestor `.mcp.json` also started
 the codegraph MCP server, whose process still holds the first scratch directory open (the
 directory cannot be removed; it is empty).
@@ -237,6 +238,8 @@ when the repo has no commits or no branch called `main` (`repo_bootstrap`), so a
 cannot be shown.
 
 ## C4 install
+
+Record of what ran; not runnable now, because `<scratch>/proj` no longer exists.
 
 ```
 cd <scratch>/proj
@@ -283,7 +286,8 @@ is global, the enablement is per project.
 ## C5 spawned-session proof
 
 Launch shape, the one `supervisor.py` builds (headless, `bypassPermissions` so only
-hooks can restrain, `cwd` = project, explicit `CLAUDE_PROJECT_DIR`):
+hooks can restrain, `cwd` = project, explicit `CLAUDE_PROJECT_DIR`). Record of what ran;
+not runnable now, because `<scratch>/proj` no longer exists:
 
 ```
 cd <scratch>/proj
@@ -294,9 +298,9 @@ env CLAUDE_PROJECT_DIR=<scratch>/proj \
 ```
 
 Raw output of the runs (`c5`, `c5b`, `c5c`, `c5d`, `c5-other`, `c6b`) is kept outside the
-repository. The work runs on a Claude Code subscription, so a run is usage against
-subscription limits, not billed spend; `--max-turns 8` bounds a probe (the cost estimate in
-the stream is API-equivalent and is not recorded).
+repository. `--max-turns 8` bounds the final probes. The first attempts ran under a
+per-run budget limit instead and ended `budget_exhausted` (see C3 and the attempts below);
+they were not capped by turns.
 
 | Check | Evidence from real output | Verdict |
 |---|---|---|
@@ -329,7 +333,8 @@ general-purpose  Write  -> exit 2  This agent is read-only ...
 The live workspace later settled this row: D4 check 5 passed with a dispatched reviewer's
 Bash write denied (see [Live switch (D4)](#live-switch-d4)).
 
-Earlier attempts, for the record: attempt 1 (contaminated scratch) hit the per-run cap;
+Earlier attempts, for the record: attempt 1 (contaminated scratch) hit the per-run budget
+limit (`budget_exhausted`, not `--max-turns`);
 `c5b` (commit on a repo with no `main` branch, allowed by `repo_bootstrap`); one `c5c` run
 with a typo in the prompt; the final `c5c`; `c5-other`. The two commits `probe` and
 `probe2` sit in the scratch repo only.
@@ -529,14 +534,13 @@ cc claude -p --model sonnet --permission-mode bypassPermissions \
 ```
 
 Result event: `subtype: success`, `is_error: false`, `terminal_reason: completed`,
-`num_turns: 5`, `duration_ms: 22725`. `--max-turns 8` bounds the probe; the run is usage
-against subscription limits.
+`num_turns: 5`, `duration_ms: 22725`. `--max-turns 8` bounds the probe.
 
 | Check | Evidence from real output | Verdict |
 |---|---|---|
-| Plugin loaded from the cache | init event `plugins`: `{"name": "agentry", "path": "E:\\Personal\\agentry-scratch-0039\\iso-gh\\cache\\agentry\\agentry\\0.1.0", "source": "agentry@agentry", "version": "0.1.0"}`; 42 `agentry:` skills | pass |
+| Plugin loaded from the cache | init event `plugins`: `{"name": "agentry", "path": "<scratch>\\iso-gh\\cache\\agentry\\agentry\\0.1.0", "source": "agentry@agentry", "version": "0.1.0"}`; 42 `agentry:` skills | pass |
 | Hooks are the cache copy's | debug log: 46 lines with `(plugin agentry@agentry)`, for example `Hooks: PreToolUse:Bash [python ".../iso-gh/cache/agentry/agentry/0.1.0/tools/pipeline/pretool_gate.py"] (plugin agentry@agentry) finished with status 2`; 0 lines matching `agentry-local` or `.deploy` | pass |
-| `CLAUDE_PLUGIN_ROOT` is the cache path | step 2: `AR=E:/Personal/agentry-scratch-0039/iso-gh/cache/agentry/agentry/0.1.0 PD=E:/Personal/agentry-scratch-0039/proj-gh`; `AGENTRY_ROOT` was unset on the launch, so the SessionStart env-file export supplied it; it equals `installPath` (forward slashes) | pass |
+| `CLAUDE_PLUGIN_ROOT` is the cache path | step 2: `AR=<scratch>/iso-gh/cache/agentry/agentry/0.1.0 PD=<scratch>/proj-gh`; `AGENTRY_ROOT` was unset on the launch, so the SessionStart env-file export supplied it; it equals `installPath` (forward slashes). Direct evidence of the expansion: `hooks.json` holds `python "${CLAUDE_PLUGIN_ROOT}/tools/pipeline/pretool_gate.py"`, and the debug log line in the previous row shows that same command with the variable already replaced by the cache path | pass |
 | Main-thread rules delivered | `[main-thread-rules] delivered 17 of 17 chunks` (rule files read through the cache copy's `main_thread_rules.py`) | pass |
 | Main-thread deny fires | step 1: `PreToolUse:Bash hook error: [python ".../cache/agentry/agentry/0.1.0/tools/pipeline/pretool_gate.py"]: Redirect to /dev/null is denied by project policy (gates.forbid_dev_null). ... This hook comes from the agentry@agentry plugin.`; the model did not retry | pass |
 | Unresolved caller is readonly | step 3: the `general-purpose` agent's Write returned `PreToolUse:Write hook error: [python ".../cache/agentry/agentry/0.1.0/tools/pipeline/agent_gate.py"]: This agent is read-only - it audits and reports, it does not modify files.`; `docs/deny-gp.txt` absent (step 4: `ls: cannot access 'docs'`) | pass |
@@ -551,8 +555,8 @@ the plugin hooks still fire in an untrusted folder.
 - The isolated plugins root replaced a real local-scope install in the scratch (plan
   section 2). It also avoids a second enabled `agentry` plugin firing every hook twice.
 - The fixture was rebuilt from the repository instead of copied from `proj` (finding 16).
-- The plan's per-run spend cap was dropped by the User's amendment (subscription); the
-  probe is bounded by `--max-turns 8` instead.
+- The plan's per-run budget limit was dropped by amendment; the probe is bounded by
+  `--max-turns 8` instead.
 
 ## Pin, re-add, update and rollback (task-0042)
 
@@ -562,7 +566,7 @@ rows back the sections Pin, Upgrade and Roll back in `docs/upgrade.md`.
 
 | Command | Result |
 |---|---|
-| `claude plugin marketplace add AlexWaha/agentry#<ref> --scope local` | Pins a branch or tag: the ref goes to `git clone --branch`. A commit SHA is rejected ("Remote branch <sha> not found"). Measured with `#main`; the tag form is pending the first tag |
+| `claude plugin marketplace add AlexWaha/agentry#<ref> --scope local` | Pins a branch or tag: the ref goes to `git clone --branch`. A commit SHA is rejected ("Remote branch <sha> not found"). The pin is stored as `"ref"` in the marketplace entry. Measured with `#main`; the tag form was not measured at release time |
 | `claude plugin install agentry@agentry@<ver>` | The suffix is silently ignored |
 | `claude plugin marketplace add AlexWaha/agentry#<ref> --scope local` again | Prints "Marketplace 'agentry' already on disk" and changes nothing: no re-clone, the ref is unchanged. Moving a pinned project to another tag needs remove and re-add |
 | `claude plugin marketplace update agentry` | Keeps the ref pin |
@@ -572,7 +576,7 @@ rows back the sections Pin, Upgrade and Roll back in `docs/upgrade.md`.
 `marketplace remove` cascades: it uninstalls every plugin installed from that
 marketplace, at every scope, not only the local one.
 
-Not measured: the tag form of the pin and of the rollback (no tag exists yet),
+Not measured at release time: the tag form of the pin and of the rollback (no tag existed),
 and an upgrade across a real version bump from GitHub.
 
 ## Findings that change section D
@@ -629,7 +633,8 @@ and an upgrade across a real version bump from GitHub.
     the old path until D7.3.
 13. **A cached install prints no `Read from:` line.** `claude plugin list` shows Version,
     Scope and Status only for `agentry@agentry`; the directory install printed `Read from:
-    <snapshot>\plugin`. For a github-source install the proof of the plugin root is
+    <snapshot>\plugin`. As recorded in the transcript above (the raw output was not kept):
+    `agentry@agentry   Version: 0.1.0   Scope: local   Status: enabled`. For a github-source install the proof of the plugin root is
     `installPath` in `installed_plugins.json` plus the init event `plugins[].path`, and the
     two agree. A D4 re-run after the live switch must check those, not a `Read from:` line.
 14. **The cache is a full copy of the pushed commit, and Claude Code records the sha.** The
@@ -690,13 +695,29 @@ claude plugin marketplace remove agentry-local --scope local
 
 Do the marketplace removal only after neither install uses `agentry-local` any more.
 
+The first block above is not runnable: the 0039 scratch project `<scratch>/proj` is gone,
+yet the real `installed_plugins.json` still lists an `agentry@agentry-local` entry whose
+`projectPath` is that directory (finding 16). Removing that stale entry needs a User
+decision: recreate the directory and run the block, or edit the registry another way.
+The 0039 probes also left Claude Code transcript directories under
+`~/.claude/projects/`: `<scratch>-0039-proj`, `<scratch>-0039-other` and
+`<scratch>-0039-proj-gh` (the last one from task-0040); they are transcripts of the scratch sessions and safe to delete with them.
+
 task-0040 left these under `<scratch>` (outside the repository), kept through the live
 switch like the 0039 scratch, and removable once the User approves: `iso-gh` (throwaway
 plugins root with the cache copy), `proj-gh` (scratch project and its `.agentry/state`),
 `out-0040` (raw probe output, prompt and extractor) and `pre-0040` (copies and SHA-256
 hashes of the real registry and user settings, taken before the first write). Nothing
 outside `<scratch>` references them; no user-level setting or real registry entry was
-added.
+added. Before deleting `proj-gh`, stop the detached supervisor the SessionStart hook
+started there (`supervisor.lock` and `supervisor.json` in its `.agentry/state/`): run
+`python "$AGENTRY_ROOT/tools/pipeline/supervisor.py" --stop` with `CLAUDE_PROJECT_DIR`
+set to `proj-gh`; a running supervisor may keep the folder open and make the delete fail.
+
+task-0042 left, under the same scratch folder: `iso-ref` (isolated plugins root for the pin and
+update runs), `proj-ref` (scratch project for them) and `real-before-0042.sha256` (hashes
+of the real registry and user settings taken before the first write). They are removable
+on the same terms.
 
 Pre-install copies of `installed_plugins.json`, `known_marketplaces.json` and the user
 `settings.json` were taken before the first install and are kept outside the repository.
@@ -713,3 +734,4 @@ leftover process of the contaminated first run) and the cache directory
 | 1.2 | 2026-10-16 | Agentry project | Semver releases with git tags replace the commit-sha version; release and update procedure corrected |
 | 1.3 | 2026-10-16 | Agentry project | First install from GitHub (task-0040): cache-path proof, headless deny probe, findings 13 to 17; per-run spend caps and cost lines removed |
 | 1.4 | 2026-10-16 | Agentry project | Pin, re-add, marketplace update, plugin update and rollback measurements (task-0042) |
+| 1.5 | 2026-10-16 | Agentry project | Review residuals (task-0137): stale Cleanup and not-runnable blocks marked, budget-limit wording, `${CLAUDE_PLUGIN_ROOT}` expansion evidence, `ref` storage, `<scratch>` paths, subscription remark dropped |

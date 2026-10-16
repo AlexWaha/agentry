@@ -579,12 +579,12 @@ to, so code-under-test commands (compileall, unittest, ruff) judge the task's ow
 code. A LEGACY run (no recorded tree) runs in the repo as before. A recorded tree
 that is missing or invalid blocks the gate, it never falls back to `src/`: the
 output says `task worktree MISSING` or `INVALID` and names `worktree.py --repair
---task T`. Commands that must come from the live harness use `{root}`, replaced
-by the workspace root as a forward-slash path (after `{task}`; a root containing
-whitespace or a quote refuses the gate). Only the plan-stage `artifact_gate.py`
-and the `ui_evidence.py` call inside the test stage use it; this is the User's
-config step (see the rollout below), because a tree holds its own copy of
-`.agentry/` that has no plans.
+--task T`. Commands that must come from the installed harness use `{plugin}`,
+replaced by the plugin root as a forward-slash path (`{root}` is the project root
+likewise; after `{task}`; a path with a character outside `A-Za-z0-9_./:-`, a space
+or a non-ASCII one included, refuses the gate). Only the plan-stage `artifact_gate.py` and the `ui_evidence.py` call inside
+the test stage use it; they read plans and evidence through `CLAUDE_PROJECT_DIR`,
+because a tree holds its own copy of `.agentry/` that has no plans.
 
 **Slots replace "one task in an editing stage".** With the flag on and
 `max_parallel` N above 1, the Stop hook starts the next ready task when no
@@ -741,19 +741,19 @@ its tree is not in the graph until it merges; read the tree with Grep and Read.
 
 **Rollout (task-0132; the flag stays false until the User flips it).**
 
-1. Merge dark. Deploy per the order in "Deploying a harness change" (the new
-   modules `worktree.py`, `state.py`, `git_state.py` first; hooks last).
+1. Merge dark. Release per "Deploying a harness change" (plugin code reaches the
+   live gates only through a release and `claude plugin update`).
 2. Verify live in a scratch lane with real git and real Windows removal; read
    the output of the full suite, `ruff`, `compileall`, an import smoke of every
    hook script and the dash scan.
 3. User config step: add the `worktrees` block with `enabled` false to both
    `pipeline.json` copies, and change the plan-stage command to
-   `python {root}/.claude/tools/pipeline/artifact_gate.py --task {task} --kind plan`
+   `python {plugin}/tools/pipeline/artifact_gate.py --task {task} --kind plan`
    and the `ui_evidence.py` call in the test stage to
-   `python {root}/.claude/tools/pipeline/ui_evidence.py --task {task}`. Verify
-   `advance.py` still passes both gates on a legacy run. (Those two `{root}` commands
-   address the frozen workspace-root copy of the tools; task-0038 leaves them as they
-   are and task-0039 replaces `{root}/.claude` with the `{plugin}` placeholder.)
+   `python {plugin}/tools/pipeline/ui_evidence.py --task {task}`. Verify
+   `advance.py` still passes both gates on a legacy run. (The rollout first used
+   `{root}/.claude/tools`, the frozen workspace-root copy; task-0137 replaced it with
+   the `{plugin}` placeholder.)
 4. Flip `enabled` to true only with `src/` on `main`, no LEGACY run in flight,
    and task-0134 done. Do not enable worktrees before then.
 5. Watch the first two tasks end to end (registration, parallel gates, stale
@@ -1094,32 +1094,40 @@ profile). What each layer does and does not cover (task-0116):
 - **Swarm zones** (see "Swarm mode") bind the dev profile only, and inherit the
   interpreter and `npm install` holes above.
 
-### Deploying a harness change from `src` to the live workspace
+### Deploying a harness change (the GitHub release flow)
 
-The scripts import each other at module top: `agent_gate.py` imports `zones`,
-`approve.py` reads `pretool_gate.TRUNK_PUSH_DEFAULT_REMOTE` at import, `gate.py`
-needs `state.emit_gate`, and `pretool_gate` denies every push without
-`leak_guard.py`. A hook that fails to import exits 1, which is non-blocking, so
-a wrong copy order silently switches the subagent gates off. Copy in this order:
+The harness reaches a workspace as the `agentry` plugin (`agentry@agentry`, scope
+local, from the GitHub marketplace). Plugin code (`plugin/`) changes the live gates
+only through a release and `claude plugin update`, never by hand copy; hooks load
+from the cached copy, so a half-published change cannot switch a gate off.
 
-1. New modules first: `events.py`, `zones.py`, `leak_guard.py`, `worktree.py`.
-2. Then `state.py` and `git_state.py` (`worktree.py` imports both; `git_state`
-   imports `worktree` lazily).
-3. Then the other pipeline and memory scripts, except `approve.py`.
-4. Then `pretool_gate.py`, then `agent_gate.py`, then `agents/*.md`.
-5. Then `approve.py` (it reads `pretool_gate` at import), together with the
-   adapter's `--reason` change.
-6. Rules go together with `settings.json` (the chunk wiring must match the rule
-   sizes).
-7. Run `git config core.hooksPath .githooks` in `src`.
-8. Run any live-store memory reconciliation the task names (for example
-   `memory.py --refine ... --why ... --trigger ...` and `--retire ...`),
-   confirm with `memory.py --query`, and record the result in the task Notes.
+1. Release on a task branch cut from `main`: bump `version` in
+   `plugin/.claude-plugin/plugin.json` (semver) and move the `[Unreleased]` lines of
+   `CHANGELOG.md` under a dated `## [X.Y.Z]` heading.
+2. Run the pipeline: full suite, `ruff check plugin/tools scripts`, `python -m
+   compileall -q plugin/tools`, `python scripts/test_docs_preview.py`, then the
+   User's commit approval and the gated local merge into `main`.
+3. Tag the merge commit: `git tag vX.Y.Z <merge commit>`. Nothing leaves the machine.
+4. After the User approves in chat, record `approve.py --trunk-push`, push `main`.
+   Push the tag (`git push origin vX.Y.Z`) after its own chat approval, NO marker:
+   a tag push is not a trunk push. Never `--tags`.
+5. The User publishes the GitHub Release from `docs/release/vX.Y.Z.md` in the web
+   UI (no `gh`).
+6. In the workspace: `claude plugin marketplace update agentry`, then
+   `claude plugin update agentry@agentry --scope local`, then restart. Template
+   files (`.claude/`, `.agentry/`, `CLAUDE.md`) stay per project: carry merged
+   changes to each live copy by hand. Rules are read live but `hooks.json` comes
+   from the cached plugin: a chunk-count change needs the plugin update first.
+7. Re-run the D4 checks (`docs/technical/plugin-install-2.1.299.md`, "Live switch
+   (D4)"): rules delivered once, a gate fires from the plugin path, a readonly
+   agent cannot write, `state.py --show` exits 0; and import every hook script
+   under `plugin/tools/hooks` and `plugin/tools/pipeline`.
+8. Roll back with `docs/upgrade.md`.
 
-General rule: copy every script before any `settings.json` edit, because hook
-wiring reloads live. Before editing settings, verify with `python -m
-compileall` over `.claude/tools` and an import smoke test of every hook script
-(import each one and confirm exit 0).
+After editing `git-workflow.md` or this file, run `main_thread_rules.py --index`
+(`$AGENTRY_ROOT/tools/hooks/`) and make `plugin/hooks/hooks.json` list that many
+`--chunk N` entries.
+Run `git config core.hooksPath .githooks` once per clone.
 
 ## Deferred: Agent Teams
 

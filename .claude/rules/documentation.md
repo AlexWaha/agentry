@@ -274,7 +274,7 @@ paths:
 
 ## Diagrams
 
-Internal records (`docs/technical/` and other non-public docs) use **Mermaid**, which renders natively in GitHub markdown. Public docs (README, the `docs/` user guide, release notes, `docs/technical/design-notes.md`) use PNG diagram images with descriptive alt text, each wrapped in a link to its own file so readers can open it full size.
+Internal records (`docs/technical/` and other non-public docs) use **Mermaid**, which renders natively in GitHub markdown. Public docs (README, the `docs/` user guide, release notes, `docs/technical/design-notes.md`) use PNG or JPEG diagram images with descriptive alt text, each wrapped in a link to its own file so readers can open it full size.
 
 ### Types of Diagrams
 
