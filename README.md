@@ -17,6 +17,12 @@ recorded by Python hooks and SQLite, not decided by the model.
 - [How it works](#how-it-works)
 - [Requirements](#requirements)
 - [Install and first run](#install-and-first-run)
+  - [Install](#install)
+  - [Pin a version per project](#pin-a-version-per-project)
+  - [Upgrade](#upgrade)
+  - [Roll back](#roll-back)
+  - [Releasing (maintainers)](#releasing-maintainers)
+  - [Onboard the project](#onboard-the-project)
 - [Usage](#usage)
 - [The agent roster](#the-agent-roster)
 - [Configuration](#configuration)
@@ -112,7 +118,7 @@ change.
 
 - **Claude Code**, with hooks and subagent dispatch (`SessionStart`,
   `PreToolUse`, `Stop`, `SubagentStart`, `SubagentStop`, `PreCompact`,
-  `PostToolUse` are all wired in `.claude/settings.json`).
+  `PostToolUse` are all wired in the plugin's `hooks.json`).
 - **Python 3.12 or newer** on PATH. The scripts themselves parse on 3.9, but
   the project targets current stable releases and is only tested there. Every
   script under `plugin/tools/` is standard-library only (`json`, `sqlite3`,
@@ -131,11 +137,130 @@ change.
 
 ## Install and first run
 
-There is no package or plugin yet. Installing Agentry today means copying
-the template directory into your project and running the onboarding prompt:
+Agentry is a Claude Code plugin, installed from the public GitHub repository.
+The plugin carries the tools, skills and hooks (`plugin/`, 42 skills and 46 hooks
+on seven events). The agents, rules and `.agentry/` overlay stay in your
+project and are set up by the onboarding prompt below. Layout of the plugin
+tree: [plugin-layout.md](docs/technical/plugin-layout.md).
 
-1. Copy `.claude/` and the root `CLAUDE.md` into your project (back up any
-   existing `CLAUDE.md` first).
+### Install
+
+Run from the project root. `--scope local` limits the install to this project;
+without it Claude Code declares the marketplace at user scope and writes it
+into `~/.claude/settings.json`.
+
+```bash
+claude plugin marketplace add AlexWaha/agentry --scope local
+claude plugin install agentry@agentry --scope local
+claude plugin list
+```
+
+`claude plugin list` should show `agentry@agentry`, scope `local`, status
+`enabled`. Restart Claude Code: `hooks.json` is read at session start. The
+plugin's `SessionStart` hook then exports `AGENTRY_ROOT` (the cached plugin
+copy) and `CLAUDE_PROJECT_DIR` into every Bash call. The install needs no
+authentication; the clone is anonymous HTTPS.
+
+Status: measured on Claude Code 2.1.299 with HTTPS forced
+(`CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1`). If you have no SSH key for GitHub, set
+that variable before the `marketplace add` command.
+
+Releases are tagged `vX.Y.Z` and follow semantic versioning. The changelog is
+[CHANGELOG.md](CHANGELOG.md).
+
+### Pin a version per project
+
+A github-source install copies the plugin into
+`~/.claude/plugins/cache/agentry/agentry/<version>` and the session runs from
+that copy. A release is a version bump in `plugin.json`, a changelog entry and
+a `vX.Y.Z` tag.
+
+Status: a local-scope install is recorded per project, so it should stay on the
+installed version until you run `claude plugin update`, and pushing to `main`
+should change nothing for it. Not yet measured across a real version bump.
+
+Check what a project runs with `claude plugin list` (the `Version:` line).
+
+To pin a project to a release, put the tag or branch after `#` when you add the
+marketplace:
+
+```bash
+claude plugin marketplace add AlexWaha/agentry#v0.2.0 --scope local
+claude plugin install agentry@agentry --scope local
+```
+
+Claude Code passes the ref to `git clone --branch`, so a tag or a branch works
+and a commit SHA does not ("Remote branch <sha> not found"). The ref is stored
+in the marketplace entry (`"ref": "v0.2.0"`). A version suffix such as
+`agentry@agentry@0.2.0` is silently ignored, so do not use it.
+
+Running `marketplace add` again for the existing `agentry` marketplace prints
+"already on disk" and changes nothing (no re-clone, the ref stays). To move a
+tag-pinned project to another tag, remove and re-add the marketplace, as in
+"Roll back" below.
+
+Status: measured with `#main` on Claude Code 2.1.299. The tag form is pending
+the first tag.
+
+### Upgrade
+
+```bash
+claude plugin marketplace update agentry
+claude plugin update agentry@agentry --scope local
+```
+
+Then restart Claude Code. Read the [changelog](CHANGELOG.md) first and run the
+commands from the project root, so the update applies to that project.
+
+Status: on 2.1.299, `marketplace update` keeps the ref pin, and `plugin update`
+at the same version prints "already at the latest version". An upgrade across a
+real version bump from GitHub is not yet measured. A project pinned to a tag
+does not move on update; to change tags, remove and re-add as in "Roll back".
+
+### Roll back
+
+If an upgrade breaks a gate, remove the plugin and the marketplace from the
+project, then add the marketplace again pinned to the previous release:
+
+```bash
+claude plugin uninstall agentry@agentry --scope local
+claude plugin marketplace remove agentry --scope local
+claude plugin marketplace add AlexWaha/agentry#v<previous> --scope local
+claude plugin install agentry@agentry --scope local
+```
+
+Restart Claude Code. Release tags (`v0.2.0` and later) are listed under the
+repository's Releases page, each with its notes.
+
+Warning: `marketplace remove` cascades. It uninstalls every plugin installed
+from that marketplace, at every scope.
+
+Status: all four commands exit 0, measured on 2.1.299 with a branch ref; the tag
+form is pending the first tag.
+
+### Releasing (maintainers)
+
+`main` is protected, so a release starts on a task branch.
+
+1. Bump `version` in `plugin/.claude-plugin/plugin.json` and add the
+   `CHANGELOG.md` entry on the task branch.
+2. Gated local merge into `main`.
+3. Tag the merge commit `vX.Y.Z`.
+4. Push `main` and push the tag. Each push needs its own recorded User
+   approval.
+5. Publish the GitHub release with the notes from `docs/release/`.
+6. On each machine that runs the plugin: `claude plugin marketplace update
+   agentry`, `claude plugin update agentry@agentry --scope local`, restart.
+
+### Onboard the project
+
+After the plugin is installed:
+
+1. Copy `.claude/`, `.agentry/` and the root `CLAUDE.md` into your project
+   (back up any existing `CLAUDE.md` first). The plugin ships the tools, skills
+   and hooks only; the agents and rules come from this repository's `.claude/`,
+   and the pipeline config, project overlay and task templates from its
+   `.agentry/` (clone it or download it).
 2. Open Claude Code at the project root.
 3. Paste the prompt from `.claude/_init-prompt.md`. It runs two phases:
    Phase A auto-detects your stack (language, framework, test/format/build
@@ -156,11 +281,8 @@ values: `main_branch` and the exit-gate commands of `implement`, `test` and
 instead of building your code, which passes and proves nothing. Section 2 lists
 each key with the value you inherit and the placeholder it replaced.
 
-The code and skills already live in a plugin tree (`plugin/`, addressed as
-`${CLAUDE_PLUGIN_ROOT}` by hooks and skills and as `$AGENTRY_ROOT` in prose and
-Bash; layout in [plugin-layout.md](docs/technical/plugin-layout.md)). A
-marketplace install is planned - see [Roadmap](#roadmap) - and is not shipped
-today.
+Hooks and skills address the plugin tree as `${CLAUDE_PLUGIN_ROOT}`; prose and
+Bash use `$AGENTRY_ROOT`.
 
 ## Usage
 
@@ -277,8 +399,10 @@ merged into the main branch.
 the full test suite standalone. `readonly` agents can read and run
 non-mutating commands but cannot Edit or Write. `docs` agents can write only
 under `.claude/`, `.agentry/`, `docs/`, and any `README*` file at any depth. Every profile is
-enforced inside the subagent itself via `agent_gate.py`, wired in each
-agent's frontmatter `hooks.PreToolUse` - not left to the prompt.
+enforced inside the subagent itself via `agent_gate.py`. Each agent declares
+its profile with a `profile:` key in its frontmatter, and the plugin's
+`hooks.json` runs `agent_gate.py` as a `PreToolUse` hook for subagents by that
+profile - not left to the prompt.
 
 ## Configuration
 
@@ -315,8 +439,6 @@ Sourced from `.agentry/plans/2026-09-12-harness-overhaul-plan.md`.
   backlog filtering so two lanes stop competing for the same queue.
 - Human checkpoints routed through `AskUserQuestion` instead of plain chat
   text, plus visible hook output (terminal alert, status line).
-- Package the harness as a Claude Code plugin (`${CLAUDE_PLUGIN_ROOT}`
-  addressing, marketplace manifest) once the above stops moving.
 
 ## License
 
