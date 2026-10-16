@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `docs/extending.md`, a user guide page on adding agents, rules and skills and on running beside other plugins.
+
 ## [0.2.0] - 2026-10-16
 
 First public release. 0.1.0 was the version on `main` before the first release

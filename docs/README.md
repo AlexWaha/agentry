@@ -11,6 +11,7 @@ Start with [Getting started](getting-started.md) if you have not installed Agent
 | [Pipeline and approvals](pipeline.md) | The build and plan pipelines, checkpoints, modes, approval levels, swarm, worktrees |
 | [Agents](agents.md) | The 31 agents by department, when each one is dispatched, what each may touch |
 | [Configuration](configuration.md) | The `pipeline.json` keys you are likely to change and the `.agentry/` layout |
+| [Extending Agentry](extending.md) | Add an agent, a rule or a skill, and run beside other plugins |
 | [Upgrade, pin and roll back](upgrade.md) | Check your version, pin a release, upgrade, roll back, cut a release |
 | [Troubleshooting](troubleshooting.md) | Symptoms and fixes, hook denies in plain words, Windows notes |
 
