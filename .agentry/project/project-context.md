@@ -124,7 +124,8 @@ Single-repository workspace; there is no separate application codebase.
 |-----------|-------------|-----------|
 | `plugin/` | The plugin root: `tools/` (pipeline, hooks, memory, setup, tests), `skills/`, `hooks/hooks.json`, `.claude-plugin/plugin.json`. This is what Agentry ships. | Yes (same repo as root) |
 | `.claude/` | The project side of the harness: rules, agents, `CLAUDE.md`, `settings.json`, `pipeline-adapter.md`, `skills/verify`. | Yes (same repo as root) |
-| `docs/` | Session memory notes under `docs/memory/`; the business, technical, and other subtrees `rules/documentation.md` describes are not populated yet. | Yes (same repo as root) |
+| `docs/` | The user guide (README, getting started, pipeline, agents, commands, configuration, upgrade, troubleshooting), `docs/assets/` images, `docs/release/` release notes and `docs/technical/` design records. | Yes (same repo as root) |
+| `scripts/` | Dev tools, not shipped in the plugin: `docs_preview.py` serves README and `docs/` rendered like GitHub on 127.0.0.1; checked by `python scripts/test_docs_preview.py` and `ruff check scripts`, outside the pipeline gates. | Yes (same repo as root) |
 | `.codegraph/` | Code knowledge graph index, built by the codegraph CLI. | No (gitignored) |
 
 ## Project phases (current activation state)

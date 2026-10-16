@@ -36,7 +36,8 @@ with the actual state of the project. Used by the Technical Writer agent.
 4. **Update existing documents.** Read each fully; identify what is
    outdated (changed numbers, revised decisions, evolved architecture,
    added/removed features, shifted timelines). Update the `Date` and
-   `Status` fields and only the sections that changed. Do NOT rewrite the
+   `Status` fields (internal records only; public user-facing docs have no
+   metadata header, see `rules/documentation.md`) and only the sections that changed. Do NOT rewrite the
    entire document - preserve the original author's structure and style.
 5. **Update the changelog.** Append a dated entry to
    `docs/changelog/CHANGELOG.md` (create it with the standard header from
@@ -44,7 +45,7 @@ with the actual state of the project. Used by the Technical Writer agent.
    template there.
 6. **Verify cross-references.** Numbers (pricing, projections, targets),
    terminology, and feature lists must match across every document that
-   mentions them. All documents touched in this pass get the current date.
+   mentions them. Internal records touched in this pass get the current date (public docs carry no date).
    Check markdown links between documents resolve, and that any Mermaid
    diagrams render (use the Mermaid Chart MCP tool if available). Fix
    inconsistencies in the outdated document; if it is unclear which version
@@ -61,7 +62,7 @@ with the actual state of the project. Used by the Technical Writer agent.
 - [ ] Every `docs/` subdirectory was audited against `references/doc-templates.md`
 - [ ] All expected documents for completed phases exist, or gaps are flagged
 - [ ] Updated documents only changed what was outdated; structure/style preserved
-- [ ] Updated documents have current dates
+- [ ] Updated internal records have current dates (public docs have no header)
 - [ ] Cross-references are consistent (numbers, terminology, features)
 - [ ] Mermaid diagrams render correctly; no broken links
 - [ ] Changelog entry added for this pass

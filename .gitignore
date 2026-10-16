@@ -85,3 +85,6 @@ env/
 !.agentry/tasks/done/.gitkeep
 !.agentry/tasks/epics/.gitkeep
 !.agentry/tasks/handoffs/.gitkeep
+
+# Local session notes, not part of the published repo
+docs/memory/

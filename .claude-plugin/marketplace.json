@@ -2,7 +2,7 @@
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "agentry",
   "description": "Agentry: a gated, hook-enforced AI-team harness for Claude Code.",
-  "owner": { "name": "AlexWaha" },
+  "owner": { "name": "Oleksandr Vakhovskyi (Alex Waha)" },
   "plugins": [
     { "name": "agentry", "description": "Agentry harness: gated pipeline tools, hooks and skills.", "source": "./plugin" }
   ]
