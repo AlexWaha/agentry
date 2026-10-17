@@ -1,0 +1,152 @@
+{
+  "route": "/api/v1/tasks?limit=25",
+  "body": {
+    "data": [
+      {
+        "id": "task-0109",
+        "title": "Iota done",
+        "type": "refactor",
+        "priority": "medium",
+        "epic": "epic-0002",
+        "spec": "none",
+        "assignee": "senior-backend-dev",
+        "folder": "done",
+        "created": "2026-10-01T00:00:00Z",
+        "completed": "",
+        "blocked_on": "",
+        "superseded_by": "",
+        "depends_on": []
+      },
+      {
+        "id": "task-0108",
+        "title": "Theta done",
+        "type": "feature",
+        "priority": "medium",
+        "epic": "",
+        "spec": "none",
+        "assignee": "senior-backend-dev",
+        "folder": "done",
+        "created": "2026-10-01T00:00:00Z",
+        "completed": "",
+        "blocked_on": "",
+        "superseded_by": "",
+        "depends_on": []
+      },
+      {
+        "id": "task-0107",
+        "title": "Eta done",
+        "type": "bugfix",
+        "priority": "medium",
+        "epic": "epic-0002",
+        "spec": "none",
+        "assignee": "senior-backend-dev",
+        "folder": "done",
+        "created": "2026-10-01T00:00:00Z",
+        "completed": "",
+        "blocked_on": "",
+        "superseded_by": "",
+        "depends_on": []
+      },
+      {
+        "id": "task-0106",
+        "title": "Zeta done",
+        "type": "feature",
+        "priority": "medium",
+        "epic": "epic-0001",
+        "spec": "none",
+        "assignee": "senior-backend-dev",
+        "folder": "done",
+        "created": "2026-10-01T00:00:00Z",
+        "completed": "",
+        "blocked_on": "",
+        "superseded_by": "",
+        "depends_on": []
+      },
+      {
+        "id": "task-0105",
+        "title": "Epsilon awaiting commit",
+        "type": "techdebt",
+        "priority": "medium",
+        "epic": "",
+        "spec": "none",
+        "assignee": "senior-backend-dev",
+        "folder": "active",
+        "created": "2026-10-01T00:00:00Z",
+        "completed": "",
+        "blocked_on": "",
+        "superseded_by": "",
+        "depends_on": []
+      },
+      {
+        "id": "task-0104",
+        "title": "Delta in flight",
+        "type": "feature",
+        "priority": "high",
+        "epic": "epic-0001",
+        "spec": "none",
+        "assignee": "senior-backend-dev",
+        "folder": "active",
+        "created": "2026-10-01T00:00:00Z",
+        "completed": "",
+        "blocked_on": "",
+        "superseded_by": "",
+        "depends_on": [
+          {
+            "id": "task-0106",
+            "title": "Zeta done",
+            "folder": "done"
+          }
+        ]
+      },
+      {
+        "id": "task-0102",
+        "title": "Beta bugfix",
+        "type": "bugfix",
+        "priority": "medium",
+        "epic": "epic-0002",
+        "spec": "none",
+        "assignee": "senior-backend-dev",
+        "folder": "backlog",
+        "created": "2026-10-01T00:00:00Z",
+        "completed": "",
+        "blocked_on": "",
+        "superseded_by": "",
+        "depends_on": []
+      },
+      {
+        "id": "task-0101",
+        "title": "Alpha feature",
+        "type": "feature",
+        "priority": "medium",
+        "epic": "epic-0001",
+        "spec": "none",
+        "assignee": "senior-backend-dev",
+        "folder": "backlog",
+        "created": "2026-10-01T00:00:00Z",
+        "completed": "",
+        "blocked_on": "",
+        "superseded_by": "",
+        "depends_on": []
+      }
+    ],
+    "meta": {
+      "total": 8,
+      "limit": 25,
+      "offset": 0,
+      "hidden_superseded": 1,
+      "facets": {
+        "folders": {
+          "backlog": 2,
+          "active": 2,
+          "done": 4
+        },
+        "types": [
+          "bugfix",
+          "feature",
+          "refactor",
+          "techdebt"
+        ]
+      }
+    }
+  }
+}

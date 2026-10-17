@@ -3,3 +3,7 @@
 # silently rewrite whole trees to CRLF and turn a one-file change into a 31-file
 # diff. `text=auto` still leaves detected binaries untouched.
 * text=auto eol=lf
+
+# The dashboard build output is generated: never diffed or merged as text, and
+# collapsed in review (FR-117). Rebuild with `npm run build` in dashboard/.
+plugin/tools/dashboard/dist/** binary linguist-generated

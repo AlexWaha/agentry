@@ -1,0 +1,41 @@
+{
+  "route": "/api/v1/memory/stats",
+  "body": {
+    "data": {
+      "db_bytes": 57344,
+      "wal_bytes": 4096,
+      "counts": { "lesson": 45, "pattern": 2, "module": 2 },
+      "growth": [
+        { "day": "2026-10-10", "rows": 0 },
+        { "day": "2026-10-11", "rows": 2 },
+        { "day": "2026-10-12", "rows": 5 },
+        { "day": "2026-10-13", "rows": 0 }
+      ],
+      "by_agent": { "qa-engineer": 7, "senior-backend-dev": 12 },
+      "by_area": { "hooks": 9, "docs": 3 },
+      "stamps": [{ "task": "task-0106", "at": "2026-10-15T09:30:00Z" }],
+      "injection": {
+        "budget_bytes": 3800,
+        "active_tasks": ["task-0104", "task-0105"],
+        "profiles": [
+          {
+            "matcher": "architect|product-manager|sprint-prioritizer|rapid-prototyper",
+            "kinds": ["module", "pattern", "lesson"],
+            "limit": 8,
+            "matched": 6,
+            "shown": 5,
+            "bytes": 2048
+          },
+          {
+            "matcher": "spec-developer",
+            "kinds": ["module", "lesson"],
+            "limit": 8,
+            "matched": 4,
+            "shown": 4,
+            "bytes": 1111
+          }
+        ]
+      }
+    }
+  }
+}

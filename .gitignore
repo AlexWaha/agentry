@@ -88,3 +88,11 @@ env/
 
 # Local session notes, not part of the published repo
 docs/memory/
+
+# =============================================================================
+# Dashboard SPA sources (dev machines only, see dashboard/)
+# Installed packages and test coverage output. The built dist under
+# plugin/tools/dashboard/dist is committed on purpose (.gitattributes marks it).
+# =============================================================================
+dashboard/node_modules/
+dashboard/coverage/

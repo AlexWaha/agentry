@@ -88,9 +88,12 @@ def stamp_path(task: str) -> Path:
     return STAMP_DIR / f"{task}.json"
 
 
-def unstamped_done_tasks() -> list:
+def unstamped_done_tasks(conn=None) -> list:
     """[{'task','reason'}] for done tasks above baseline lacking a memory stamp.
-    A swarm subtask is covered by its umbrella's stamp (state.covering_umbrella)."""
+    A swarm subtask is covered by its umbrella's stamp (state.covering_umbrella).
+    `conn` is the caller's open run-store connection, passed through to
+    state.covering_umbrella and state.is_abandoned so a read-only caller never opens
+    (and so never creates) the store; without one they open it, as before."""
     try:
         if not enabled() or not DONE_DIR.is_dir():
             return []
@@ -102,11 +105,11 @@ def unstamped_done_tasks() -> list:
             if not stamp_path(task).is_file():
                 # A swarm subtask is stamped through its umbrella's stamp. Looked
                 # up only once a debt is found, so the clean scan stays cheap.
-                umbrella = state.covering_umbrella(task)
+                umbrella = state.covering_umbrella(task, conn)
                 if umbrella and covered_required(umbrella):
                     continue
                 # A task the User dropped (approve.py --abandon) leaves nothing to review.
-                if state.is_abandoned(task):
+                if state.is_abandoned(task, conn):
                     continue
                 out.append({"task": task,
                             "reason": "memory layers not reviewed after completion"})

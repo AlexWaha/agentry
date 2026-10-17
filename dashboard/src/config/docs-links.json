@@ -1,0 +1,14 @@
+{
+  "overview": { "path": "docs/pipeline.md", "anchor": "" },
+  "needs": { "path": "docs/pipeline.md", "anchor": "how-a-checkpoint-works" },
+  "board": { "path": "docs/pipeline.md", "anchor": "the-build-pipeline" },
+  "tasks": { "path": "docs/pipeline.md", "anchor": "two-pipelines" },
+  "task": { "path": "docs/pipeline.md", "anchor": "the-build-pipeline" },
+  "activity": { "path": "docs/pipeline.md", "anchor": "when-something-stops" },
+  "metrics": { "path": "docs/dashboard.md", "anchor": "pages" },
+  "memory": { "path": "docs/pipeline.md", "anchor": "handoff-and-memory-between-tasks" },
+  "graphs": { "path": "docs/dashboard.md", "anchor": "pages" },
+  "harness": { "path": "docs/agents.md", "anchor": "" },
+  "handoffs": { "path": "docs/pipeline.md", "anchor": "handoff-and-memory-between-tasks" },
+  "handoff": { "path": "docs/pipeline.md", "anchor": "handoff-and-memory-between-tasks" }
+}

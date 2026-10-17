@@ -1,0 +1,22 @@
+{
+  "route": "/api/v1/status",
+  "body": {
+    "data": {
+      "project": "demo-project",
+      "plugin_version": "0.2.0",
+      "protocol": 1,
+      "read_only": true,
+      "workflow": { "mode": "solo", "push_needs_approval": true },
+      "lanes": [
+        { "name": "default", "repo": "agentry", "mode": "build", "approvals": "manual", "swarm": false }
+      ],
+      "worktrees": { "enabled": false, "max_parallel": 2 },
+      "supervisor": { "state": "idle", "runs": 0 },
+      "debt": {
+        "handoffs": [{ "task": "task-0001", "reason": "handoff document missing" }],
+        "memory": [{ "task": "task-0001", "reason": "memory review not stamped" }]
+      },
+      "counts": { "backlog": 3, "active": 1, "done": 20, "hidden_superseded": 2 }
+    }
+  }
+}

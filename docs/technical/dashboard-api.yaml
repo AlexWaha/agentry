@@ -1,0 +1,1064 @@
+openapi: 3.1.0
+info:
+  title: Agentry dashboard API
+  version: "1"
+  description: >-
+    Read-only REST API of the Agentry dashboard server (plugin/tools/dashboard/server.py), contract
+    spec-0002. Every route is GET only and needs the per-launch bearer token. Success bodies are
+    {data, meta?}, error bodies are {message, code, errors?}. All timestamps are ISO 8601 UTC with a
+    Z suffix; a source that records only a day (task created and completed, memory created and
+    updated) is returned as midnight UTC; an absent text is the empty string, never null, except
+    the fields typed as nullable. The WebSocket at GET /ws is described in the spec, not here.
+    Memory row shapes follow the memory.db columns (board decision of the core zone): a Lesson
+    has signature, trigger, what, why, fix, area, task, agent, retired and created, a Pattern has
+    name, use_when, body, task and created, a Module has path, responsibility, symbols, notes and
+    updated. The agent and area filters of /memory match lessons only, task matches lessons and
+    patterns, retired changes lessons only. Skills carry command as the slash-command string.
+servers:
+  - url: http://127.0.0.1:41000
+    description: The port is derived from the project path, see the launch URL printed at start.
+security:
+  - bearerAuth: []
+paths:
+  /api/v1/status:
+    get:
+      operationId: getStatus
+      summary: Project, plugin, dials, supervisor, debt and task counts
+      responses:
+        "200":
+          description: The Status.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                additionalProperties: false
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Status"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+  /api/v1/runs:
+    get:
+      operationId: listRuns
+      summary: Every run of every lane
+      parameters:
+        - {name: lane, in: query, schema: {type: string, pattern: '^[A-Za-z0-9_-]{1,32}$'}}
+      responses:
+        "200":
+          description: Runs ordered by updated descending, then task ascending.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                additionalProperties: false
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Run"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/ValidationFailed"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+  /api/v1/tasks:
+    get:
+      operationId: listTasks
+      summary: Paged task list over the three folders
+      parameters:
+        - {name: folder, in: query, schema: {type: string, enum: [backlog, active, done]}}
+        - {name: epic, in: query, schema: {type: string}}
+        - {name: type, in: query, schema: {type: string, pattern: '^[A-Za-z0-9_-]{1,32}$'}}
+        - {name: q, in: query, schema: {type: string}}
+        - {name: include_superseded, in: query, schema: {type: string, enum: ["true", "false"]}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 25}}
+        - {$ref: "#/components/parameters/Offset"}
+      responses:
+        "200":
+          description: Tasks, id ascending for backlog and active, id descending for done or no folder.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                additionalProperties: false
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TaskSummary"
+                  meta:
+                    $ref: "#/components/schemas/TasksMeta"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/ValidationFailed"}
+  /api/v1/tasks/{id}:
+    get:
+      operationId: getTask
+      summary: One task with its run, events, handoff and stamp
+      parameters:
+        - {$ref: "#/components/parameters/TaskId"}
+      responses:
+        "200":
+          description: The TaskDetail.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                additionalProperties: false
+                properties:
+                  data:
+                    $ref: "#/components/schemas/TaskDetail"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/ValidationFailed"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+  /api/v1/epics:
+    get:
+      operationId: listEpics
+      summary: Epics with their tasks (epic thread documents are excluded)
+      responses:
+        "200":
+          description: The epics, id ascending.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                additionalProperties: false
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Epic"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+  /api/v1/events:
+    get:
+      operationId: listEvents
+      summary: Paged event journal, newest first
+      parameters:
+        - {name: task, in: query, schema: {type: string, pattern: '^[A-Za-z0-9-]{1,32}$'}}
+        - {name: kind, in: query, schema: {type: string}}
+        - {name: result, in: query, schema: {type: string, enum: [pass, fail]}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 25}}
+        - {$ref: "#/components/parameters/Offset"}
+      responses:
+        "200":
+          description: Events with id descending.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                additionalProperties: false
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Event"
+                  meta:
+                    $ref: "#/components/schemas/EventsMeta"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/ValidationFailed"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+  /api/v1/metrics:
+    get:
+      operationId: getMetrics
+      summary: Gate, dwell, per-day and merge metrics over a window
+      parameters:
+        - {name: since, in: query, schema: {type: string, pattern: '^\d{4}-\d{2}-\d{2}$'}}
+        - {name: days, in: query, schema: {type: integer, minimum: 1, maximum: 90, default: 14}}
+      responses:
+        "200":
+          description: The Metrics. since and days together are rejected.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                additionalProperties: false
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Metrics"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/ValidationFailed"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+  /api/v1/memory:
+    get:
+      operationId: listMemory
+      summary: Paged memory rows of one kind
+      parameters:
+        - {name: kind, in: query, schema: {type: string, enum: [lesson, pattern, module], default: lesson}}
+        - {name: q, in: query, schema: {type: string}}
+        - {name: agent, in: query, schema: {type: string}}
+        - {name: area, in: query, schema: {type: string}}
+        - {name: task, in: query, schema: {type: string}}
+        - {name: retired, in: query, schema: {type: string, enum: [exclude, include, only], default: exclude}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 20}}
+        - {$ref: "#/components/parameters/Offset"}
+      responses:
+        "200":
+          description: >-
+            Rows ranked by the FTS5 index when q has a usable term, else a case-insensitive
+            LIKE match, else newest first. meta.total is exact.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                additionalProperties: false
+                properties:
+                  data:
+                    type: array
+                    items:
+                      oneOf:
+                        - {$ref: "#/components/schemas/Lesson"}
+                        - {$ref: "#/components/schemas/Pattern"}
+                        - {$ref: "#/components/schemas/Module"}
+                  meta:
+                    $ref: "#/components/schemas/PageMeta"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/ValidationFailed"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+  /api/v1/memory/stats:
+    get:
+      operationId: getMemoryStats
+      summary: Store size, counts, growth, stamps and what each SubagentStart profile would inject now
+      responses:
+        "200":
+          description: The MemoryStats.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                additionalProperties: false
+                properties:
+                  data:
+                    $ref: "#/components/schemas/MemoryStats"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+  /api/v1/graphs/memory:
+    get:
+      operationId: getMemoryGraph
+      summary: Lessons and patterns linked to their tasks, agents and areas
+      responses:
+        "200":
+          description: The Graph.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                additionalProperties: false
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Graph"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+  /api/v1/codegraph:
+    get:
+      operationId: listCodeIndexes
+      summary: Codegraph indexes found at the project root and each repos path
+      responses:
+        "200":
+          description: One CodeIndex per index, empty when there is none.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                additionalProperties: false
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CodeIndex"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+  /api/v1/codegraph/{key}/graph:
+    get:
+      operationId: getCodeGraph
+      summary: Module-level (or file-level) graph of one index
+      parameters:
+        - {name: key, in: path, required: true, schema: {type: string}}
+        - {name: level, in: query, schema: {type: string, enum: [module, file], default: module}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 10, maximum: 400, default: 150}}
+      responses:
+        "200":
+          description: >-
+            The highest-degree nodes up to limit. meta.truncated is true when the 3 second
+            query budget ran out; an unsupported schema gives an empty graph.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                additionalProperties: false
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Graph"
+                  meta:
+                    type: object
+                    required: [truncated, elapsed_ms]
+                    additionalProperties: false
+                    properties:
+                      truncated: {type: boolean}
+                      elapsed_ms: {type: integer}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/ValidationFailed"}
+  /api/v1/harness:
+    get:
+      operationId: getHarness
+      summary: Plugin, agents, rules, skills and hooks
+      responses:
+        "200":
+          description: The Harness.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                additionalProperties: false
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Harness"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+  /api/v1/handoffs:
+    get:
+      operationId: listHandoffs
+      summary: Paged handoff documents, newest first
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 25}}
+        - {$ref: "#/components/parameters/Offset"}
+      responses:
+        "200":
+          description: Handoffs in chain order.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                additionalProperties: false
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Handoff"
+                  meta:
+                    $ref: "#/components/schemas/PageMeta"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/ValidationFailed"}
+  /api/v1/handoffs/{id}:
+    get:
+      operationId: getHandoff
+      summary: One handoff document, returned as data
+      parameters:
+        - {$ref: "#/components/parameters/TaskId"}
+      responses:
+        "200":
+          description: The HandoffDoc.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                additionalProperties: false
+                properties:
+                  data:
+                    $ref: "#/components/schemas/HandoffDoc"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/ValidationFailed"}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    Offset:
+      name: offset
+      in: query
+      schema: {type: integer, minimum: 0, default: 0}
+    TaskId:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, pattern: '^task-\d{4,}$'}
+  responses:
+    Unauthorized:
+      description: The token is missing or wrong (code unauthorized).
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Forbidden:
+      description: Host, Origin or Sec-Fetch-Site not allowed (code forbidden_host or forbidden_origin).
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    NotFound:
+      description: Unknown route or id (code not_found).
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    ValidationFailed:
+      description: A query parameter or path id is invalid (code validation_failed, errors by field).
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Unavailable:
+      description: A store is locked or unreadable (code unavailable, Retry-After 1).
+      headers:
+        Retry-After:
+          schema: {type: string}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+  schemas:
+    Error:
+      type: object
+      required: [message, code]
+      additionalProperties: false
+      properties:
+        message: {type: string}
+        code: {type: string}
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items: {type: string}
+    Timestamp:
+      description: ISO 8601 UTC with a Z suffix, or the empty string when absent.
+      type: string
+      pattern: '^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)?$'
+    PageMeta:
+      type: object
+      required: [total, limit, offset]
+      additionalProperties: false
+      properties:
+        total: {type: integer, minimum: 0}
+        limit: {type: integer, minimum: 1}
+        offset: {type: integer, minimum: 0}
+    TasksMeta:
+      type: object
+      required: [total, limit, offset, hidden_superseded, facets]
+      additionalProperties: false
+      properties:
+        total: {type: integer, minimum: 0}
+        limit: {type: integer, minimum: 1}
+        offset: {type: integer, minimum: 0}
+        hidden_superseded: {type: integer, minimum: 0}
+        facets:
+          type: object
+          required: [folders, types]
+          additionalProperties: false
+          properties:
+            folders:
+              type: object
+              required: [backlog, active, done]
+              additionalProperties: false
+              properties:
+                backlog: {type: integer, minimum: 0}
+                active: {type: integer, minimum: 0}
+                done: {type: integer, minimum: 0}
+            types:
+              type: array
+              items: {type: string}
+    EventsMeta:
+      type: object
+      required: [total, limit, offset, latest_id, kinds]
+      additionalProperties: false
+      properties:
+        total: {type: integer, minimum: 0}
+        limit: {type: integer, minimum: 1}
+        offset: {type: integer, minimum: 0}
+        latest_id: {type: integer, minimum: 0}
+        kinds:
+          type: array
+          items: {type: string}
+    TaskRef:
+      type: object
+      required: [id, title, folder]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        title: {type: string}
+        folder: {type: string, enum: [backlog, active, done, ""]}
+    Stage:
+      type: object
+      required: [name, human, state, pass, fail]
+      additionalProperties: false
+      properties:
+        name: {type: string}
+        human: {type: boolean}
+        state: {type: string, enum: [done, now, next, skipped]}
+        pass: {type: integer, minimum: 0}
+        fail: {type: integer, minimum: 0}
+    Run:
+      type: object
+      required: [task, title, lane, pipeline, type, stage, stage_status, awaiting_human, retries, epic, worktree, umbrella, subtasks, updated, stages, needs_you, supervisor]
+      additionalProperties: false
+      properties:
+        task: {type: string}
+        title: {type: string}
+        lane: {type: string}
+        pipeline: {type: string}
+        type: {type: string}
+        stage: {type: string}
+        stage_status: {type: string}
+        awaiting_human: {type: string}
+        retries: {type: integer, minimum: 0}
+        epic: {type: string}
+        worktree: {type: string}
+        umbrella: {type: boolean}
+        subtasks:
+          type: array
+          items: {$ref: "#/components/schemas/TaskRef"}
+        updated: {$ref: "#/components/schemas/Timestamp"}
+        stages:
+          type: array
+          items: {$ref: "#/components/schemas/Stage"}
+        needs_you:
+          type: [object, "null"]
+          required: [kind, since, reason]
+          additionalProperties: false
+          properties:
+            kind: {type: string}
+            since: {$ref: "#/components/schemas/Timestamp"}
+            reason: {type: string}
+        supervisor:
+          type: [object, "null"]
+          required: [label, seen]
+          additionalProperties: false
+          properties:
+            label: {type: string}
+            seen: {$ref: "#/components/schemas/Timestamp"}
+    TaskSummary:
+      type: object
+      required: [id, title, type, priority, epic, spec, assignee, folder, created, completed, blocked_on, superseded_by, depends_on]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        title: {type: string}
+        type: {type: string}
+        priority: {type: string}
+        epic: {type: string}
+        spec: {type: string}
+        assignee: {type: string}
+        folder: {type: string, enum: [backlog, active, done]}
+        created: {$ref: "#/components/schemas/Timestamp"}
+        completed: {$ref: "#/components/schemas/Timestamp"}
+        blocked_on: {type: string}
+        superseded_by: {type: string}
+        depends_on:
+          type: array
+          items: {$ref: "#/components/schemas/TaskRef"}
+    TaskDetail:
+      type: object
+      required: [id, title, type, priority, epic, spec, assignee, folder, created, completed, blocked_on, superseded_by, depends_on, phase, repo, umbrella, subtasks, dependents, body, body_truncated, run, stages, events, events_truncated, gate_runs, gate_failures, rejections, handoff, memory_stamped_at]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        title: {type: string}
+        type: {type: string}
+        priority: {type: string}
+        epic: {type: string}
+        spec: {type: string}
+        assignee: {type: string}
+        folder: {type: string, enum: [backlog, active, done]}
+        created: {$ref: "#/components/schemas/Timestamp"}
+        completed: {$ref: "#/components/schemas/Timestamp"}
+        blocked_on: {type: string}
+        superseded_by: {type: string}
+        depends_on:
+          type: array
+          items: {$ref: "#/components/schemas/TaskRef"}
+        phase: {type: string}
+        repo: {type: string}
+        umbrella: {type: boolean}
+        subtasks:
+          type: array
+          items: {$ref: "#/components/schemas/TaskRef"}
+        dependents:
+          type: array
+          items: {$ref: "#/components/schemas/TaskRef"}
+        body: {type: string}
+        body_truncated: {type: boolean}
+        run:
+          oneOf:
+            - {$ref: "#/components/schemas/Run"}
+            - {type: "null"}
+        stages:
+          type: array
+          items: {$ref: "#/components/schemas/Stage"}
+        events:
+          type: array
+          items: {$ref: "#/components/schemas/Event"}
+        events_truncated: {type: boolean}
+        gate_runs: {type: integer, minimum: 0}
+        gate_failures: {type: integer, minimum: 0}
+        rejections: {type: integer, minimum: 0}
+        handoff:
+          type: [object, "null"]
+          required: [valid, problems]
+          additionalProperties: false
+          properties:
+            valid: {type: boolean}
+            problems:
+              type: array
+              items: {type: string}
+        memory_stamped_at:
+          type: [string, "null"]
+          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$'
+    Epic:
+      type: object
+      required: [id, title, status, tasks]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        title: {type: string}
+        status: {type: string}
+        tasks:
+          type: array
+          items: {$ref: "#/components/schemas/TaskRef"}
+    Event:
+      type: object
+      required: [id, at, lane, task, pipeline, kind, stage, from_stage, outcome, via, detail]
+      additionalProperties: false
+      properties:
+        id: {type: integer}
+        at: {$ref: "#/components/schemas/Timestamp"}
+        lane: {type: string}
+        task: {type: string}
+        pipeline: {type: string}
+        kind: {type: string}
+        stage: {type: string}
+        from_stage: {type: string}
+        outcome: {type: string}
+        via: {type: string}
+        detail:
+          description: Only these keys, the same filter the WebSocket events.appended rows use.
+          type: object
+          additionalProperties: false
+          properties:
+            reason: {type: string}
+            duration_ms: {type: number}
+            exit: {type: [integer, "null"]}
+            cmd: {type: string}
+    Metrics:
+      type: object
+      required: [span, events_total, kinds, gates, slowest, dwell, per_day, rejections, merges_total, lead_time_s]
+      additionalProperties: false
+      properties:
+        span:
+          description: First and last event time in the window as first/last, empty without events.
+          type: string
+        events_total: {type: integer, minimum: 0}
+        kinds:
+          type: object
+          additionalProperties: {type: integer}
+        gates:
+          type: array
+          items:
+            type: object
+            required: [stage, runs, failures, median_ms, p90_ms, max_ms]
+            additionalProperties: false
+            properties:
+              stage: {type: string}
+              runs: {type: integer}
+              failures: {type: integer}
+              median_ms: {type: number}
+              p90_ms: {type: number}
+              max_ms: {type: number}
+        slowest:
+          type: array
+          items:
+            type: object
+            required: [task, stage, ms, passed, at]
+            additionalProperties: false
+            properties:
+              task: {type: string}
+              stage: {type: string}
+              ms: {type: number}
+              passed: {type: boolean}
+              at: {$ref: "#/components/schemas/Timestamp"}
+        dwell:
+          type: array
+          items:
+            type: object
+            required: [stage, n, median_s, p90_s, max_s]
+            additionalProperties: false
+            properties:
+              stage: {type: string}
+              n: {type: integer}
+              median_s: {type: number}
+              p90_s: {type: number}
+              max_s: {type: number}
+        per_day:
+          type: array
+          items:
+            type: object
+            required: [day, gates, gate_failures, merged, rejected]
+            additionalProperties: false
+            properties:
+              day: {type: string, pattern: '^\d{4}-\d{2}-\d{2}$'}
+              gates: {type: integer}
+              gate_failures: {type: integer}
+              merged: {type: integer}
+              rejected: {type: integer}
+        rejections:
+          type: object
+          required: [total, latest]
+          additionalProperties: false
+          properties:
+            total: {type: integer}
+            latest:
+              type: array
+              items:
+                type: object
+                required: [task, at, from_stage, stage, reason]
+                additionalProperties: false
+                properties:
+                  task: {type: string}
+                  at: {$ref: "#/components/schemas/Timestamp"}
+                  from_stage: {type: string}
+                  stage: {type: string}
+                  reason: {type: string}
+        merges_total: {type: integer}
+        lead_time_s: {type: [number, "null"]}
+    Lesson:
+      type: object
+      required: [kind, id, signature, trigger, what, why, fix, area, task, agent, retired, created]
+      additionalProperties: false
+      properties:
+        kind: {const: lesson}
+        id: {type: integer}
+        signature: {type: string}
+        trigger: {type: string}
+        what: {type: string}
+        why: {type: string}
+        fix: {type: string}
+        area: {type: string}
+        task: {type: string}
+        agent: {type: string}
+        retired: {type: boolean}
+        created: {$ref: "#/components/schemas/Timestamp"}
+    Pattern:
+      type: object
+      required: [kind, id, name, use_when, body, task, created]
+      additionalProperties: false
+      properties:
+        kind: {const: pattern}
+        id: {type: integer}
+        name: {type: string}
+        use_when: {type: string}
+        body: {type: string}
+        task: {type: string}
+        created: {$ref: "#/components/schemas/Timestamp"}
+    Module:
+      type: object
+      required: [kind, id, path, responsibility, symbols, notes, updated]
+      additionalProperties: false
+      properties:
+        kind: {const: module}
+        id: {type: integer}
+        path: {type: string}
+        responsibility: {type: string}
+        symbols: {type: string}
+        notes: {type: string}
+        updated: {$ref: "#/components/schemas/Timestamp"}
+    MemoryStats:
+      type: object
+      required: [db_bytes, wal_bytes, counts, growth, by_agent, by_area, stamps, injection]
+      additionalProperties: false
+      properties:
+        db_bytes: {type: integer, minimum: 0}
+        wal_bytes: {type: integer, minimum: 0}
+        counts:
+          type: object
+          required: [lesson, pattern, module]
+          additionalProperties: false
+          properties:
+            lesson: {type: integer, minimum: 0}
+            pattern: {type: integer, minimum: 0}
+            module: {type: integer, minimum: 0}
+        growth:
+          type: array
+          items:
+            type: object
+            required: [day, rows]
+            additionalProperties: false
+            properties:
+              day: {type: string, pattern: '^\d{4}-\d{2}-\d{2}$'}
+              rows: {type: integer, minimum: 0}
+        by_agent:
+          type: object
+          additionalProperties: {type: integer}
+        by_area:
+          type: object
+          additionalProperties: {type: integer}
+        stamps:
+          type: array
+          items:
+            type: object
+            required: [task, at]
+            additionalProperties: false
+            properties:
+              task: {type: string}
+              at: {$ref: "#/components/schemas/Timestamp"}
+        injection:
+          type: object
+          required: [budget_bytes, active_tasks, profiles]
+          additionalProperties: false
+          properties:
+            budget_bytes: {type: integer, minimum: 1}
+            active_tasks:
+              type: array
+              items: {type: string}
+            profiles:
+              type: array
+              items:
+                type: object
+                required: [matcher, kinds, limit, matched, shown, bytes]
+                additionalProperties: false
+                properties:
+                  matcher: {type: string}
+                  kinds:
+                    type: array
+                    items: {type: string}
+                  limit: {type: integer}
+                  matched: {type: integer, minimum: 0}
+                  shown: {type: integer, minimum: 0}
+                  bytes: {type: integer, minimum: 0}
+    Graph:
+      type: object
+      required: [nodes, edges]
+      additionalProperties: false
+      properties:
+        nodes:
+          type: array
+          items:
+            type: object
+            required: [id, kind, label, weight]
+            additionalProperties: false
+            properties:
+              id: {type: string}
+              kind: {type: string}
+              label: {type: string}
+              weight: {type: integer, minimum: 0}
+        edges:
+          type: array
+          items:
+            type: object
+            required: [source, target, kind, weight]
+            additionalProperties: false
+            properties:
+              source: {type: string}
+              target: {type: string}
+              kind: {type: string}
+              weight: {type: integer, minimum: 0}
+    CodeIndex:
+      type: object
+      required: [key, path, db_bytes, last_sync, supported, files, symbols, edges]
+      additionalProperties: false
+      properties:
+        key: {type: string}
+        path: {type: string}
+        db_bytes: {type: integer, minimum: 0}
+        last_sync: {$ref: "#/components/schemas/Timestamp"}
+        supported: {type: boolean}
+        files: {type: integer, minimum: 0}
+        symbols: {type: integer, minimum: 0}
+        edges: {type: integer, minimum: 0}
+    Harness:
+      type: object
+      required: [plugin, agents, rules, skills, hooks]
+      additionalProperties: false
+      properties:
+        plugin:
+          type: object
+          required: [name, version, root, install]
+          additionalProperties: false
+          properties:
+            name: {type: string}
+            version: {type: string}
+            root: {type: string}
+            install: {type: string, enum: [directory, cache]}
+        agents:
+          type: array
+          items:
+            type: object
+            required: [name, description, department, profile, model, tools, rules, skills]
+            additionalProperties: false
+            properties:
+              name: {type: string}
+              description: {type: string}
+              department: {type: string}
+              profile: {type: string}
+              model: {type: string}
+              tools:
+                type: array
+                items: {type: string}
+              rules:
+                type: array
+                items: {type: string}
+              skills:
+                type: array
+                items: {type: string}
+        rules:
+          type: array
+          items:
+            type: object
+            required: [name, bytes, delivery, agents]
+            additionalProperties: false
+            properties:
+              name: {type: string}
+              bytes: {type: integer, minimum: 0}
+              delivery: {type: string, enum: [core, main-thread, targeted, unused]}
+              agents:
+                type: array
+                items: {type: string}
+        skills:
+          type: array
+          items:
+            type: object
+            required: [name, description, source, command, user_only, preloaded_by]
+            additionalProperties: false
+            properties:
+              name: {type: string}
+              description: {type: string}
+              source: {type: string, enum: [plugin, project]}
+              command: {type: string}
+              user_only: {type: boolean}
+              preloaded_by:
+                type: array
+                items: {type: string}
+        hooks:
+          type: array
+          items:
+            type: object
+            required: [source, event, matcher, command, script, script_exists, timeout]
+            additionalProperties: false
+            properties:
+              source: {type: string, enum: [plugin, settings]}
+              event: {type: string}
+              matcher: {type: string}
+              command: {type: string}
+              script: {type: string}
+              script_exists: {type: boolean}
+              timeout: {type: [number, "null"]}
+    Handoff:
+      type: object
+      required: [task, title, author, date, bytes, valid]
+      additionalProperties: false
+      properties:
+        task: {type: string}
+        title: {type: string}
+        author: {type: string}
+        date: {type: string}
+        bytes: {type: integer, minimum: 0}
+        valid: {type: boolean}
+    HandoffDoc:
+      type: object
+      required: [task, title, author, date, bytes, valid, body, problems]
+      additionalProperties: false
+      properties:
+        task: {type: string}
+        title: {type: string}
+        author: {type: string}
+        date: {type: string}
+        bytes: {type: integer, minimum: 0}
+        valid: {type: boolean}
+        body: {type: string}
+        problems:
+          type: array
+          items: {type: string}
+    Status:
+      type: object
+      required: [project, plugin_version, protocol, read_only, workflow, lanes, worktrees, supervisor, debt, counts]
+      additionalProperties: false
+      properties:
+        project: {type: string}
+        plugin_version: {type: string}
+        protocol: {const: 1}
+        read_only: {const: true}
+        workflow:
+          type: object
+          required: [mode, push_needs_approval]
+          additionalProperties: false
+          properties:
+            mode: {type: string, enum: [pr, solo]}
+            push_needs_approval: {type: boolean}
+        lanes:
+          type: array
+          items:
+            type: object
+            required: [name, repo, mode, approvals, swarm]
+            additionalProperties: false
+            properties:
+              name: {type: string}
+              repo: {type: string}
+              mode: {type: string}
+              approvals: {type: string, enum: [manual, assisted, auto]}
+              swarm: {type: boolean}
+        worktrees:
+          type: object
+          required: [enabled, max_parallel]
+          additionalProperties: false
+          properties:
+            enabled: {type: boolean}
+            max_parallel: {type: integer, minimum: 1}
+        supervisor:
+          type: object
+          required: [state, runs]
+          additionalProperties: false
+          properties:
+            state: {type: string}
+            runs: {type: integer, minimum: 0}
+        debt:
+          type: object
+          required: [handoffs, memory]
+          additionalProperties: false
+          properties:
+            handoffs:
+              type: array
+              items:
+                type: object
+                required: [task, reason]
+                additionalProperties: false
+                properties:
+                  task: {type: string}
+                  reason: {type: string}
+            memory:
+              type: array
+              items:
+                type: object
+                required: [task, reason]
+                additionalProperties: false
+                properties:
+                  task: {type: string}
+                  reason: {type: string}
+        counts:
+          type: object
+          required: [backlog, active, done, hidden_superseded]
+          additionalProperties: false
+          properties:
+            backlog: {type: integer, minimum: 0}
+            active: {type: integer, minimum: 0}
+            done: {type: integer, minimum: 0}
+            hidden_superseded: {type: integer, minimum: 0}

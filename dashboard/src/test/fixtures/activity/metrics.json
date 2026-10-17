@@ -1,0 +1,49 @@
+{
+  "route": "/api/v1/metrics?days=14",
+  "body": {
+    "data": {
+      "span": "2026-10-10T08:00:00Z/2026-10-16T09:14:05Z",
+      "events_total": 96,
+      "kinds": { "gate": 40, "merged": 3, "rejected": 2, "transition": 36, "registered": 15 },
+      "gates": [
+        { "stage": "implement", "runs": 14, "failures": 3, "median_ms": 4200, "p90_ms": 9800, "max_ms": 12100 },
+        { "stage": "test", "runs": 14, "failures": 2, "median_ms": 38000, "p90_ms": 61000, "max_ms": 75000 },
+        { "stage": "review", "runs": 12, "failures": 1, "median_ms": 2600, "p90_ms": 5200, "max_ms": 8420 }
+      ],
+      "slowest": [
+        { "task": "task-0140", "stage": "test", "ms": 75000, "passed": true, "at": "2026-10-15T14:02:11Z" },
+        { "task": "task-0136", "stage": "test", "ms": 61000, "passed": false, "at": "2026-10-16T08:40:30Z" }
+      ],
+      "dwell": [
+        { "stage": "implement", "n": 9, "median_s": 5400, "p90_s": 14400, "max_s": 21600 },
+        { "stage": "review", "n": 8, "median_s": 900, "p90_s": 3600, "max_s": 7200 }
+      ],
+      "per_day": [
+        { "day": "2026-10-14", "gates": 12, "gate_failures": 2, "merged": 1, "rejected": 0 },
+        { "day": "2026-10-15", "gates": 18, "gate_failures": 3, "merged": 1, "rejected": 1 },
+        { "day": "2026-10-16", "gates": 10, "gate_failures": 1, "merged": 1, "rejected": 1 }
+      ],
+      "rejections": {
+        "total": 2,
+        "latest": [
+          {
+            "task": "task-0136",
+            "at": "2026-10-16T09:20:00Z",
+            "from_stage": "ready",
+            "stage": "implement",
+            "reason": "The diff drops the empty state of the Board."
+          },
+          {
+            "task": "task-0133",
+            "at": "2026-10-15T16:05:00Z",
+            "from_stage": "ready",
+            "stage": "implement",
+            "reason": ""
+          }
+        ]
+      },
+      "merges_total": 3,
+      "lead_time_s": 93600
+    }
+  }
+}

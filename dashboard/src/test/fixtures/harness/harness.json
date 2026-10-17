@@ -1,0 +1,33 @@
+{
+  "route": "/api/v1/harness",
+  "body": {
+    "data": {
+      "plugin": { "name": "agentry", "version": "0.2.0", "root": "C:/Users/dev/.claude/plugins/agentry", "install": "directory" },
+      "agents": [
+        { "name": "architect", "description": "Plans features and API contracts before any code is written.", "department": "Technical", "profile": "readonly", "model": "opus", "tools": ["Read", "Grep"], "rules": ["pipeline.md", "code-retrieval.md"], "skills": ["api-design"] },
+        { "name": "senior-backend-dev", "description": "Implements backend features and fixes bugs.", "department": "Technical", "profile": "dev", "model": "sonnet", "tools": ["Read", "Edit", "Bash"], "rules": ["coding-style.md", "testing.md"], "skills": ["bug-fix", "feature-scaffold"] },
+        { "name": "technical-writer", "description": "Writes documentation and the changelog.", "department": "Support", "profile": "docs", "model": "sonnet", "tools": ["Read", "Write"], "rules": [], "skills": [] },
+        { "name": "scout", "description": "", "department": "", "profile": "", "model": "haiku", "tools": [], "rules": [], "skills": [] }
+      ],
+      "rules": [
+        { "name": "quality-standard.md", "bytes": 18432, "delivery": "core", "agents": [] },
+        { "name": "pipeline.md", "bytes": 12288, "delivery": "core", "agents": ["architect"] },
+        { "name": "orchestration.md", "bytes": 52514, "delivery": "main-thread", "agents": [] },
+        { "name": "coding-style.md", "bytes": 9216, "delivery": "targeted", "agents": ["senior-backend-dev"] },
+        { "name": "testing.md", "bytes": 7168, "delivery": "targeted", "agents": ["senior-backend-dev", "qa-engineer"] },
+        { "name": "legacy-notes.md", "bytes": 512, "delivery": "unused", "agents": [] }
+      ],
+      "skills": [
+        { "name": "pipeline-show", "description": "Show the state of the pipeline and the runs waiting for the User.", "source": "plugin", "command": "/agentry:pipeline-show", "user_only": false, "preloaded_by": [] },
+        { "name": "bug-fix", "description": "Structured RED-GREEN debugging workflow.", "source": "plugin", "command": "/agentry:bug-fix", "user_only": false, "preloaded_by": ["senior-backend-dev", "senior-frontend-dev"] },
+        { "name": "verify", "description": "Run the quality gate of the project.", "source": "project", "command": "/verify", "user_only": true, "preloaded_by": [] }
+      ],
+      "hooks": [
+        { "source": "plugin", "event": "SessionStart", "matcher": "", "command": "python \"${CLAUDE_PLUGIN_ROOT}/tools/hooks/session_start.py\"", "script": "tools/hooks/session_start.py", "script_exists": true, "timeout": 60 },
+        { "source": "plugin", "event": "PreToolUse", "matcher": "Edit|Write|MultiEdit", "command": "python \"${CLAUDE_PLUGIN_ROOT}/tools/pipeline/pretool_gate.py\"", "script": "tools/pipeline/pretool_gate.py", "script_exists": true, "timeout": 30 },
+        { "source": "plugin", "event": "PreToolUse", "matcher": "mcp__xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "command": "python \"${CLAUDE_PLUGIN_ROOT}/tools/hooks/removed_hook.py\"", "script": "tools/hooks/removed_hook.py", "script_exists": false, "timeout": null },
+        { "source": "project", "event": "Stop", "matcher": "", "command": "echo done", "script": "", "script_exists": true, "timeout": null }
+      ]
+    }
+  }
+}

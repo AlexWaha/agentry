@@ -200,9 +200,9 @@ allowed-tools: Read, Glob, Grep
 3. Print the entry. Do not edit CHANGELOG.md.
 ```
 
-Put your own skills in your project's `.claude/skills/`, for example `.claude/skills/changelog-draft/SKILL.md`. The plugin ships 42 skills in `plugin/skills/`, and the plugin payload is replaced when you upgrade (`docs/technical/plugin-install-2.1.299.md`, lines 150-151), so a file you add there does not survive. Start a new session and type `/changelog-draft`.
+Put your own skills in your project's `.claude/skills/`, for example `.claude/skills/changelog-draft/SKILL.md`. The plugin ships 43 skills in `plugin/skills/`, and the plugin payload is replaced when you upgrade (`docs/technical/plugin-install-2.1.299.md`, lines 150-151), so a file you add there does not survive. Start a new session and type `/changelog-draft`.
 
-In a fork, a new skill directory turns `test_readme_counts_match_the_directories` in `plugin/tools/tests/test_verify_skill.py` red (static reading, lines 85-92). The directory count goes from 43 to 44, and `plugin/skills/README.md` line 10 says "listing shows 43". Update the README counts to match.
+In a fork, a new skill directory turns `test_readme_counts_match_the_directories` in `plugin/tools/tests/test_verify_skill.py` red (static reading, lines 85-92). The directory count goes from 44 to 45, and `plugin/skills/README.md` line 10 says "listing shows 44". Update the README counts to match.
 
 Agentry keeps one skill in the project on purpose: `verify`. Claude Code calls a skill named `verify` before it commits. In probe P3, with `verify` as a plugin skill, that call fired nondeterministically in headless mode, so the default is to keep it at `.claude/skills/verify`, where it delegates to the plugin's `health-check` (`docs/technical/plugin-layout.md`, "The verify skill").
 

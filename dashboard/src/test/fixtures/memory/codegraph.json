@@ -1,0 +1,27 @@
+{
+  "route": "/api/v1/codegraph",
+  "body": {
+    "data": [
+      {
+        "key": "root",
+        "path": ".codegraph",
+        "db_bytes": 2097152,
+        "last_sync": "2026-10-16T08:15:00Z",
+        "supported": true,
+        "files": 120,
+        "symbols": 940,
+        "edges": 2310
+      },
+      {
+        "key": "agentry",
+        "path": "src/.codegraph",
+        "db_bytes": 512,
+        "last_sync": "2026-10-14T10:00:00Z",
+        "supported": false,
+        "files": 0,
+        "symbols": 0,
+        "edges": 0
+      }
+    ]
+  }
+}

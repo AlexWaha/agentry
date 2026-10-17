@@ -1,0 +1,63 @@
+/*
+ * Layer 1: raw primitives. The only file that holds literal colours, sizes and font stacks.
+ * Nothing outside styles/ reads these directly; theme.css maps them to semantic roles.
+ */
+:root {
+  /* light surfaces and text */
+  --raw-white: #ffffff;
+  --raw-gray-25: #f7f7f8;
+  --raw-gray-50: #f3f3f5;
+  --raw-gray-100: #e6e6ea;
+  --raw-gray-200: #d2d2d8;
+  --raw-gray-control: #85858f;
+  --raw-gray-500: #62626e;
+  --raw-gray-700: #3d3d46;
+  --raw-gray-900: #16161a;
+
+  /* dark surfaces and text */
+  --raw-ink-950: #0a0a0b;
+  --raw-ink-900: #111113;
+  --raw-ink-850: #17171a;
+  --raw-ink-800: #242428;
+  --raw-ink-700: #34343a;
+  --raw-ink-control: #6a6a74;
+  --raw-ink-400: #8a8a93;
+  --raw-ink-200: #b4b4bb;
+  --raw-ink-100: #ececee;
+
+  /* "Needs you" orange (the --attention role) */
+  --raw-orange-dark: #f4a261;
+  --raw-orange-light: #b4490a;
+  --raw-orange-dark-rgb: 244 162 97;
+  --raw-orange-light-rgb: 180 73 10;
+  --raw-on-orange-dark: #1a1005;
+
+  /* logo artwork: thin metal bezel, orange push-button */
+  --raw-logo-bezel: #999999;
+  --raw-logo-shadow: #b74309;
+  --raw-logo-face: #e8590c;
+
+  /* status palette: backlog gray, active blue, done green */
+  --raw-backlog-dark-fg: #a8a8b2;
+  --raw-backlog-dark-edge: #71717a;
+  --raw-backlog-light-fg: #52525b;
+  --raw-backlog-light-edge: #8a8a94;
+  --raw-active-dark-fg: #6ea8fe;
+  --raw-active-dark-edge: #3b82f6;
+  --raw-active-light-fg: #1d4ed8;
+  --raw-active-light-edge: #2563eb;
+  --raw-done-dark-fg: #4cc38a;
+  --raw-done-dark-edge: #22a06b;
+  --raw-done-light-fg: #166534;
+  --raw-done-light-edge: #16a34a;
+
+  /* shape and type */
+  --raw-radius: 8px;
+  --raw-font-sans: Inter, "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --raw-font-mono: ui-monospace, "JetBrains Mono", "Cascadia Mono", "SF Mono", Consolas, monospace;
+
+  /* layout metrics */
+  --raw-sidebar-width: 236px;
+  --raw-content-max: 1180px;
+  --raw-topbar-height: 48px;
+}

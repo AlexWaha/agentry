@@ -1,0 +1,131 @@
+/*
+ * Layer 2: semantic roles. Components use only these (as Tailwind utilities such as bg-card or
+ * text-muted-foreground), never a raw colour. Light is the default; the .dark class on <html> switches
+ * every role. The class is set before first paint by public/theme-init.js and kept by lib/theme.ts.
+ *
+ * --attention is the "Needs you" orange. It is referenced only by the Needs-you components and this folder
+ * (a unit test scans the source). shadcn's --accent stays a neutral hover surface.
+ */
+:root {
+  --background: var(--raw-white);
+  --sidebar: var(--raw-gray-25);
+  --card: var(--raw-white);
+  --muted: var(--raw-gray-50);
+  --foreground: var(--raw-gray-900);
+  --secondary-foreground: var(--raw-gray-700);
+  --muted-foreground: var(--raw-gray-500);
+  --border: var(--raw-gray-100);
+  --border-strong: var(--raw-gray-200);
+  --border-control: var(--raw-gray-control);
+  --accent: var(--raw-gray-50);
+  --accent-foreground: var(--raw-gray-900);
+  --primary: var(--raw-gray-900);
+  --primary-foreground: var(--raw-white);
+  --ring: var(--raw-active-light-edge);
+  --card-shadow: 0 1px 2px rgb(20 20 30 / 0.05);
+
+  --on-status: var(--raw-white);
+
+  --attention: var(--raw-orange-light);
+  --attention-bg: rgb(var(--raw-orange-light-rgb) / 0.09);
+  --attention-line: rgb(var(--raw-orange-light-rgb) / 0.35);
+  --on-attention: var(--raw-white);
+
+  --status-backlog-fg: var(--raw-backlog-light-fg);
+  --status-backlog-edge: var(--raw-backlog-light-edge);
+  --status-backlog-bg: rgb(113 113 122 / 0.06);
+  --status-active-fg: var(--raw-active-light-fg);
+  --status-active-edge: var(--raw-active-light-edge);
+  --status-active-bg: rgb(37 99 235 / 0.06);
+  --status-done-fg: var(--raw-done-light-fg);
+  --status-done-edge: var(--raw-done-light-edge);
+  --status-done-bg: rgb(22 163 74 / 0.07);
+
+  color-scheme: light;
+}
+
+.dark {
+  --background: var(--raw-ink-950);
+  --sidebar: var(--raw-ink-950);
+  --card: var(--raw-ink-900);
+  --muted: var(--raw-ink-850);
+  --foreground: var(--raw-ink-100);
+  --secondary-foreground: var(--raw-ink-200);
+  --muted-foreground: var(--raw-ink-400);
+  --border: var(--raw-ink-800);
+  --border-strong: var(--raw-ink-700);
+  --border-control: var(--raw-ink-control);
+  --accent: var(--raw-ink-850);
+  --accent-foreground: var(--raw-ink-100);
+  --primary: var(--raw-ink-100);
+  --primary-foreground: var(--raw-ink-950);
+  --ring: var(--raw-active-dark-edge);
+  --card-shadow: none;
+
+  --attention: var(--raw-orange-dark);
+  --attention-bg: rgb(var(--raw-orange-dark-rgb) / 0.13);
+  --attention-line: rgb(var(--raw-orange-dark-rgb) / 0.38);
+  --on-attention: var(--raw-on-orange-dark);
+
+  --status-backlog-fg: var(--raw-backlog-dark-fg);
+  --status-backlog-edge: var(--raw-backlog-dark-edge);
+  --status-backlog-bg: rgb(161 161 170 / 0.07);
+  --status-active-fg: var(--raw-active-dark-fg);
+  --status-active-edge: var(--raw-active-dark-edge);
+  --status-active-bg: rgb(59 130 246 / 0.1);
+  --status-done-fg: var(--raw-done-dark-fg);
+  --status-done-edge: var(--raw-done-dark-edge);
+  --status-done-bg: rgb(76 195 138 / 0.09);
+
+  color-scheme: dark;
+}
+
+/* Tailwind utility names for the roles above: bg-card, text-muted-foreground, border-border-strong, ... */
+@theme inline {
+  --color-background: var(--background);
+  --color-sidebar: var(--sidebar);
+  --color-card: var(--card);
+  --color-muted: var(--muted);
+  --color-foreground: var(--foreground);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-border-control: var(--border-control);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-ring: var(--ring);
+
+  --color-on-status: var(--on-status);
+
+  --color-attention: var(--attention);
+  --color-attention-bg: var(--attention-bg);
+  --color-attention-line: var(--attention-line);
+  --color-on-attention: var(--on-attention);
+
+  --color-status-backlog-fg: var(--status-backlog-fg);
+  --color-status-backlog-edge: var(--status-backlog-edge);
+  --color-status-backlog-bg: var(--status-backlog-bg);
+  --color-status-active-fg: var(--status-active-fg);
+  --color-status-active-edge: var(--status-active-edge);
+  --color-status-active-bg: var(--status-active-bg);
+  --color-status-done-fg: var(--status-done-fg);
+  --color-status-done-edge: var(--status-done-edge);
+  --color-status-done-bg: var(--status-done-bg);
+
+  --color-logo-bezel: var(--raw-logo-bezel);
+  --color-logo-shadow: var(--raw-logo-shadow);
+  --color-logo-face: var(--raw-logo-face);
+
+  --font-sans: var(--raw-font-sans);
+  --font-mono: var(--raw-font-mono);
+  --radius-lg: var(--raw-radius);
+  --shadow-card: var(--card-shadow);
+}
+
+/* The shell switches from the sidebar to the top bar below this width (the 768px evidence viewport sits under it). */
+@theme {
+  --breakpoint-shell: 52rem;
+}

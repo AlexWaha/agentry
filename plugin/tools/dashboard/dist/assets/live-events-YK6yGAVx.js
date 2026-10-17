@@ -1,0 +1,1 @@
+function e(e,t){return!(t.task&&!e.task.toLowerCase().includes(t.task.toLowerCase())||t.kind&&e.kind!==t.kind||t.result&&e.outcome!==t.result)}function t(t,n,r){let i=(n.offset??0)===0,{data:a,meta:o}=t;for(let t of r)t.id<=o.latest_id||!e(t,n)||(o={...o,total:o.total+1,latest_id:t.id},i&&(a=[t,...a].slice(0,o.limit)));return o===t.meta?t:{data:a,meta:o}}export{t};

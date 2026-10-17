@@ -1,0 +1,34 @@
+{
+  "route": "/api/v1/runs",
+  "body": {
+    "data": [
+      {
+        "task": "task-0001",
+        "title": "Add the login page",
+        "lane": "default",
+        "pipeline": "build",
+        "type": "feature",
+        "stage": "ready",
+        "stage_status": "ok",
+        "awaiting_human": "commit",
+        "retries": 0,
+        "epic": "epic-0001",
+        "worktree": "",
+        "umbrella": false,
+        "subtasks": [{ "id": "task-0002", "title": "Subtask", "folder": "active" }],
+        "updated": "2026-10-16T09:00:00Z",
+        "stages": [
+          { "name": "plan", "human": false, "state": "done", "pass": 1, "fail": 0 },
+          { "name": "plan-approval", "human": true, "state": "done", "pass": 0, "fail": 0 },
+          { "name": "implement", "human": false, "state": "done", "pass": 1, "fail": 0 },
+          { "name": "test", "human": false, "state": "done", "pass": 2, "fail": 1 },
+          { "name": "review", "human": false, "state": "done", "pass": 1, "fail": 0 },
+          { "name": "ready", "human": true, "state": "now", "pass": 0, "fail": 0 },
+          { "name": "done", "human": false, "state": "next", "pass": 0, "fail": 0 }
+        ],
+        "needs_you": { "kind": "commit", "since": "2026-10-16T09:00:00Z", "reason": "Commit approval" },
+        "supervisor": { "label": "task-0001 supervisor", "seen": "2026-10-16T09:01:00Z" }
+      }
+    ]
+  }
+}

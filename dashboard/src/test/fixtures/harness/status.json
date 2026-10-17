@@ -1,0 +1,26 @@
+{
+  "route": "/api/v1/status",
+  "body": {
+    "data": {
+      "project": "demo-project",
+      "plugin_version": "0.2.0",
+      "protocol": 1,
+      "read_only": true,
+      "workflow": { "mode": "solo", "push_needs_approval": true },
+      "lanes": [
+        { "name": "default", "repo": "agentry", "mode": "build", "approvals": "manual", "swarm": false },
+        { "name": "fix", "repo": "", "mode": "plan", "approvals": "auto", "swarm": true }
+      ],
+      "worktrees": { "enabled": true, "max_parallel": 3 },
+      "supervisor": { "state": "running", "runs": 2 },
+      "debt": {
+        "handoffs": [
+          { "task": "task-0108", "reason": "no handoff doc at .agentry/tasks/handoffs/task-0108.md" },
+          { "task": "task-0109", "reason": "missing section '## Gotchas and lessons'" }
+        ],
+        "memory": [{ "task": "task-0108", "reason": "memory layers not reviewed after completion" }]
+      },
+      "counts": { "backlog": 3, "active": 1, "done": 20, "hidden_superseded": 2 }
+    }
+  }
+}

@@ -66,11 +66,11 @@ Orange stages are yours. At `plan-approval` you read the plan. At `ready` you re
 | `/pipeline-swarm-on` | Run each epic as a parallel agent swarm |
 | `new-task` skill | Ask Claude to file a task into the backlog |
 
-The plugin ships 42 skills, 16 of them the `/pipeline-*` commands. Full list with examples: [Commands](docs/commands.md).
+The plugin ships 43 skills, 16 of them the `/pipeline-*` commands. Full list with examples: [Commands](docs/commands.md).
 
 ## Architecture
 
-<p align="center"><a href="docs/assets/architecture.png"><img src="docs/assets/architecture.png" alt="Architecture: you talk to the Orchestrator session. The Orchestrator goes through the plugin hooks (PreToolUse, Stop, SubagentStart, SubagentStop) to the pipeline tools (advance.py, approve.py and the gate scripts); the plugin also holds 42 skills and commands. The tools read gates from the .agentry config (pipeline.json, tasks, plans) and record transitions in run.db, events.db and memory.db. The Orchestrator dispatches the 31 agents and rules in your project's .claude folder." width="100%"></a></p>
+<p align="center"><a href="docs/assets/architecture.png"><img src="docs/assets/architecture.png" alt="Architecture: you talk to the Orchestrator session. The Orchestrator goes through the plugin hooks (PreToolUse, Stop, SubagentStart, SubagentStop) to the pipeline tools (advance.py, approve.py and the gate scripts); the plugin also holds 43 skills and commands. The tools read gates from the .agentry config (pipeline.json, tasks, plans) and record transitions in run.db, events.db and memory.db. The Orchestrator dispatches the 31 agents and rules in your project's .claude folder." width="100%"></a></p>
 
 The plugin is installed once and updated on its own schedule. Everything project-specific stays in your repository. Layout and mechanics: [design notes](docs/technical/design-notes.md).
 
@@ -80,6 +80,7 @@ The plugin is installed once and updated on its own schedule. Everything project
 |---|---|
 | [Getting started](docs/getting-started.md) | Install, onboard a project, run a first task |
 | [Commands](docs/commands.md) | Every slash command and skill |
+| [Dashboard](docs/dashboard.md) | Start the read-only local dashboard, how it stays safe, stop and troubleshooting |
 | [Pipeline and approvals](docs/pipeline.md) | Stages, checkpoints, modes, approval levels, swarm, worktrees |
 | [Agents](docs/agents.md) | The roster, when each agent runs, what each may touch |
 | [Configuration](docs/configuration.md) | The `pipeline.json` keys worth changing |

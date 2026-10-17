@@ -593,11 +593,16 @@ def is_paused(run: dict | None) -> bool:
     return (run or {}).get("stage_status") == ST_PAUSED
 
 
-def is_abandoned(task: str) -> bool:
+def is_abandoned(task: str, conn: sqlite3.Connection | None = None) -> bool:
     """True when the User dropped the task (approve.py --abandon). Never raises: a
     missing or unreadable row answers False, the direction in which the debt
-    readers still demand a doc and a stamp."""
-    return _run_row(task).get("stage_status") == ST_ABANDONED
+    readers still demand a doc and a stamp.
+
+    `conn` is the caller's open run-store connection. Given one, this reads through it
+    and never calls connect() (which creates the store and migrates its columns), so a
+    read-only caller - the dashboard - can pass its `mode=ro` connection. Without one
+    it opens the store here, exactly as before."""
+    return _run_row(task, conn).get("stage_status") == ST_ABANDONED
 
 
 def is_parked(run: dict | None) -> bool:
@@ -883,7 +888,7 @@ def move_swarm_subtasks(task: str, conn: sqlite3.Connection | None = None) -> li
     return moved
 
 
-def covering_umbrella(task: str) -> str | None:
+def covering_umbrella(task: str, conn: sqlite3.Connection | None = None) -> str | None:
     """The done umbrella that covers a swarm subtask's handoff doc and memory
     stamp, or None.
 
@@ -901,12 +906,17 @@ def covering_umbrella(task: str) -> str | None:
     abandoned umbrella (task-0122) covers nothing either: abandon leaves the
     approval flags as they were, and work that never merged is documented by no one.
 
+    `conn` is the caller's open run-store connection; given one it is used and left
+    open, and connect() is never called (see is_abandoned).
+
     Never raises: None means "not covered", the safe answer for a debt check."""
     try:
         epic = _head_field(task, "epic")
         if not epic:
             return None
-        conn = connect()
+        own = conn is None
+        if own:
+            conn = connect()
         try:
             rows = conn.execute(
                 "SELECT task, subtasks FROM runs WHERE umbrella = 'true' AND epic = ? "
@@ -914,7 +924,8 @@ def covering_umbrella(task: str) -> str | None:
                 "AND COALESCE(stage_status, '') != ? ORDER BY task",
                 (epic, ST_ABANDONED)).fetchall()
         finally:
-            conn.close()
+            if own:
+                conn.close()
         for umb, subtasks in rows:
             if (umb != task and task_dir(umb) == "done"
                     and task in re.findall(r"task-\d+", subtasks or "")):

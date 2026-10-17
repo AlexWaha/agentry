@@ -1,0 +1,56 @@
+{
+  "route": "/api/v1/epics",
+  "body": {
+    "data": [
+      {
+        "id": "epic-0001",
+        "title": "First epic",
+        "status": "planned",
+        "tasks": [
+          {
+            "id": "task-0101",
+            "title": "Alpha feature",
+            "folder": "backlog"
+          },
+          {
+            "id": "task-0103",
+            "title": "Gamma superseded",
+            "folder": "backlog"
+          },
+          {
+            "id": "task-0104",
+            "title": "Delta in flight",
+            "folder": "active"
+          },
+          {
+            "id": "task-0106",
+            "title": "Zeta done",
+            "folder": "done"
+          }
+        ]
+      },
+      {
+        "id": "epic-0002",
+        "title": "Second epic",
+        "status": "active",
+        "tasks": [
+          {
+            "id": "task-0102",
+            "title": "Beta bugfix",
+            "folder": "backlog"
+          },
+          {
+            "id": "task-0107",
+            "title": "Eta done",
+            "folder": "done"
+          },
+          {
+            "id": "task-0109",
+            "title": "Iota done",
+            "folder": "done"
+          }
+        ]
+      }
+    ]
+  }
+}

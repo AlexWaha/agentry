@@ -1,0 +1,27 @@
+{
+  "route": "/api/v1/graphs/memory",
+  "body": {
+    "data": {
+      "nodes": [
+        { "id": "lesson:1", "kind": "lesson", "label": "alpha-lesson", "weight": 3 },
+        { "id": "task:task-0106", "kind": "task", "label": "task-0106", "weight": 2 },
+        { "id": "agent:senior-backend-dev", "kind": "agent", "label": "senior-backend-dev", "weight": 1 },
+        { "id": "area:hooks", "kind": "area", "label": "hooks", "weight": 2 },
+        { "id": "lesson:2", "kind": "lesson", "label": "beta-lesson", "weight": 3 },
+        { "id": "task:task-0107", "kind": "task", "label": "task-0107", "weight": 1 },
+        { "id": "agent:qa-engineer", "kind": "agent", "label": "qa-engineer", "weight": 1 },
+        { "id": "pattern:1", "kind": "pattern", "label": "pattern-one", "weight": 1 },
+        { "id": "pattern:2", "kind": "pattern", "label": "pattern-two", "weight": 0 }
+      ],
+      "edges": [
+        { "source": "lesson:1", "target": "task:task-0106", "kind": "task", "weight": 1 },
+        { "source": "lesson:1", "target": "agent:senior-backend-dev", "kind": "agent", "weight": 1 },
+        { "source": "lesson:1", "target": "area:hooks", "kind": "area", "weight": 1 },
+        { "source": "lesson:2", "target": "task:task-0107", "kind": "task", "weight": 1 },
+        { "source": "lesson:2", "target": "agent:qa-engineer", "kind": "agent", "weight": 1 },
+        { "source": "lesson:2", "target": "area:hooks", "kind": "area", "weight": 1 },
+        { "source": "pattern:1", "target": "task:task-0106", "kind": "task", "weight": 1 }
+      ]
+    }
+  }
+}

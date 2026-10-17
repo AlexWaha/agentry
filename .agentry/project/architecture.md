@@ -1,9 +1,9 @@
 # Architecture
 
-**Date:** 2026-10-14
-**Author:** technical-writer (task-0052, swarm task-0118; task-0132; task-0038)
+**Date:** 2026-10-16
+**Author:** technical-writer (task-0052, swarm task-0118; task-0132; task-0038), senior-backend-dev (task-0140)
 **Status:** Draft
-**Version:** 2.2
+**Version:** 2.3
 
 Agentry has no application layers (no controllers, services or models) and no
 request cycle. Its architecture is the set of scripts that sit between the
@@ -43,6 +43,7 @@ src/                              # git repository root; commands run here
 │       ├── pipeline/             # stage machine, gates, run state, supervisor
 │       ├── hooks/                # session, rule-injection and notice hooks
 │       ├── memory/               # memory store CLI, injection, sync
+│       ├── dashboard/            # read-only web dashboard server (stdlib) and its committed dist/
 │       ├── setup/                # onboarding, fleet and repo-scan scripts
 │       └── tests/                # unittest suite (one test_*.py per concern)
 ├── .agentry/                     # the project's own work product
@@ -52,6 +53,8 @@ src/                              # git repository root; commands run here
 │   ├── specs/  plans/            # approved specs and per-task plans
 │   ├── memory/                   # memory.db (gitignored)
 │   └── state/                    # run.db and lane files (gitignored, never edited by agents)
+├── dashboard/                    # SPA source (React, Vite): dev only, never in the plugin payload
+├── scripts/                      # dev-time gate wrapper for dashboard/ (dashboard_gate.py)
 ├── docs/                         # memory notes and technical documents
 ├── pyproject.toml                # ruff configuration
 └── README.md
@@ -135,6 +138,25 @@ runs as its own process (a hook or a CLI). There are no packages and no
 | `update.py` | Post-task review gate: distilled rows must exist before the next task registers |
 | `codebase_sync.py` | Detects module-map drift against git heads |
 
+### dashboard/ (read-only web dashboard)
+
+Added by epic-0005 (spec-0002); the folder was approved by the User on 2026-10-16.
+`/agentry:dashboard` starts one `server.py` per project. It binds 127.0.0.1 only, serves the
+committed SPA build from `dist/` and the REST API under `/api/v1` (contract:
+`docs/technical/dashboard-api.yaml`), and pushes changes over `/ws`. Every SQLite store is
+opened `mode=ro`; no module writes anything.
+
+| Module | Responsibility |
+|---|---|
+| `server.py` | Arguments, stable per-project port, per-launch token, Host / Origin / token checks, static serving of `dist/`, routing, JSON envelope, idle exit, signals |
+| `stores.py` | `ro_connect` (the only `sqlite3.connect` in the folder), `store()`, lane discovery, task and epic parsing with a stat-keyed cache, query-string validation, the `ApiError` type, byte caps |
+| `views_pipeline.py` | `/status`, `/runs`, `/tasks`, `/tasks/{id}`, `/epics`, `/events`, `/metrics` |
+| `views_memory.py` | `/memory`, `/memory/stats`, `/graphs/memory`, `/codegraph`, `/codegraph/{key}/graph` |
+| `views_harness.py` | `/harness`, `/handoffs`, `/handoffs/{id}` |
+| `ws.py`, `watch.py` | RFC 6455 handshake, frame codec and client sessions; the 1 s change watcher that feeds them (task-0141) |
+| `dist_manifest.py` | `--write` (run by `npm run build`) and `check()` (server start and the Python suite): one hash algorithm over `dist/` and the `dashboard/` source |
+| `dist/` | The built SPA, committed and marked `binary linguist-generated`; its `manifest.json` is verified at server start |
+
 ### setup/
 
 | Module | Responsibility |
@@ -188,6 +210,13 @@ denial does not depend on what the model remembers.
   read-only `worktree` function never starts a subprocess (hook budget).
 - `pretool_gate.normalize` is the one path normaliser; `agent_gate` re-exports
   it rather than keeping a copy.
+- `dashboard/` reads, it never writes. The harness readers it reuses are an allowlist of
+  pure functions (`state` stage and lane readers, `handoff.owed`, `update.unstamped_done_tasks`,
+  `memory.fts_query`, `inject.render`, ...) enforced by an AST test; the four that used to write
+  take an optional connection so the dashboard hands them its read-only one
+  (`state.is_abandoned` and `covering_umbrella`, `handoff.owed`, `update.unstamped_done_tasks`),
+  and `events._open_existing` opens `mode=ro`. A hook keeps calling them without a connection and
+  behaves as before. `ws.py` never imports `server.py`; the handler passes itself in.
 - Nothing in `plugin/tools/` imports a third-party package. `ruff` is a
   development tool, not a dependency.
 - Tests import the module under test; no module imports from `tests/`.
@@ -199,6 +228,7 @@ denial does not depend on what the model remembers.
 | New stage logic or gate | `plugin/tools/pipeline/` |
 | New hook script | `plugin/tools/hooks/`, then register it in `plugin/hooks/hooks.json` |
 | New memory behaviour | `plugin/tools/memory/` |
+| New dashboard route or view | `plugin/tools/dashboard/` (`views_*.py`, route table in `server.py`, `docs/technical/dashboard-api.yaml`) |
 | Onboarding or rollout script | `plugin/tools/setup/` |
 | Test | `plugin/tools/tests/test_<concern>.py` (use `tmproot.sandbox()`, not `tempfile`) |
 | Stage or gate configuration | `.agentry/pipeline.json`, orchestrator only |
@@ -214,7 +244,7 @@ folder under `plugin/tools/` without User approval.
 |---|---|---|
 | `.agentry/state/run.db` (`run.<lane>.db` per lane) | One row per run (current state only) | No |
 | `.agentry/state/events.db` (one per workspace) | The append-only event journal: transitions, gate runs, approvals, rejections, merges (history; only `supervisor.progress_at` reads it, and only to veto a relaunch; no gate reads it) | No |
-| `.agentry/memory/memory.db` | `lesson`, `pattern` and `module` rows with an FTS5 index | No |
+| `.agentry/memory/memory.db` | `lesson`, `pattern` and `module` rows with an FTS5 index (the dashboard reads it with `mode=ro`) | No |
 | `.agentry/tasks/` | Task files; the folder is the state | Yes |
 | `.agentry/pipeline.json` | Stage machine, gates, repos, lanes, supervisor limits, `worktrees` block | Yes |
 | `<repo path>-wt/<task>` (for example `src-wt/task-0130`) | A task's linked git worktree, created at registration and removed after the merge is confirmed; the relative path is the run row's `worktree` column (written only by `create_run`) | No (outside every repo) |
@@ -249,6 +279,7 @@ the other is a defect in this file.
 
 | Version | Date | Change |
 |---|---|---|
+| 2.3 | 2026-10-16 | `plugin/tools/dashboard/` (read-only web dashboard, epic-0005, task-0140): modules, the read-only dependency rule, the four write-free harness readers. |
 | 2.2 | 2026-10-14 | Plugin layout (task-0038): `tools/` and `skills/` move to `plugin/`, hook registration moves to `plugin/hooks/hooks.json`, project structure and "where new code goes" redrawn, two-roots paragraph added. |
 | 2.1 | 2026-10-13 | Added `worktree.py`, the worktree layout, the import rule and the `worktree` run column (task-0132, epic-0004). |
 | 2.0 | 2026-10-09 | Replaced the onboarding template (Laravel-style layers, module and database sections) with the real Agentry module layout (task-0052). |
