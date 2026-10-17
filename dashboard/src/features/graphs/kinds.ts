@@ -25,3 +25,37 @@ export function kindLabel(kind: string): string {
   const label = t(key);
   return label === key ? kind : label;
 }
+
+/*
+ * The same colours for the canvas drawing, which cannot use Tailwind classes: each kind names the semantic CSS
+ * custom properties it paints with (resolved against the live theme when the canvas is drawn), so the legend
+ * and the canvas agree and the theme switch repaints both.
+ */
+export interface KindPaint {
+  fill: string;
+  stroke: string;
+  strokeWidth: number;
+}
+
+const SOLID_PAINT = { stroke: "--card", strokeWidth: 1 };
+const KIND_PAINT: Record<string, KindPaint> = {
+  lesson: { fill: "--status-active-fg", ...SOLID_PAINT },
+  pattern: { fill: "--status-done-fg", ...SOLID_PAINT },
+  task: { fill: "--muted-foreground", ...SOLID_PAINT },
+  agent: { fill: "--foreground", ...SOLID_PAINT },
+  area: { fill: "--card", stroke: "--foreground", strokeWidth: 2 },
+  module: { fill: "--status-active-fg", ...SOLID_PAINT },
+  file: { fill: "--muted-foreground", ...SOLID_PAINT },
+};
+const FALLBACK_PAINT: KindPaint = { fill: "--muted-foreground", ...SOLID_PAINT };
+
+export const kindPaint = (kind: string): KindPaint => KIND_PAINT[kind] ?? FALLBACK_PAINT;
+
+/** Every custom property the canvas reads, so the palette can be resolved in one pass. */
+export const PAINT_TOKENS: readonly string[] = [
+  ...new Set([...Object.values(KIND_PAINT), FALLBACK_PAINT].flatMap((paint) => [paint.fill, paint.stroke])),
+  "--border-strong",
+  "--ring",
+  "--foreground",
+  "--background",
+];

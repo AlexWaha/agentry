@@ -279,7 +279,7 @@ describe("QA-F16 the Graphs page stays usable on a memory store of NFR-14 size",
 
     await renderApp("/graphs", { routes: { "/api/v1/graphs/memory": ok({ nodes, edges }) } });
     await settle(0);
-    expect(screen.getAllByRole("button", { pressed: false }).length).toBeGreaterThan(0);
+    expect(screen.getByRole("application", { name: /Memory graph, 400 nodes/ })).toBeInTheDocument();
 
     expect(performance.now() - start).toBeLessThan(1500);
   });

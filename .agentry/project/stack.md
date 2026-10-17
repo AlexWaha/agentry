@@ -39,7 +39,7 @@ gates run and this file is the one that is wrong.
 | Testing | `unittest` (stdlib), suite in `plugin/tools/tests/` (4266 tests, 2026-10-16) | ACTIVE |
 | Lint | `ruff` (dev dependency only, version recorded in `pyproject.toml` as 0.16.1), rule set in `pyproject.toml` | ACTIVE |
 | Formatter | None configured. `pyproject.toml` has no `[tool.ruff.format]` section and no gate runs a formatter | n/a |
-| Frontend | The dashboard SPA in `dashboard/`: React 19, strict TypeScript, Vite, TanStack Router and Query, Tailwind v4, shadcn/ui, lucide icons, d3-force (graph feature only). Dev-time Node dependencies for `dashboard/` sources only (spec-0002 D4); the built output is committed under `plugin/tools/dashboard/dist/` and the runtime adds no dependency. Details and exact versions: [Dashboard SPA](#dashboard-spa) | ACTIVE |
+| Frontend | The dashboard SPA in `dashboard/`: React 19, strict TypeScript, Vite, TanStack Router and Query, Tailwind v4, shadcn/ui, lucide icons, d3-force, d3-zoom, d3-drag and d3-selection (graph feature only). Dev-time Node dependencies for `dashboard/` sources only (spec-0002 D4); the built output is committed under `plugin/tools/dashboard/dist/` and the runtime adds no dependency. Details and exact versions: [Dashboard SPA](#dashboard-spa) | ACTIVE |
 | Containers and CI | None. There is no `Dockerfile`, compose file or `.github/` directory | n/a |
 
 ## Token values
@@ -180,7 +180,10 @@ Drop the alias when typescript-eslint supports TypeScript 7.
 | `@tanstack/react-router` | 1.170.45 | runtime (bundled) | Router (code-based routes, browser history) |
 | `class-variance-authority` | 0.7.1 | runtime (bundled) | Component variants (shadcn/ui) |
 | `clsx` | 2.1.1 | runtime (bundled) | Class name joining |
-| `d3-force` | 3.0.0 | runtime (bundled) | Force layout, graph feature only (task-0146) |
+| `d3-drag` | 3.0.0 | runtime (bundled) | Dragging a node, graph feature only (task-0152) |
+| `d3-force` | 3.0.0 | runtime (bundled) | Live force simulation, graph feature only (task-0146, task-0152) |
+| `d3-selection` | 3.0.0 | runtime (bundled) | Selection and pointer helpers d3-zoom and d3-drag work on, graph feature only (task-0152) |
+| `d3-zoom` | 3.0.0 | runtime (bundled) | Wheel, pinch and pan, graph feature only (task-0152) |
 | `lucide-react` | 1.58.0 | runtime (bundled) | Icons |
 | `react` | 19.3.1 | runtime (bundled) | UI library |
 | `react-dom` | 19.3.1 | runtime (bundled) | DOM renderer |
@@ -191,7 +194,10 @@ Drop the alias when typescript-eslint supports TypeScript 7.
 | `@testing-library/jest-dom` | 7.0.1 | dev | DOM matchers |
 | `@testing-library/react` | 16.3.3 | dev | Component tests |
 | `@testing-library/user-event` | 14.6.8 | dev | User input in tests |
+| `@types/d3-drag` | 3.0.7 | dev | Types |
 | `@types/d3-force` | 3.0.10 | dev | Types |
+| `@types/d3-selection` | 3.0.12 | dev | Types |
+| `@types/d3-zoom` | 3.0.9 | dev | Types |
 | `@types/node` | 26.6.5 | dev | Types (Node APIs in tests and config) |
 | `@types/react` | 19.3.0 | dev | Types |
 | `@types/react-dom` | 19.3.0 | dev | Types |

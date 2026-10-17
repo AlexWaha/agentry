@@ -12,6 +12,11 @@ export interface StepperProps {
   blocked?: boolean;
   /** True only when the run waits for the User (`run.needs_you` is not null): the current step then takes the attention color. */
   needsYou?: boolean;
+  /**
+   * True when the run was abandoned (`run.stage_status` is `abandoned`): the server marks every stage done, but
+   * the run did not merge, so the final step reads "Abandoned" and no human step claims "Approved".
+   */
+  abandoned?: boolean;
   className?: string;
 }
 
@@ -20,11 +25,11 @@ export function stageLabel(name: string): string {
   return key ? t(key) : name;
 }
 
-function noteOf(stage: Stage, blocked: boolean, needsYou: boolean): string {
+function noteOf(stage: Stage, blocked: boolean, needsYou: boolean, abandoned: boolean): string {
   if (stage.state === "skipped") return t("shell.stepper.skipped");
   if (stage.state === "now") return blocked ? t("shell.stepper.blocked") : stage.human && needsYou ? t("shell.stepper.waiting") : t("shell.stepper.inProgress");
-  if (stage.state === "done" && stage.human) return t("shell.stepper.approved");
-  if (stage.state === "done" && stage.name === FINAL_STAGE) return t("shell.stepper.merged");
+  if (stage.state === "done" && stage.name === FINAL_STAGE) return t(abandoned ? "shell.stepper.abandoned" : "shell.stepper.merged");
+  if (stage.state === "done" && stage.human && !abandoned) return t("shell.stepper.approved");
   if (stage.pass === 0 && stage.fail === 0) return "";
   return stage.fail > 0 ? t("shell.stepper.gatesWithFailures", { pass: stage.pass, fail: stage.fail }) : t("shell.stepper.gates", { pass: stage.pass });
 }
@@ -36,7 +41,7 @@ function noteOf(stage: Stage, blocked: boolean, needsYou: boolean): string {
  * step carries a text note, so state is never conveyed by color alone. The wrapper pads the scroll area so the
  * 4px ring of the current step is not clipped.
  */
-export function Stepper({ stages, blocked = false, needsYou: waiting = false, className }: StepperProps) {
+export function Stepper({ stages, blocked = false, needsYou: waiting = false, abandoned = false, className }: StepperProps) {
   return (
     <div className={cn("-mx-2 -mt-2 -mb-1.5 overflow-x-auto px-2 pt-2 pb-1.5", className)}>
       <ol className="grid min-w-140 auto-cols-[minmax(78px,1fr)] grid-flow-col">
@@ -44,7 +49,7 @@ export function Stepper({ stages, blocked = false, needsYou: waiting = false, cl
           const now = stage.state === "now";
           const done = stage.state === "done";
           const needsYou = now && waiting;
-          const note = noteOf(stage, blocked, waiting);
+          const note = noteOf(stage, blocked, waiting, abandoned);
           return (
             <li
               key={stage.name}

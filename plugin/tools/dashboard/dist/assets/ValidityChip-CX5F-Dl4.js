@@ -1,0 +1,1 @@
+import{It as e,O as t}from"./ErrorState-DDudCQyX.js";import{t as n}from"./StatusChip-DYsmLSt9.js";var r=e();function i({valid:e}){return e?(0,r.jsx)(n,{status:`done`,label:t(`handoffs.valid`)}):(0,r.jsx)(n,{status:`backlog`,label:t(`handoffs.invalid`)})}export{i as t};

@@ -80,6 +80,16 @@ describe("Stepper", () => {
     expect(within(step("Done")).getByText("Merged")).toBeInTheDocument();
   });
 
+  it("says Abandoned on the final step of an abandoned run and never claims Approved or Merged", () => {
+    const finished = stages.map((s) => ({ ...s, state: "done" as const }));
+    render(<Stepper stages={finished} abandoned />);
+
+    expect(within(step("Done")).getByText("Abandoned")).toBeInTheDocument();
+    expect(screen.queryByText("Merged")).not.toBeInTheDocument();
+    expect(screen.queryByText("Approved")).not.toBeInTheDocument();
+    expect(within(step("Implement")).getByText("2 ok, 1 failed")).toBeInTheDocument();
+  });
+
   it("pads its scroll area so the ring of the current step is not clipped", () => {
     const { container } = render(<Stepper stages={stages} />);
     const scroller = container.firstElementChild as HTMLElement;

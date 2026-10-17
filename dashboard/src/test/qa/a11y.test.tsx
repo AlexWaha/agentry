@@ -1,4 +1,4 @@
-import { fireEvent, screen, within } from "@testing-library/react";
+import { act, fireEvent, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 
@@ -89,11 +89,11 @@ describe("axe on states the page tests leave closed", () => {
     const user = qaUser();
     await renderApp("/graphs");
     await settle(250);
-    const node = screen.getAllByRole("button", { pressed: false }).find((candidate) => candidate.getAttribute("data-kind")) as HTMLElement;
-    node.focus();
+    const canvas = screen.getByRole("application", { name: /Memory graph/ });
+    act(() => canvas.focus());
     await user.keyboard("{Enter}");
 
-    expect(node).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("region", { name: "Selected node" })).toBeInTheDocument();
     await axeClean(document.body);
   });
 

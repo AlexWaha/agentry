@@ -109,7 +109,7 @@ def _supervised(root: Path, lane: str) -> dict:
 
 
 def _stages(pipeline: dict, which: str, task_type: str, current: str, task: str,
-            gates: dict, awaiting_human: str = "") -> list[dict]:
+            gates: dict, awaiting_human: str) -> list[dict]:
     defs = state.stages(pipeline, which or state.BUILD)
     names = [d.get("name", "") for d in defs]
     here = names.index(current) if current in names else -1

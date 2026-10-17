@@ -12,6 +12,7 @@ import { bytes, ms, stamp } from "@/lib/format";
 import { codegraphGraphQuery, codegraphQuery } from "@/lib/queries";
 import type { CodeIndex } from "@/types/api";
 
+import { CODE_GRAPH_LIMIT } from "./config";
 import { GraphPanel } from "./GraphPanel";
 
 const GRAPH_LEVEL = "module";
@@ -75,7 +76,7 @@ function IndexList({ indexes, selected, onSelect }: { indexes: CodeIndex[]; sele
 }
 
 function SelectedGraph({ index }: { index: CodeIndex }) {
-  const graph = useQuery({ ...codegraphGraphQuery(index.key, { level: GRAPH_LEVEL }), enabled: index.supported });
+  const graph = useQuery({ ...codegraphGraphQuery(index.key, { level: GRAPH_LEVEL, limit: CODE_GRAPH_LIMIT }), enabled: index.supported });
   if (!index.supported) return <Unavailable>{t("graphs.code.unsupported")}</Unavailable>;
   if (graph.isError) {
     return (

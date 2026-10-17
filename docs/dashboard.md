@@ -65,7 +65,7 @@ Open the page you need from the sidebar. Each page has a "Learn more" link to th
 | Activity | The journal of transitions, gate results, approvals and merges, newest first, with filters for task, event type and result. New events appear while the page is open |
 | Metrics | Gate duration and failures per stage, the slowest gates, time spent in each stage, per-day activity, recent rejections with their reasons, and lead time, over 7, 14, 30 or 90 days |
 | Memory | Lessons, patterns and modules from the project memory store with search and filters, and a Stats tab with store size, growth and what each subagent profile would be given now |
-| Graphs | A graph of memory rows and the tasks, agents and areas they point to, and a module-level graph of the code index when one exists |
+| Graphs | A live, zoomable graph of memory rows and the tasks, agents and areas they point to, and a module-level graph of the code index when one exists. Scroll to zoom, drag the background to pan, drag a node to move it, hover or click to highlight a node and its neighbours. Keyboard users tab into the graph and use the arrow keys, and every graph has a "Show as table" view |
 | Harness tabs | Agents, Rules, Skills, Hooks and Plugin. The Plugin tab ends with the runtime block: dials per lane, worktrees, supervisor and debt per task |
 | Handoffs | The handoff documents, newest first, with a valid or invalid chip. Open one to read it and see why it is invalid |
 

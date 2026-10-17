@@ -39,6 +39,14 @@ The LICENSE holder, the plugin author in `plugin.json` and the marketplace owner
 - The dashboard front end (`dashboard/`: React, TypeScript, Vite) with its built output
   committed in `plugin/tools/dashboard/dist/`, so a user needs no Node; the server checks
   the build against a manifest before it binds a port (task-0142).
+- The dashboard Graphs page draws the memory graph and the code graph as a live force
+  simulation on a canvas, as Obsidian does: wheel and pinch zoom, background pan, drag a
+  node (it is pinned while held and the layout reheats), hover highlighting of a node and
+  its neighbours, labels on hover and when zoomed in, Fit to view and Reset view, and a
+  details strip with a link for task nodes. A graph over the node cap keeps its most
+  linked nodes together with the nodes that connect them instead of a disconnected set.
+  The canvas is one tab stop with arrow-key node navigation, "Show as table" stays, and
+  prefers-reduced-motion settles the layout without animation (task-0152).
 - User page `docs/dashboard.md`: start, stop, security model, SSH tunnel note and
   troubleshooting, with the measured behaviour of the server on stop and on session end
   (task-0143).
@@ -76,6 +84,11 @@ The LICENSE holder, the plugin author in `plugin.json` and the marketplace owner
 
 - The test suite no longer appends to the host session's `CLAUDE_ENV_FILE`
   (task-0039).
+- The dashboard showed every finished run as "Done - In progress" with a pulsing ring: a
+  run at the last stage with nothing awaited now has no current stage, and the Overview
+  lists only runs in flight (task-0151).
+- The dashboard stepper of an abandoned run read "Merged" and "Approved"; it now reads
+  "Abandoned" and claims neither (task-0152).
 
 [Unreleased]: https://github.com/AlexWaha/agentry/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/AlexWaha/agentry/releases/tag/v0.2.0

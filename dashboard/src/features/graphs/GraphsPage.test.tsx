@@ -1,6 +1,6 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ROUTES } from "@/config/routes";
 import { bytes } from "@/lib/format";
@@ -9,6 +9,8 @@ import { codeGraph, codeGraphMeta } from "@/test/fixtures/memory/codegraph-graph
 import memoryGraph from "@/test/fixtures/memory/graph-memory.json";
 import { expectNoAxeViolations } from "@/test/utils/a11y";
 import { fail, mockApi, ok, type MockResponse } from "@/test/utils/api-mock";
+import { installCanvasStub, type CanvasStub } from "@/test/utils/canvas";
+import { setReducedMotion } from "@/test/utils/match-media";
 import { renderWithApp } from "@/test/utils/render";
 
 import { GraphsPage } from "./GraphsPage";
@@ -26,9 +28,20 @@ const codeRoutes = (graph: MockResponse = ok(codeGraph, codeGraphMeta)) => ({
   "/api/v1/codegraph/root/graph": graph,
 });
 
-const nodesOf = (container: HTMLElement): Element[] => [...container.querySelectorAll("svg [data-kind]")];
-const stateOf = (container: HTMLElement, label: string): string | null =>
-  nodesOf(container).find((node) => node.getAttribute("aria-label")?.includes(`: ${label},`))?.getAttribute("data-state") ?? null;
+let stub: CanvasStub;
+
+beforeEach(() => {
+  stub = installCanvasStub();
+  setReducedMotion(true);
+});
+
+afterEach(() => {
+  stub.restore();
+});
+
+const drawing = (name: RegExp) => screen.findByRole("application", { name });
+const announced = (): string => document.querySelector('[aria-live="polite"].sr-only')?.textContent ?? "";
+const arcCalls = (): number => stub.calls.filter((call) => call.name === "arc").length;
 
 describe("Graphs page, memory graph states", () => {
   it("shows a loading status while the request is pending", async () => {
@@ -50,88 +63,71 @@ describe("Graphs page, memory graph states", () => {
   it("shows the error with a retry that draws the graph", async () => {
     let calls = 0;
     mockApi({ "/api/v1/graphs/memory": () => (++calls === 1 ? fail(500, "internal", "Graph failed") : ok(MEMORY_GRAPH)) });
-    const { container } = await renderGraphs();
+    await renderGraphs();
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Graph failed");
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-    await waitFor(() => expect(nodesOf(container)).toHaveLength(MEMORY_GRAPH.nodes.length));
+    expect(await drawing(/Memory graph, 9 nodes and 7 edges/)).toBeInTheDocument();
   });
 
   it("draws the graph and has no axe violation in the data state", async () => {
     mockApi({ "/api/v1/graphs/memory": ok(MEMORY_GRAPH) });
     const { container } = await renderGraphs();
 
-    await screen.findByRole("group", { name: /Memory graph, 9 nodes and 7 edges/ });
+    await drawing(/Memory graph, 9 nodes and 7 edges/);
 
     await expectNoAxeViolations(container);
   });
 });
 
 describe("Graphs page, memory graph drawing", () => {
-  it("draws one node per fixture node, colored by kind, and one legend entry per kind", async () => {
+  it("paints every fixture node on the canvas and shows one legend entry per kind", async () => {
     mockApi({ "/api/v1/graphs/memory": ok(MEMORY_GRAPH) });
-    const { container } = await renderGraphs();
-    await screen.findByRole("group", { name: /Memory graph/ });
+    await renderGraphs();
+    await drawing(/Memory graph/);
 
-    const nodes = nodesOf(container);
-    expect(nodes).toHaveLength(MEMORY_GRAPH.nodes.length);
-    const fillOf = (kind: string): string | undefined =>
-      nodes.find((node) => node.getAttribute("data-kind") === kind)?.querySelector("circle")?.getAttribute("class") ?? undefined;
+    await waitFor(() => expect(arcCalls()).toBeGreaterThanOrEqual(MEMORY_GRAPH.nodes.length));
     const kinds = [...new Set(MEMORY_GRAPH.nodes.map((node) => node.kind))];
-    expect(new Set(kinds.map(fillOf)).size).toBe(kinds.length);
-    expect(fillOf("lesson")).toContain("fill-status-active-fg");
-    expect(fillOf("pattern")).toContain("fill-status-done-fg");
     const legend = within(screen.getByRole("list", { name: "Legend" })).getAllByRole("listitem");
     expect(legend.map((item) => item.textContent)).toEqual(expect.arrayContaining(["Lesson", "Pattern", "Task", "Agent", "Area"]));
     expect(legend).toHaveLength(kinds.length);
   });
 
-  it("is one tab stop, reaches every node with the arrow keys and shows only the focused node's label", async () => {
+  it("is one tab stop whose PageDown, Home and End keys reach every node and announce it", async () => {
     mockApi({ "/api/v1/graphs/memory": ok(MEMORY_GRAPH) });
-    const { container } = await renderGraphs();
-    await screen.findByRole("group", { name: /Memory graph/ });
+    await renderGraphs();
+    const canvas = await drawing(/Memory graph/);
     const user = userEvent.setup();
     const reached = new Set<string>();
-    const remember = (): void => {
-      const focused = document.activeElement;
-      expect(focused?.hasAttribute("data-kind")).toBe(true);
-      reached.add(focused?.getAttribute("aria-label") ?? "");
-      const labels = [...container.querySelectorAll("svg text")].map((text) => text.textContent);
-      expect(labels).toHaveLength(1);
-      expect(focused?.getAttribute("aria-label")).toContain(`: ${labels[0]},`);
-    };
 
-    expect(container.querySelector("svg text")).toBeNull();
-    expect(nodesOf(container).filter((node) => node.getAttribute("tabindex") === "0")).toHaveLength(1);
-    while (!document.activeElement?.hasAttribute("data-kind")) await user.tab();
-    remember();
+    expect(document.querySelectorAll('canvas[tabindex="0"]')).toHaveLength(1);
+    act(() => canvas.focus());
+    reached.add(announced());
     for (let step = 1; step < MEMORY_GRAPH.nodes.length; step += 1) {
-      await user.keyboard("{ArrowRight}");
-      remember();
+      await user.keyboard("{PageDown}");
+      reached.add(announced());
     }
-    await user.keyboard("{Home}");
-    expect(document.activeElement).toBe(nodesOf(container)[0]);
-    expect(nodesOf(container).filter((node) => node.getAttribute("tabindex") === "0")).toHaveLength(1);
-    await user.keyboard("{End}");
 
-    expect(document.activeElement).toBe(nodesOf(container)[MEMORY_GRAPH.nodes.length - 1]);
     expect(reached.size).toBe(MEMORY_GRAPH.nodes.length);
+    await user.keyboard("{Home}");
+    expect(announced()).toBe("Lesson: alpha-lesson, 3 links");
+    await user.keyboard("{End}");
+    expect(announced()).toBe("Pattern: pattern-two, 0 links");
+    expect(document.activeElement).toBe(canvas);
   });
 
-  it("draws only the heaviest nodes of a huge graph, says so, and pages the table", async () => {
+  it("draws the most linked nodes of a huge graph together with their neighbours, says so, and pages the table", async () => {
     const nodes = Array.from({ length: 450 }, (_, index) => ({ id: `n${index}`, kind: "lesson", label: `n${index}`, weight: index }));
     const edges = [
       { source: "n449", target: "n448", kind: "x", weight: 1 },
       { source: "n0", target: "n449", kind: "x", weight: 1 },
     ];
     mockApi({ "/api/v1/graphs/memory": ok({ nodes, edges }) });
-    const { container } = await renderGraphs();
-    await screen.findByRole("group", { name: /Memory graph, 400 nodes and 1 edges/ });
+    await renderGraphs();
+    await drawing(/Memory graph, 400 nodes and 2 edges/);
 
-    expect(nodesOf(container)).toHaveLength(400);
-    expect(screen.getByRole("status")).toHaveTextContent("Showing the 400 heaviest of 450 nodes");
-    expect(nodesOf(container).some((node) => node.getAttribute("data-id") === "n0")).toBe(false);
+    expect(screen.getByRole("status")).toHaveTextContent("Showing 400 of 450 nodes: the most linked ones and the nodes that connect them");
 
     await userEvent.click(screen.getByRole("button", { name: "Show as table" }));
 
@@ -141,58 +137,39 @@ describe("Graphs page, memory graph drawing", () => {
     expect(within(screen.getByRole("table", { name: "Nodes" })).getAllByRole("row")).toHaveLength(51);
   });
 
-  it("shows a node's label on hover and removes it on leave", async () => {
+  it("shows the details of the node Enter is pressed on and clears them on a second Enter", async () => {
     mockApi({ "/api/v1/graphs/memory": ok(MEMORY_GRAPH) });
-    const { container } = await renderGraphs();
-    await screen.findByRole("group", { name: /Memory graph/ });
-    const node = nodesOf(container)[0];
+    await renderGraphs();
+    const canvas = await drawing(/Memory graph/);
 
-    await userEvent.hover(node);
-    expect(container.querySelectorAll("svg text")).toHaveLength(1);
-    await userEvent.unhover(node);
-
-    expect(container.querySelector("svg text")).toBeNull();
-  });
-
-  it("highlights the neighbours of the node Enter is pressed on, dims the rest, and clears on a second Enter", async () => {
-    mockApi({ "/api/v1/graphs/memory": ok(MEMORY_GRAPH) });
-    const { container } = await renderGraphs();
-    await screen.findByRole("group", { name: /Memory graph/ });
-    const alpha = nodesOf(container).find((node) => node.getAttribute("aria-label")?.includes("alpha-lesson")) as SVGGElement;
-
-    alpha.focus();
+    act(() => canvas.focus());
     await userEvent.keyboard("{Enter}");
 
-    expect(alpha).toHaveAttribute("aria-pressed", "true");
-    expect(stateOf(container, "alpha-lesson")).toBe("selected");
-    for (const neighbour of ["task-0106", "senior-backend-dev", "hooks"]) expect(stateOf(container, neighbour)).toBe("neighbor");
-    for (const other of ["beta-lesson", "qa-engineer", "task-0107", "pattern-two"]) expect(stateOf(container, other)).toBe("dimmed");
-    expect([...container.querySelectorAll("svg text")].map((text) => text.textContent).sort()).toEqual(
-      ["alpha-lesson", "hooks", "senior-backend-dev", "task-0106"],
-    );
+    const details = within(screen.getByRole("region", { name: "Selected node" }));
+    expect(details.getByText("alpha-lesson")).toBeInTheDocument();
+    expect(details.getByText("3 links")).toBeInTheDocument();
 
     await userEvent.keyboard("{Enter}");
 
-    expect(nodesOf(container).every((node) => node.getAttribute("data-state") === "idle")).toBe(true);
+    expect(screen.queryByRole("region", { name: "Selected node" })).not.toBeInTheDocument();
   });
 
-  it("selects a node with a click", async () => {
+  it("offers Fit to view and Reset view next to the drawing and not next to the table", async () => {
     mockApi({ "/api/v1/graphs/memory": ok(MEMORY_GRAPH) });
-    const { container } = await renderGraphs();
-    await screen.findByRole("group", { name: /Memory graph/ });
-    const hooks = nodesOf(container).find((node) => node.getAttribute("aria-label")?.includes("hooks")) as SVGGElement;
+    await renderGraphs();
+    await drawing(/Memory graph/);
+    expect(screen.getByRole("button", { name: "Fit to view" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reset view" })).toBeInTheDocument();
 
-    fireEvent.click(hooks);
+    await userEvent.click(screen.getByRole("button", { name: "Show as table" }));
 
-    expect(stateOf(container, "hooks")).toBe("selected");
-    expect(stateOf(container, "alpha-lesson")).toBe("neighbor");
-    expect(stateOf(container, "beta-lesson")).toBe("neighbor");
+    expect(screen.queryByRole("button", { name: "Fit to view" })).not.toBeInTheDocument();
   });
 
   it("lists every node and edge in Show as table and goes back to the graph", async () => {
     mockApi({ "/api/v1/graphs/memory": ok(MEMORY_GRAPH) });
-    const { container } = await renderGraphs();
-    await screen.findByRole("group", { name: /Memory graph/ });
+    await renderGraphs();
+    await drawing(/Memory graph/);
 
     await userEvent.click(screen.getByRole("button", { name: "Show as table" }));
 
@@ -204,11 +181,11 @@ describe("Graphs page, memory graph drawing", () => {
     const firstEdge = within(edgeTable).getAllByRole("row")[1];
     expect(firstEdge).toHaveTextContent("alpha-lesson");
     expect(firstEdge).toHaveTextContent("task-0106");
-    expect(container.querySelector("svg [data-kind]")).toBeNull();
+    expect(screen.queryByRole("application")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Show as graph" }));
 
-    expect(nodesOf(container)).toHaveLength(MEMORY_GRAPH.nodes.length);
+    expect(await drawing(/Memory graph/)).toBeInTheDocument();
   });
 });
 
@@ -224,8 +201,8 @@ describe("Graphs page, code graph", () => {
   });
 
   it("lists each index with size, last sync and counts, and draws the supported one", async () => {
-    mockApi(codeRoutes());
-    const { container } = await renderGraphs("/graphs?view=code");
+    const api = mockApi(codeRoutes());
+    await renderGraphs("/graphs?view=code");
 
     const root = (await screen.findByRole("heading", { name: "root" })).closest("li") as HTMLElement;
 
@@ -235,9 +212,9 @@ describe("Graphs page, code graph", () => {
     expect(root).toHaveTextContent("Symbols: 940");
     expect(root).toHaveTextContent("Edges: 2310");
     expect(screen.getByRole("heading", { name: "agentry" }).closest("li")).toHaveTextContent("Unsupported schema");
-    await screen.findByRole("group", { name: /Modules of root, 4 nodes and 4 edges/ });
-    expect(nodesOf(container)).toHaveLength(codeGraph.nodes.length);
+    await drawing(/Modules of root, 4 nodes and 4 edges/);
     expect(screen.queryByText(/truncated/)).not.toBeInTheDocument();
+    expect(api.callsTo("/api/v1/codegraph/root/graph")[0].url.searchParams.get("limit")).toBe("400");
   });
 
   it("shows the truncated notice when meta.truncated is true", async () => {
@@ -268,7 +245,7 @@ describe("Graphs page, code graph", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Show graph: root" }));
 
-    expect(await screen.findByRole("group", { name: /Modules of root/ })).toBeInTheDocument();
+    expect(await drawing(/Modules of root/)).toBeInTheDocument();
     expect(router.state.location.search).toEqual({ view: "code", index: "root" });
   });
 
@@ -305,7 +282,7 @@ describe("Graphs page, code graph", () => {
   it("has no axe violation in the data state", async () => {
     mockApi(codeRoutes());
     const { container } = await renderGraphs("/graphs?view=code");
-    await screen.findByRole("group", { name: /Modules of root/ });
+    await drawing(/Modules of root/);
 
     await expectNoAxeViolations(container);
   });

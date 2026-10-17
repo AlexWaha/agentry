@@ -330,7 +330,7 @@ class SmallProjectTest(ServerCase):
             names = [s["name"] for s in views_pipeline.state.stages(pipeline, which)]
             for current in names:
                 with self.subTest(pipeline=which, stage=current):
-                    stages = views_pipeline._stages(pipeline, which, "", current, "task-0199", {})
+                    stages = views_pipeline._stages(pipeline, which, "", current, "task-0199", {}, "")
                     now = [s["state"] for s in stages].count("now")
                     self.assertEqual(0 if current == names[-1] else 1, now)
 

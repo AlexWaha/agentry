@@ -47,7 +47,12 @@ function RunBlock({ run }: { run: Run }) {
         <span className="min-w-0 font-medium wrap-anywhere">{run.title}</span>
         {run.needs_you ? <StatusChip status="need" label={t("overview.runs.needsYou")} /> : null}
       </div>
-      <Stepper stages={run.stages} blocked={run.stage_status === "blocked"} needsYou={run.needs_you !== null} />
+      <Stepper
+        stages={run.stages}
+        blocked={run.stage_status === "blocked"}
+        needsYou={run.needs_you !== null}
+        abandoned={run.stage_status === "abandoned"}
+      />
     </li>
   );
 }

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -20,9 +20,9 @@ export interface GraphPanelProps {
 
 /** A graph with its legend, the keyboard hint and the "Show as table" switch (FR-106, FR-108). */
 export function GraphPanel({ title, nodes, edges, notice }: GraphPanelProps) {
+  const drawn = useMemo(() => capGraph(nodes, edges), [nodes, edges]);
   const [asTable, setAsTable] = useState(false);
   const kinds = [...new Set(nodes.map((node) => node.kind))];
-  const drawn = capGraph(nodes, edges);
   return (
     <Card className="min-w-0 p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
@@ -51,7 +51,6 @@ export function GraphPanel({ title, nodes, edges, notice }: GraphPanelProps) {
             </p>
           ) : null}
           <GraphCanvas title={title} nodes={drawn.nodes} edges={drawn.edges} />
-          <p className="mt-2 text-xs text-muted-foreground">{t("graphs.hint")}</p>
         </>
       )}
     </Card>
