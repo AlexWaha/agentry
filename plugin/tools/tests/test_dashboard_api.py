@@ -33,6 +33,7 @@ import stores
 import tmproot
 import views_harness
 import views_memory
+import views_pipeline
 
 TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 ROUTES = ("/api/v1/status", "/api/v1/runs", "/api/v1/tasks", "/api/v1/tasks/task-0106",
@@ -245,13 +246,13 @@ class SmallProjectTest(ServerCase):
         expected = run_readers(self.root)
         self.assertEqual(expected["handoffs"], data["debt"]["handoffs"])
         self.assertEqual(expected["memory"], data["debt"]["memory"])
-        self.assertEqual(["task-0107", "task-0108", "task-0109"],
-                         [d["task"] for d in data["debt"]["handoffs"]])
+        # task-0109 is abandoned: nothing merged, so no handoff is owed for it
+        self.assertEqual(["task-0107", "task-0108"], [d["task"] for d in data["debt"]["handoffs"]])
 
     def test_runs_of_every_lane_newest_first_then_by_task(self):
         runs = self.data("/api/v1/runs")["data"]
         self.assertEqual({"task-0102": "fix", "task-0104": "default", "task-0105": "default",
-                          "task-0106": "default", "task-0108": "default"},
+                          "task-0106": "default", "task-0108": "default", "task-0109": "default"},
                          {r["task"]: r["lane"] for r in runs})
         key = [(-datetime.fromisoformat(r["updated"].replace("Z", "+00:00")).timestamp(), r["task"])
                for r in runs]
@@ -290,7 +291,7 @@ class SmallProjectTest(ServerCase):
         for task, run in runs.items():
             with self.subTest(task=task):
                 states = [s["state"] for s in run["stages"]]
-                self.assertEqual(1, states.count("now"))
+                self.assertEqual(0 if run["stage"] == "done" else 1, states.count("now"))
         feature = {s["name"]: s for s in runs["task-0104"]["stages"]}
         self.assertEqual(["done", "done", "now", "next", "next", "next", "next"],
                          [s["state"] for s in runs["task-0104"]["stages"]])
@@ -298,6 +299,40 @@ class SmallProjectTest(ServerCase):
         zeta = {s["name"]: s for s in runs["task-0106"]["stages"]}
         self.assertEqual((1, 0), (zeta["implement"]["pass"], zeta["implement"]["fail"]))
         self.assertEqual((1, 1), (zeta["test"]["pass"], zeta["test"]["fail"]))
+
+    def test_a_finished_run_has_no_current_stage_and_its_done_stage_is_done(self):
+        runs = {r["task"]: r for r in self.data("/api/v1/runs")["data"]}
+        finished = runs["task-0106"]
+        self.assertEqual("done", finished["stage"])
+        self.assertEqual({"done"}, {s["state"] for s in finished["stages"]})
+        detail = self.data("/api/v1/tasks/task-0106")["data"]
+        self.assertEqual({"done"}, {s["state"] for s in detail["stages"]})
+
+    def test_an_abandoned_run_is_finished_not_in_progress(self):
+        runs = {r["task"]: r for r in self.data("/api/v1/runs")["data"]}
+        abandoned = runs["task-0109"]
+        self.assertEqual(("done", "abandoned"), (abandoned["stage"], abandoned["stage_status"]))
+        self.assertEqual(0, [s["state"] for s in abandoned["stages"]].count("now"))
+        self.assertEqual("done", abandoned["stages"][-1]["state"])
+        self.assertIsNone(abandoned["needs_you"])
+
+    def test_a_run_parked_at_done_for_the_merge_is_still_in_progress(self):
+        pipeline = stores.read_pipeline(self.root)
+        stages = views_pipeline._stages(pipeline, "build", "feature", "done", "task-0199", {}, "merge")
+        self.assertEqual(1, [s["state"] for s in stages].count("now"))
+        self.assertEqual(("done", "now"), (stages[-2]["state"], stages[-1]["state"]))
+        row = {"task": "task-0199", "stage_status": "in_progress", "awaiting_human": "merge", "updated": ""}
+        self.assertEqual("merge", views_pipeline._needs_you(row, {})["kind"])
+
+    def test_every_stage_but_the_final_one_has_exactly_one_current_stage_in_both_pipelines(self):
+        pipeline = stores.read_pipeline(self.root)
+        for which in ("build", "plan"):
+            names = [s["name"] for s in views_pipeline.state.stages(pipeline, which)]
+            for current in names:
+                with self.subTest(pipeline=which, stage=current):
+                    stages = views_pipeline._stages(pipeline, which, "", current, "task-0199", {})
+                    now = [s["state"] for s in stages].count("now")
+                    self.assertEqual(0 if current == names[-1] else 1, now)
 
     def test_runs_carry_the_title_of_their_task(self):
         runs = {r["task"]: r for r in self.data("/api/v1/runs")["data"]}

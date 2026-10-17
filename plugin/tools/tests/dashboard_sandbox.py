@@ -319,6 +319,8 @@ def build_project(root: Path, size: str = "small") -> Path:
             {"task": "task-0105", "type": "techdebt", "stage": "ready",
              "fields": {"awaiting_human": "commit"}},
             {"task": "task-0106", "stage": "done"},
+            {"task": "task-0109", "type": "refactor", "stage": "done",
+             "fields": {"stage_status": "abandoned", "abandon_reason": "dropped by the User"}},
             {"task": "task-0108", "stage": "test", "fields": {"stage_status": "paused",
                                                               "pause_reason": "force majeure"}},
         ],

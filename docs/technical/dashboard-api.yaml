@@ -506,7 +506,10 @@ components:
       properties:
         name: {type: string}
         human: {type: boolean}
-        state: {type: string, enum: [done, now, next, skipped]}
+        state:
+          type: string
+          enum: [done, now, next, skipped]
+          description: now for the current stage; none for a finished run
         pass: {type: integer, minimum: 0}
         fail: {type: integer, minimum: 0}
     Run:

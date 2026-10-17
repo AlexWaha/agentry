@@ -1574,7 +1574,7 @@ class LifecycleTest(unittest.TestCase):
                 )
                 self.assertEqual(expected, exchange(server, "GET", route)[0])
         _, _, body = exchange(server, "GET", "/api/v1/events")
-        self.assertEqual(19, json.loads(body)["meta"]["total"])
+        self.assertEqual(20, json.loads(body)["meta"]["total"])
         _, _, body = exchange(server, "GET", "/api/v1/memory")
         self.assertEqual(2, json.loads(body)["meta"]["total"])
 
