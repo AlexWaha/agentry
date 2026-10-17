@@ -90,6 +90,14 @@ class LocalServer:
             conn.close()
 
 
+def closed_by_server(sock: socket.socket) -> bool:
+    """True when the server closed `sock`: EOF, or the abort or reset Windows reports for an unread close."""
+    try:
+        return sock.recv(10) == b""
+    except (ConnectionAbortedError, ConnectionResetError):
+        return True
+
+
 def code_of(body: bytes) -> str:
     return json.loads(body.decode("utf-8"))["code"]
 
@@ -182,7 +190,7 @@ class ConnectionLimitTest(unittest.TestCase):
             srv = LocalServer(self)
             sock = socket.create_connection(("127.0.0.1", srv.port), timeout=5)
             self.addCleanup(sock.close)
-            self.assertEqual(b"", sock.recv(10))  # closed by the server, not by our timeout
+            self.assertTrue(closed_by_server(sock))  # closed by the server, not by our timeout
 
     def test_connections_past_the_cap_are_closed_and_a_freed_slot_is_reused(self):
         with unittest.mock.patch.object(server, "MAX_CONNECTIONS", 2):
@@ -194,10 +202,7 @@ class ConnectionLimitTest(unittest.TestCase):
         self.addCleanup(extra.close)
         with contextlib.suppress(OSError):
             extra.sendall(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
-        try:
-            self.assertEqual(b"", extra.recv(10))
-        except ConnectionResetError:
-            pass
+        self.assertTrue(closed_by_server(extra))
         held[0].close()
         deadline = threading.Event()
         for _ in range(50):  # the freed handler thread notices the close within a moment

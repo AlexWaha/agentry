@@ -1,6 +1,6 @@
 import { Check, User } from "lucide-react";
 
-import { STAGE_LABEL_KEYS } from "@/config/stages";
+import { FINAL_STAGE, STAGE_LABEL_KEYS } from "@/config/stages";
 import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { Stage } from "@/types/api";
@@ -14,8 +14,6 @@ export interface StepperProps {
   needsYou?: boolean;
   className?: string;
 }
-
-const FINAL_STAGE = "done";
 
 export function stageLabel(name: string): string {
   const key = STAGE_LABEL_KEYS[name];

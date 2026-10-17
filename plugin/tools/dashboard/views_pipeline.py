@@ -109,10 +109,13 @@ def _supervised(root: Path, lane: str) -> dict:
 
 
 def _stages(pipeline: dict, which: str, task_type: str, current: str, task: str,
-            gates: dict) -> list[dict]:
+            gates: dict, awaiting_human: str = "") -> list[dict]:
     defs = state.stages(pipeline, which or state.BUILD)
     names = [d.get("name", "") for d in defs]
     here = names.index(current) if current in names else -1
+    # The final stage is reached when a run merges or is abandoned; a run parked there for the
+    # merge (awaiting_human) is still waiting on the User, so its final stage stays current.
+    finished = here == len(names) - 1 and not awaiting_human
     out = []
     for i, definition in enumerate(defs):
         name = definition.get("name", "")
@@ -121,7 +124,7 @@ def _stages(pipeline: dict, which: str, task_type: str, current: str, task: str,
         elif here < 0 or i > here:
             where = "next"
         else:
-            where = "done" if i < here else "now"
+            where = "done" if i < here or finished else "now"
         passed, failed = gates.get((task, name), (0, 0))
         out.append({"name": name, "human": bool(definition.get("checkpoints")), "state": where,
                     "pass": passed, "fail": failed})
@@ -164,7 +167,8 @@ def _build_run(row: dict, lane: str, pipeline: dict, index: dict, gates: dict, s
         "umbrella": row.get("umbrella") == "true",
         "subtasks": [stores.task_ref(t, index) for t in sub_ids],
         "updated": stores.iso_z(row.get("updated")),
-        "stages": _stages(pipeline, which, row.get("type") or "", row.get("stage") or "", task, gates),
+        "stages": _stages(pipeline, which, row.get("type") or "", row.get("stage") or "", task, gates,
+                          row.get("awaiting_human") or ""),
         "needs_you": _needs_you(row, reasons),
         "supervisor": ({"label": str(entry.get("last_label") or ""),
                         "seen": stores.epoch_iso(entry.get("seen"))}

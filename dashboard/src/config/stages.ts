@@ -33,3 +33,6 @@ export const EVENT_KIND_KEYS: Record<string, string> = {
   resumed: "shell.event.resumed",
   abandoned: "shell.event.abandoned",
 };
+
+/** The last stage of a pipeline: a run there has merged, been abandoned, or is parked waiting for the merge. */
+export const FINAL_STAGE = "done";

@@ -12,6 +12,7 @@ import { StatusChip } from "@/components/shared/StatusChip";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ROUTES, taskPath } from "@/config/routes";
+import { FINAL_STAGE } from "@/config/stages";
 import { t } from "@/i18n";
 import { stamp } from "@/lib/format";
 import { applyAppended, type CachedEvents } from "@/lib/live-events";
@@ -67,7 +68,10 @@ function EventRow({ event }: { event: Event }) {
   );
 }
 
-function OverviewData({ status, runs, events }: { status: Status; runs: Run[]; events: Event[] }) {
+function OverviewData({ status, runs: allRuns, events }: { status: Status; runs: Run[]; events: Event[] }) {
+  // The run store keeps finished runs (merged or abandoned, both at the final stage); only runs in flight belong
+  // here. A run at the final stage that still needs the User (waiting for the merge) is in flight.
+  const runs = allRuns.filter((run) => run.stage !== FINAL_STAGE || run.needs_you !== null);
   const needing = runs.filter((run) => run.needs_you !== null).length;
   const { counts, debt } = status;
 

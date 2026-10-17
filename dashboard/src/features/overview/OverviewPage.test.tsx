@@ -57,6 +57,41 @@ describe("OverviewPage", () => {
     await expectNoAxeViolations(document.body);
   });
 
+  it("leaves finished and abandoned runs out of the current runs", async () => {
+    const finished = (task: string, stage_status: string): Run => ({
+      ...runs[0],
+      task,
+      stage: "done",
+      stage_status,
+      awaiting_human: "",
+      needs_you: null,
+      stages: runs[0].stages.map((stage) => ({ ...stage, state: "done" as const })),
+    });
+    serve({ "/api/v1/runs": ok([...runs, finished("task-0900", "gate_passed"), finished("task-0901", "abandoned")]) });
+    await renderWithApp(<OverviewPage />, { url: "/" });
+
+    await screen.findByRole("heading", { name: "Current runs" });
+    expect(screen.queryByRole("link", { name: "task-0900" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "task-0901" })).not.toBeInTheDocument();
+    expect(document.querySelectorAll('li[aria-current="step"]')).toHaveLength(runs.length);
+  });
+
+  it("keeps a run at the final stage that still waits for the merge", async () => {
+    const waiting: Run = {
+      ...runs[0],
+      task: "task-0902",
+      stage: "done",
+      awaiting_human: "merge",
+      needs_you: { kind: "merge", since: "2026-10-16T09:00:00Z", reason: "" },
+      stages: runs[0].stages.map((stage) => ({ ...stage, state: stage.name === "done" ? ("now" as const) : ("done" as const) })),
+    };
+    serve({ "/api/v1/runs": ok([waiting]) });
+    await renderWithApp(<OverviewPage />, { url: "/" });
+
+    expect(await screen.findByRole("link", { name: "task-0902" })).toHaveAttribute("href", "/tasks/task-0902");
+    expect(document.querySelectorAll('li[aria-current="step"]')).toHaveLength(1);
+  });
+
   it("says why it is empty when no run is in flight and the journal is empty", async () => {
     serve({
       "/api/v1/runs": ok([]),
