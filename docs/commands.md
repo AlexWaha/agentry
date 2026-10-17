@@ -1,6 +1,6 @@
 # Commands
 
-Every command on this page is a skill. 42 ship in the plugin, and `verify` lives in the project's `.claude/skills/`. Claude Code lists plugin skills with the plugin name as a prefix, for example `agentry:pipeline-show`. This page uses the short form, as the skills do in their own docs.
+Every command on this page is a skill. 43 ship in the plugin, and `verify` lives in the project's `.claude/skills/`. Claude Code lists plugin skills with the plugin name as a prefix, for example `agentry:pipeline-show`. This page uses the short form, as the skills do in their own docs.
 
 ## Table of contents
 
@@ -70,6 +70,7 @@ Skills are triggered by naming them or by describing the job. The example column
 | `health-check` | Runs format, lint, tests and a forbidden-pattern scan, reports pass or fail per check | "Use health-check" |
 | `deep-review` | Multi-lens review with Critical, High and Medium findings | "Use deep-review on this branch" |
 | `verify` | The pre-commit gate; it delegates to `health-check`. Lives in the project's `.claude/skills/`, not in the plugin | "Use verify" |
+| `dashboard` | Starts or stops the read-only local dashboard of pipeline, memory and harness. See [Dashboard](dashboard.md) | `/agentry:dashboard`, then `/agentry:dashboard stop` |
 | `swarm` | The protocol for running an epic as parallel agents | Turn it on with `/pipeline-swarm-on` |
 | `risk-assessment` | A scored risk matrix with mitigations | "Use risk-assessment before the launch phase" |
 | `self-learning` | Records, recalls and distills lessons in the project memory | "Use self-learning to record this mistake" |
@@ -104,5 +105,6 @@ The slash commands cover daily use. These scripts sit behind them. You rarely ru
 | `python "$AGENTRY_ROOT/tools/pipeline/approve.py" --task <task> --reject --reason "..."` | Send a task back. The reason is required |
 | `python "$AGENTRY_ROOT/tools/pipeline/events.py" --task <task>` | The journal of transitions, gate results and approvals. `--summary` gives an overview |
 | `python "$AGENTRY_ROOT/tools/pipeline/worktree.py" --list` | List parallel-task worktrees |
+| `python "$AGENTRY_ROOT/tools/dashboard/server.py"` | Start the dashboard server by hand. `/agentry:dashboard` runs this for you. See [Dashboard](dashboard.md) |
 
 `<task>` is a task id: the file name of a task in `backlog/`, without `.md`.

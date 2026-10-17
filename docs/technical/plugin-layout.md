@@ -68,7 +68,7 @@ src/
 ├── plugin/                       # plugin root
 │   ├── .claude-plugin/plugin.json    # name "agentry", semver version
 │   ├── hooks/                        # hooks.json, cleanup-nul.sh
-│   ├── skills/                       # 42 skill directories and README.md, except verify
+│   ├── skills/                       # 43 skill directories and README.md, except verify
 │   └── tools/                        # pipeline/, hooks/, memory/, setup/, tests/, payload.py
 ├── .claude/                      # project side
 │   ├── CLAUDE.md  settings.json  pipeline-adapter.md

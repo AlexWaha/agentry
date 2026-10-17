@@ -1,13 +1,13 @@
 # Skills Catalog
 
-25 skills, each a directory with `SKILL.md` (procedure, <200 lines) plus
+26 skills, each a directory with `SKILL.md` (procedure, <200 lines) plus
 optional `references/` files (templates and code examples, loaded on demand).
-The table below catalogues those 25. The other 18 directories are the pipeline
+The table below catalogues those 26. The other 18 directories are the pipeline
 set, owned by this project and edited here: `swarm` (the supervised agent-swarm protocol, with
 `references/templates.md`), `pipeline` (the three dials and the command family)
 and the 16 `pipeline-*` command skills. They are session controls rather than work
 procedures and are documented in `skills/pipeline/SKILL.md`, which is why a
-listing shows 43 directories. Project values for them live in
+listing shows 44 directories. Project values for them live in
 `.claude/pipeline-adapter.md`.
 Agents preload their core procedures via the `skills:` frontmatter field
 (P below); everything else is invoked at runtime through the Skill tool (O).
@@ -18,6 +18,7 @@ Descriptions carry "Use when" triggers so model invocation fires reliably.
 | api-design | REST endpoints, schemas, error formats, OpenAPI spec | architect | senior-backend-dev, spec-developer |
 | bug-fix | RED-GREEN debugging: failing test -> root cause -> minimal fix | senior-backend-dev, senior-frontend-dev, qa-engineer | incident-response-commander |
 | business-plan | Full business plan from prior research docs | business-analyst | financial-analyst |
+| dashboard | Start or stop the read-only local dashboard (`/agentry:dashboard [stop]`); a user command, not model-invocable | - | the User |
 | db-design | Schema, relationships, indexes, ER diagram, migration plan | architect, data-engineer | senior-backend-dev, spec-developer |
 | deep-review | Multi-lens severity-ranked review (code/arch/docs/config) | reviewer | architect, security-engineer, accessibility-auditor |
 | feature-scaffold | Complete API feature: migration -> tests, all layers | senior-backend-dev, senior-frontend-dev, rapid-prototyper | data-engineer, ux-ui-designer |

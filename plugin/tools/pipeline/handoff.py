@@ -268,41 +268,68 @@ def validate_handoff(path: Path, task: str) -> list[str]:
     return problems
 
 
-def uncovered_done_tasks() -> list[dict]:
+def _scan(conn=None) -> list[dict] | None:
+    """The debt scan behind owed() and uncovered_done_tasks(). None when there was nothing
+    to scan (gate disabled, no done/ folder); raises on an internal error, so the caller
+    decides what a failed scan may touch."""
+    if not enabled():
+        return None
+    done_dir = state.ROOT / ".agentry" / "tasks" / "done"
+    if not done_dir.is_dir():
+        return None
+    out: list[dict] = []
+    for f in sorted(done_dir.glob("task-*.md")):
+        task = f.stem
+        if not covered_required(task):
+            continue
+        path = handoff_path(task)
+        if not path.is_file():
+            reason = f"no handoff doc at {rel(path)}"
+        else:
+            problems = validate_handoff(path, task)
+            if not problems:
+                continue
+            reason = "; ".join(problems)
+        # A swarm subtask is documented by its umbrella's doc. Looked up only
+        # once a debt is found, so the common clean scan stays one read per task.
+        umbrella = state.covering_umbrella(task, conn)
+        if umbrella and covered_required(umbrella):
+            continue
+        # A task the User dropped (approve.py --abandon) merged nothing to document.
+        if state.is_abandoned(task, conn):
+            continue
+        out.append({"task": task, "reason": reason})
+    return out
+
+
+def owed(conn=None) -> list[dict]:
     """[{'task','reason'}] for every done task above baseline lacking a valid
     handoff doc, ordered by task id. Scans tasks/done/ only (folder state is the
     single source of truth; runs closed by reconcile cannot create orphan debt).
     A swarm subtask is covered by its umbrella's doc (state.covering_umbrella);
     the umbrella itself is still checked like any other done task.
+
+    PURE: it reads and never writes - no busy marker is touched, and with a `conn`
+    (the caller's open run-store connection) the run store is not opened, created or
+    migrated either. That is what lets the read-only dashboard show exactly the debt
+    the Stop hook enforces. uncovered_done_tasks() is this plus the marker release.
     Fail-open: [] on any internal error."""
     try:
-        if not enabled():
+        return _scan(conn) or []
+    except Exception:
+        return []
+
+
+def uncovered_done_tasks() -> list[dict]:
+    """The same scan as owed(), then the release of every scaffold busy marker whose doc now
+    validates (drop_scaffold_markers). The Stop hook, advance.py and pretool_gate.py call
+    this one. The release happens only after a clean scan: with the gate off, no done/
+    folder or an internal error nothing was validated, so no marker is touched.
+    Fail-open: [] on any internal error."""
+    try:
+        out = _scan()
+        if out is None:
             return []
-        done_dir = state.ROOT / ".agentry" / "tasks" / "done"
-        if not done_dir.is_dir():
-            return []
-        out: list[dict] = []
-        for f in sorted(done_dir.glob("task-*.md")):
-            task = f.stem
-            if not covered_required(task):
-                continue
-            path = handoff_path(task)
-            if not path.is_file():
-                reason = f"no handoff doc at {rel(path)}"
-            else:
-                problems = validate_handoff(path, task)
-                if not problems:
-                    continue
-                reason = "; ".join(problems)
-            # A swarm subtask is documented by its umbrella's doc. Looked up only
-            # once a debt is found, so the common clean scan stays one read per task.
-            umbrella = state.covering_umbrella(task)
-            if umbrella and covered_required(umbrella):
-                continue
-            # A task the User dropped (approve.py --abandon) merged nothing to document.
-            if state.is_abandoned(task):
-                continue
-            out.append({"task": task, "reason": reason})
         drop_scaffold_markers({d["task"] for d in out})
         return out
     except Exception:

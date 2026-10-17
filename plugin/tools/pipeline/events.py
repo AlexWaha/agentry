@@ -196,22 +196,30 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
-def _open_existing() -> sqlite3.Connection | None:
-    """Read-side connection: never creates the file."""
-    path = db_path()
-    if not path.is_file():
-        return None
-    conn = sqlite3.connect(path, timeout=TIMEOUT_SECONDS, isolation_level=None)
-    conn.row_factory = sqlite3.Row
+def _open_existing(strict: bool = False) -> sqlite3.Connection | None:
+    """Read-side connection: never creates the file, and it cannot write it either
+    (`mode=ro`), so a reader of the journal - the read-only dashboard included - can
+    never change it. A missing file or table is None. Any error while opening or probing
+    is also None (NFR-6, the dashboard's fail-open) unless `strict`, which raises it as
+    before: task_report() and summary() are strict, so the CLI reports a corrupt journal."""
+    conn = None
     try:
-        found = _has_table(conn)
-    except BaseException:
-        conn.close()
-        raise
-    if not found:
-        conn.close()
+        path = db_path()
+        if not path.is_file():
+            return None
+        conn = sqlite3.connect(path.absolute().as_uri() + "?mode=ro", uri=True,
+                               timeout=TIMEOUT_SECONDS, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        if _has_table(conn):
+            return conn
+    except Exception:
+        if conn is not None:
+            conn.close()
+        if strict:
+            raise
         return None
-    return conn
+    conn.close()
+    return None
 
 
 def append(kind: str, task: str, *, stage: str = "", from_stage: str = "",
@@ -283,7 +291,7 @@ def task_report(task: str) -> dict:
     gate record per stage."""
     report: dict = {"task": task, "events": 0, "stages": {}, "rejections": [],
                     "gates": {}, "merged": False}
-    conn = _open_existing()
+    conn = _open_existing(strict=True)
     if conn is None:
         return report
     with closing(conn):
@@ -328,7 +336,7 @@ def summary(since: str = "") -> dict:
     rows and merges to events at or after it."""
     result: dict = {"since": since, "gate_failure_rate": {},
                     "registration_to_merge": {}}
-    conn = _open_existing()
+    conn = _open_existing(strict=True)
     if conn is None:
         return result
     with closing(conn):

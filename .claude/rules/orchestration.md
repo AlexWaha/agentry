@@ -10,11 +10,9 @@ proposes a transition; only the hook scripts record one. Read this alongside
 directory that holds `tools/` and `skills/` (source: `plugin/` in this repository,
 `${CLAUDE_PLUGIN_ROOT}` inside the plugin's own hooks and skills). The plugin's
 `session_start` hook exports `AGENTRY_ROOT` and `CLAUDE_PROJECT_DIR` to
-`$CLAUDE_ENV_FILE`, so both are set in every Bash call, subagents included. Until
-task-0039 switches the live harness to the plugin, `AGENTRY_ROOT` is the workspace
-root `.claude`, which still carries `tools/` and `skills/`. Everything the project
-owns (`.agentry/`, rules, agents, both `CLAUDE.md`, `settings.json`) resolves from
-`CLAUDE_PROJECT_DIR`. Layout and resolution: `docs/technical/plugin-layout.md`.
+`$CLAUDE_ENV_FILE`, so both are set in every Bash call, subagents included.
+Everything the project owns (`.agentry/`, rules, agents, both `CLAUDE.md`,
+`settings.json`) resolves from `CLAUDE_PROJECT_DIR`. Layout and resolution: `docs/technical/plugin-layout.md`.
 
 ## The orchestrator's narrowed role (hard-gated)
 
@@ -544,10 +542,9 @@ edits it, and the solo merge runs there. Every task works in
 `<type>/<task>`. Pipeline state (`run.db`, task files, plans, markers) already
 lives in the workspace-root `.agentry/`, outside every repo, so a worktree
 carries code and nothing else. Hooks always run the LIVE harness scripts under
-the plugin root (`$AGENTRY_ROOT`; until task-0039 the workspace-root `.claude/`); the
-copies of `tools/` (`plugin/tools` in a tree) and
-`.agentry/pipeline.json` inside a tree are inert for hooks and are exactly what
-the exit gates test. Each tree gets its own `tmp/`.
+the plugin root (`$AGENTRY_ROOT`); the copies of `tools/` (`plugin/tools` in a
+tree) and `.agentry/pipeline.json` inside a tree are inert for hooks and are
+exactly what the exit gates test. Each tree gets its own `tmp/`.
 
 **Config** (`pipeline.json`, top level; the User adds it, agents never write that file):
 
@@ -948,7 +945,7 @@ and the 14 s hook watchdog deny in every profile, `dev` included.
 The MAIN THREAD carries its own profile: `orchestrator_gate` in `pipeline.json`
 (enforced by `pretool_gate.py`) denies orchestrator Edit/Write and shell
 file-writes outside the bookkeeping allowlist. Every agent - and the
-orchestrator itself - is now deterministically scoped.
+orchestrator itself - is deterministically scoped.
 
 `approve.py` is orchestrator-only: any subagent invoking it is denied by the
 gate. Recording a User approval is the one action that must never be delegated.
@@ -979,7 +976,7 @@ profile). What each layer does and does not cover (task-0116):
   (`check_program`); the lexical checks run afterwards only to name the boundary
   also crossed. A simple command runs only if its argv0 is on
   `agent_gate.ALLOWED_PROGRAMS` (read-only utilities, `git`, `codegraph`) or it
-  is `python` running one of `ALLOWED_SCRIPTS` from `<root>/.claude/tools/`.
+  is `python` running one of `ALLOWED_SCRIPTS` from the plugin tools dir.
   Each listed program also has a flag allowlist (`FLAG_SPECS`; `find` predicates,
   `codegraph` read commands); a flag not named is refused, long options match by
   whole name, and a listed program with no spec fails closed. Further rules:
@@ -1020,8 +1017,8 @@ profile). What each layer does and does not cover (task-0116):
 - **Dev `git config` and dev crashes.** A dev agent may still run
   `git config <key> <value>`, so `.git/config` (`core.hooksPath`,
   `core.fsmonitor`, `alias.*`) stays writable through git itself, despite the
-  `.git/**` path rule. The dev profile also stays fail-open when its gate
-  crashes. Both belong to the accepted dev residual (User decision D1(a)).
+  `.git/**` path rule, and its gate stays fail-open on a crash. Both belong to
+  the accepted dev residual (User decision D1(a)).
 
 - **The dev profile.** A dev agent runs code, so `python -c`, `python - <<EOF`, a
   script it wrote, `python -m`, `node -e`, `awk`, `perl` and `dd` can write
@@ -1057,10 +1054,9 @@ profile). What each layer does and does not cover (task-0116):
   paths named inside its input (`apply`, `am` or `checkout-index` of a patch the
   agent wrote, `checkout`, `restore`, `reset --hard`; the `.git` rule is
   path-based and does not see them), and `core.worktree`, an alias or an include
-  set earlier with `git config`. The dev profile does deny `update-ref`,
-  `symbolic-ref` and any fetch/pull/push that writes `refs/remotes`, because
-  `leak_guard` trusts the local `refs/remotes` base. A dev interpreter can
-  still move that base.
+  set earlier with `git config`. The dev profile denies `update-ref`,
+  `symbolic-ref` and `refs/remotes` writes (table above) because `leak_guard`
+  trusts that base. A dev interpreter can still move it.
 - **UNC and nested shells.** A UNC positional inside a nested `bash -c` is not
   caught by the argument scan (the 14 s watchdog covers it), and the Read, Grep
   and Glob tools are not gated for UNC paths.
@@ -1101,7 +1097,9 @@ local, from the GitHub marketplace). Plugin code (`plugin/`) changes the live ga
 only through a release and `claude plugin update`, never by hand copy; hooks load
 from the cached copy, so a half-published change cannot switch a gate off.
 
-1. Release on a task branch cut from `main`: bump `version` in
+1. Release on a task branch cut from `main`. First, in a clean clone, run `npm ci && npm run build`
+   in `dashboard/`: `git status --porcelain plugin/tools/dashboard/dist` must print nothing
+   (else `dist/` is stale, commit the rebuilt one). Then bump `version` in
    `plugin/.claude-plugin/plugin.json` (semver) and move the `[Unreleased]` lines of
    `CHANGELOG.md` under a dated `## [X.Y.Z]` heading.
 2. Run the pipeline: full suite, `ruff check plugin/tools scripts`, `python -m
@@ -1132,8 +1130,8 @@ Run `git config core.hooksPath .githooks` once per clone.
 ## Deferred: Agent Teams
 
 Claude Code's native Agent Teams (separate full sessions with a shared task
-list and mailbox) stay OFF in this template: the feature is experimental and
-costs roughly 7x the tokens of subagent dispatch. Revisit when it stabilizes;
+list and mailbox) stay OFF: the feature is experimental and costs about 7x the
+tokens of subagent dispatch. Revisit when it stabilizes;
 the pipeline above does not depend on it.
 
 ## Blocked tasks
@@ -1155,15 +1153,14 @@ stage transition, gate result (command, exit status, duration; never the gate
 output), park, block, approval, rejection (with its reason), continuation,
 pause, resume, abandon, merge and close. Read it with
 `python "$AGENTRY_ROOT/tools/pipeline/events.py" --task T` (one task) or `--summary
-[--since DATE]` (all tasks); both print JSON. Handoff authors run the `--task`
-form instead of reconstructing a task's history by hand.
+[--since DATE]` (all tasks); both print JSON. Handoff authors use `--task`.
 
 `gate_log` in `run.db` is retired: nothing writes it, and an old store keeps its
 table and rows untouched (the journal copies them on its first creation). The
 journal is a report. Only `supervisor.progress_at` reads it, and only to veto a
 relaunch (recent gate evidence keeps a run HEALTHY); no gate reads it. A failed
-write prints
-`[event-skipped]` to stderr instead of failing the command that caused it.
+write prints `[event-skipped]` to stderr instead of failing the command that
+caused it.
 
 ## What the model must never do
 

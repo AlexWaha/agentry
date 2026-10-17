@@ -1,0 +1,26 @@
+{
+  "route": "/api/v1/memory?kind=pattern&limit=20",
+  "body": {
+    "data": [
+      {
+        "kind": "pattern",
+        "id": 2,
+        "name": "read-only-sqlite-connection",
+        "use_when": "a tool must read a store it never writes",
+        "body": "conn = sqlite3.connect(path.as_uri() + \"?mode=ro\", uri=True)\nconn.row_factory = sqlite3.Row",
+        "task": "task-0140",
+        "created": "2026-10-12T00:00:00Z"
+      },
+      {
+        "kind": "pattern",
+        "id": 1,
+        "name": "debounced-url-search-box",
+        "use_when": "a list page filters by free text",
+        "body": "",
+        "task": "",
+        "created": "2026-10-11T00:00:00Z"
+      }
+    ],
+    "meta": { "total": 2, "limit": 20, "offset": 0 }
+  }
+}

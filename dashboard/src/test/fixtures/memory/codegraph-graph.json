@@ -1,0 +1,20 @@
+{
+  "route": "/api/v1/codegraph/root/graph",
+  "body": {
+    "data": {
+      "nodes": [
+        { "id": "plugin/tools/pipeline", "kind": "module", "label": "plugin/tools/pipeline", "weight": 3 },
+        { "id": "plugin/tools/memory", "kind": "module", "label": "plugin/tools/memory", "weight": 2 },
+        { "id": "plugin/tools/hooks", "kind": "module", "label": "plugin/tools/hooks", "weight": 2 },
+        { "id": "plugin/tools/dashboard", "kind": "module", "label": "plugin/tools/dashboard", "weight": 3 }
+      ],
+      "edges": [
+        { "source": "plugin/tools/hooks", "target": "plugin/tools/pipeline", "kind": "depends", "weight": 4 },
+        { "source": "plugin/tools/hooks", "target": "plugin/tools/memory", "kind": "depends", "weight": 1 },
+        { "source": "plugin/tools/dashboard", "target": "plugin/tools/pipeline", "kind": "depends", "weight": 2 },
+        { "source": "plugin/tools/dashboard", "target": "plugin/tools/memory", "kind": "depends", "weight": 1 }
+      ]
+    },
+    "meta": { "truncated": false, "elapsed_ms": 42 }
+  }
+}

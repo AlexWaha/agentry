@@ -1,0 +1,15 @@
+{
+  "route": "/api/v1/handoffs/task-0107",
+  "body": {
+    "data": {
+      "task": "task-0107",
+      "title": "Expose the quality gate as a verify skill",
+      "author": "senior-backend-dev",
+      "date": "2026-10-15",
+      "bytes": 1009,
+      "valid": false,
+      "body": "# Handoff: task-0107\n\n## What was done\nThe quality gate became a **verify** skill; see task-0106 for the rename.\n\n- first item\n- second item\n\n## Gotchas and lessons\nRun `python -m unittest` narrowed, never the whole suite.\n",
+      "problems": ["missing section '## Context loaded'", "body has fewer than 500 non-space characters"]
+    }
+  }
+}

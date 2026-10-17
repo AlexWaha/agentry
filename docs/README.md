@@ -8,6 +8,7 @@ Start with [Getting started](getting-started.md) if you have not installed Agent
 |---|---|
 | [Getting started](getting-started.md) | Requirements, install, onboarding a project, a first task from backlog to merge |
 | [Commands](commands.md) | Every slash command and skill, grouped, with an example prompt each, plus the command-line tools |
+| [Dashboard](dashboard.md) | Start the read-only local dashboard, the pages it shows, how it stays safe, stop and troubleshooting |
 | [Pipeline and approvals](pipeline.md) | The build and plan pipelines, checkpoints, modes, approval levels, swarm, worktrees |
 | [Agents](agents.md) | The 31 agents by department, when each one is dispatched, what each may touch |
 | [Configuration](configuration.md) | The `pipeline.json` keys you are likely to change and the `.agentry/` layout |

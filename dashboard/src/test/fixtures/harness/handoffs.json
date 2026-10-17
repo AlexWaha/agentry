@@ -1,0 +1,11 @@
+{
+  "route": "/api/v1/handoffs?limit=25",
+  "body": {
+    "data": [
+      { "task": "task-0107", "title": "Expose the quality gate as a verify skill", "author": "senior-backend-dev", "date": "2026-10-15", "bytes": 1009, "valid": false },
+      { "task": "task-0106", "title": "Rename the human role", "author": "senior-frontend-dev", "date": "2026-10-14", "bytes": 4812, "valid": true },
+      { "task": "task-0105", "title": "Public documentation overhaul", "author": "technical-writer", "date": "2026-10-13", "bytes": 3300, "valid": true }
+    ],
+    "meta": { "total": 3, "limit": 25, "offset": 0 }
+  }
+}

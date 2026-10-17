@@ -1,0 +1,249 @@
+{
+  "route": "/api/v1/tasks/task-0104",
+  "body": {
+    "data": {
+      "id": "task-0104",
+      "title": "Delta in flight",
+      "type": "feature",
+      "priority": "high",
+      "epic": "epic-0001",
+      "spec": "none",
+      "assignee": "senior-backend-dev",
+      "folder": "active",
+      "created": "2026-10-01T00:00:00Z",
+      "completed": "",
+      "blocked_on": "",
+      "superseded_by": "",
+      "depends_on": [
+        {
+          "id": "task-0106",
+          "title": "Zeta done",
+          "folder": "done"
+        }
+      ],
+      "phase": "harness",
+      "repo": "agentry",
+      "umbrella": false,
+      "subtasks": [],
+      "dependents": [
+        {
+          "id": "task-0105",
+          "title": "Epsilon awaiting commit",
+          "folder": "active"
+        }
+      ],
+      "body": "<!-- No status: or branch: field. -->\n## Description\n\nBuilds the **Overview** page on the shell. Depends on task-0106 and [the docs](https://example.com/docs).\n\n## Acceptance Criteria\n\n- [x] (FR-92) Overview shows four StatCards\n- [x] (FR-93) Needs you lists runs oldest first\n- [x] (FR-94) Board has three columns\n- [ ] (FR-95) Epic filter adds epic to all requests\n- [ ] (FR-96) Task detail shows n of m done\n\n## Definition of Done\n\n- [x] Code follows the frontend standards\n- [ ] Reviewer approved\n\n## Frontend Impact\n\n- **Exposes:** nothing new\n\n## Deploy Actions\n\n`none` beyond the committed dist.\n\n## Notes\n\nUmbrella: task-0149.\n",
+      "body_truncated": false,
+      "run": {
+        "task": "task-0104",
+        "title": "Delta in flight",
+        "lane": "default",
+        "pipeline": "build",
+        "type": "feature",
+        "stage": "ready",
+        "stage_status": "in_progress",
+        "awaiting_human": "commit",
+        "retries": 0,
+        "epic": "epic-0001",
+        "worktree": "",
+        "umbrella": false,
+        "subtasks": [],
+        "updated": "2026-10-16T22:47:57Z",
+        "stages": [
+          {
+            "name": "plan",
+            "human": false,
+            "state": "done",
+            "pass": 1,
+            "fail": 0
+          },
+          {
+            "name": "plan-approval",
+            "human": true,
+            "state": "done",
+            "pass": 0,
+            "fail": 0
+          },
+          {
+            "name": "implement",
+            "human": false,
+            "state": "done",
+            "pass": 1,
+            "fail": 1
+          },
+          {
+            "name": "test",
+            "human": false,
+            "state": "done",
+            "pass": 2,
+            "fail": 0
+          },
+          {
+            "name": "review",
+            "human": false,
+            "state": "done",
+            "pass": 1,
+            "fail": 0
+          },
+          {
+            "name": "ready",
+            "human": true,
+            "state": "now",
+            "pass": 0,
+            "fail": 0
+          },
+          {
+            "name": "done",
+            "human": false,
+            "state": "next",
+            "pass": 0,
+            "fail": 0
+          }
+        ],
+        "needs_you": {
+          "kind": "commit",
+          "since": "2026-10-16T09:00:00Z",
+          "reason": "Commit approval"
+        },
+        "supervisor": {
+          "label": "HEALTHY",
+          "seen": "2026-10-14T17:46:40Z"
+        }
+      },
+      "stages": [
+        {
+          "name": "plan",
+          "human": false,
+          "state": "done",
+          "pass": 1,
+          "fail": 0
+        },
+        {
+          "name": "plan-approval",
+          "human": true,
+          "state": "done",
+          "pass": 0,
+          "fail": 0
+        },
+        {
+          "name": "implement",
+          "human": false,
+          "state": "done",
+          "pass": 1,
+          "fail": 1
+        },
+        {
+          "name": "test",
+          "human": false,
+          "state": "done",
+          "pass": 2,
+          "fail": 0
+        },
+        {
+          "name": "review",
+          "human": false,
+          "state": "done",
+          "pass": 1,
+          "fail": 0
+        },
+        {
+          "name": "ready",
+          "human": true,
+          "state": "now",
+          "pass": 0,
+          "fail": 0
+        },
+        {
+          "name": "done",
+          "human": false,
+          "state": "next",
+          "pass": 0,
+          "fail": 0
+        }
+      ],
+      "events": [
+        {
+          "id": 1,
+          "at": "2026-10-16T08:00:00Z",
+          "lane": "",
+          "task": "task-0104",
+          "pipeline": "build",
+          "kind": "registered",
+          "stage": "implement",
+          "from_stage": "",
+          "outcome": "",
+          "via": "",
+          "detail": {}
+        },
+        {
+          "id": 2,
+          "at": "2026-10-16T08:10:00Z",
+          "lane": "",
+          "task": "task-0104",
+          "pipeline": "build",
+          "kind": "gate",
+          "stage": "implement",
+          "from_stage": "",
+          "outcome": "fail",
+          "via": "",
+          "detail": {
+            "duration_ms": 4200,
+            "exit": 1,
+            "cmd": "compileall"
+          }
+        },
+        {
+          "id": 3,
+          "at": "2026-10-16T08:20:00Z",
+          "lane": "",
+          "task": "task-0104",
+          "pipeline": "build",
+          "kind": "gate",
+          "stage": "implement",
+          "from_stage": "",
+          "outcome": "pass",
+          "via": "",
+          "detail": {
+            "duration_ms": 61000,
+            "exit": 0,
+            "cmd": "compileall"
+          }
+        },
+        {
+          "id": 4,
+          "at": "2026-10-16T08:40:00Z",
+          "lane": "",
+          "task": "task-0104",
+          "pipeline": "build",
+          "kind": "rejected",
+          "stage": "implement",
+          "from_stage": "ready",
+          "outcome": "",
+          "via": "",
+          "detail": {
+            "reason": "needs a test"
+          }
+        },
+        {
+          "id": 5,
+          "at": "2026-10-16T09:00:00Z",
+          "lane": "",
+          "task": "task-0104",
+          "pipeline": "build",
+          "kind": "parked",
+          "stage": "ready",
+          "from_stage": "",
+          "outcome": "commit",
+          "via": "",
+          "detail": {}
+        }
+      ],
+      "events_truncated": false,
+      "gate_runs": 2,
+      "gate_failures": 1,
+      "rejections": 1,
+      "handoff": null,
+      "memory_stamped_at": null
+    }
+  }
+}

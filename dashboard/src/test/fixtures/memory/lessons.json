@@ -1,0 +1,50 @@
+{
+  "route": "/api/v1/memory?kind=lesson&limit=20",
+  "body": {
+    "data": [
+      {
+        "kind": "lesson",
+        "id": 3,
+        "signature": "hook-registration-needs-a-session-restart",
+        "trigger": "when an acceptance criterion needs a hook to fire on a real dispatch",
+        "what": "a hook registered mid-session never fired",
+        "why": "Claude Code snapshots the hooks block at session start",
+        "fix": "register in session N and verify in session N+1",
+        "area": "hooks",
+        "task": "task-0013",
+        "agent": "senior-backend-dev",
+        "retired": false,
+        "created": "2026-10-12T00:00:00Z"
+      },
+      {
+        "kind": "lesson",
+        "id": 2,
+        "signature": "frontmatter-readers-are-stricter-than-they-look",
+        "trigger": "when editing a frontmatter field on a task file",
+        "what": "a valid YAML form was invisible to the regex reader",
+        "why": "each reader is a single regex over the raw text",
+        "fix": "run the reader regex against the exact string before writing it",
+        "area": "tasks",
+        "task": "task-0107",
+        "agent": "qa-engineer",
+        "retired": true,
+        "created": "2026-10-11T00:00:00Z"
+      },
+      {
+        "kind": "lesson",
+        "id": 1,
+        "signature": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "trigger": "when a signature has no break opportunity",
+        "what": "a long unbroken signature widened the card",
+        "why": "overflow-wrap defaults to normal",
+        "fix": "wrap with overflow-wrap anywhere, never ellipsize",
+        "area": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "task": "task-0106",
+        "agent": "reviewer",
+        "retired": false,
+        "created": "2026-10-09T00:00:00Z"
+      }
+    ],
+    "meta": { "total": 45, "limit": 20, "offset": 0 }
+  }
+}

@@ -42,8 +42,8 @@ PLUGIN_TO_PROJECT_TEXT = re.compile(
 # The same in Python: the plugin root constant and a project name on one line, or a
 # step above the plugin root.
 PLUGIN_TO_PROJECT_CODE = re.compile(
-    r"(?:PLUGIN_ROOT|plugin_root)[^\n]*(?:\.agentry|\.claude)"
-    r"|(?:\.agentry|\.claude)[^\n]*(?:PLUGIN_ROOT|plugin_root)"
+    r"(?:PLUGIN_ROOT|plugin_root)[^\n]*(?:\.agentry|\.claude(?!-plugin))"
+    r"|(?:\.agentry|\.claude(?!-plugin))[^\n]*(?:PLUGIN_ROOT|plugin_root)"
     r"|PLUGIN_ROOT\.parent|PLUGIN_ROOT\s*/\s*[\"']\.\.[\"']")
 PARENTS_INDEX = re.compile(r"\.parents\[(\d+)\]")
 
@@ -97,6 +97,8 @@ class GrepSanityTest(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIsNone(PLUGIN_TO_PROJECT_TEXT.search(text))
         self.assertIsNone(PLUGIN_TO_PROJECT_CODE.search('d = state.ROOT / ".agentry" / "state"'))
+        # The plugin's own manifest folder lives inside the plugin root; it is not a project path.
+        self.assertIsNone(PLUGIN_TO_PROJECT_CODE.search('m = plugin_root / ".claude-plugin" / "plugin.json"'))
 
     def test_direction_b_patterns_catch_a_planted_plugin_path(self):
         for text in (".claude/tools/pipeline/state.py", ".claude/hooks/x.sh",

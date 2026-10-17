@@ -1,0 +1,26 @@
+{
+  "route": "/api/v1/memory?kind=module&limit=20",
+  "body": {
+    "data": [
+      {
+        "kind": "module",
+        "id": 2,
+        "path": "plugin/tools/memory/memory.py",
+        "responsibility": "the memory store: record, query, export",
+        "symbols": "record, query, export, fts_query",
+        "notes": "FTS5 with a LIKE fallback",
+        "updated": "2026-10-16T00:00:00Z"
+      },
+      {
+        "kind": "module",
+        "id": 1,
+        "path": "plugin/tools/memory/inject.py",
+        "responsibility": "SubagentStart injection of ranked rows",
+        "symbols": "",
+        "notes": "",
+        "updated": "2026-10-15T00:00:00Z"
+      }
+    ],
+    "meta": { "total": 2, "limit": 20, "offset": 0 }
+  }
+}

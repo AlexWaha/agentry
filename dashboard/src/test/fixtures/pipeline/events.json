@@ -1,0 +1,97 @@
+{
+  "route": "/api/v1/events?limit=5",
+  "body": {
+    "data": [
+      {
+        "id": 25,
+        "at": "2026-10-16T09:30:00Z",
+        "lane": "",
+        "task": "task-0105",
+        "pipeline": "build",
+        "kind": "parked",
+        "stage": "ready",
+        "from_stage": "",
+        "outcome": "commit",
+        "via": "",
+        "detail": {}
+      },
+      {
+        "id": 24,
+        "at": "2026-10-16T09:20:00Z",
+        "lane": "",
+        "task": "task-0104",
+        "pipeline": "build",
+        "kind": "gate",
+        "stage": "implement",
+        "from_stage": "",
+        "outcome": "pass",
+        "via": "",
+        "detail": {
+          "duration_ms": 61000,
+          "exit": 0,
+          "cmd": "compileall"
+        }
+      },
+      {
+        "id": 23,
+        "at": "2026-10-16T09:10:00Z",
+        "lane": "",
+        "task": "task-0104",
+        "pipeline": "build",
+        "kind": "approved",
+        "stage": "plan-approval",
+        "from_stage": "",
+        "outcome": "plan",
+        "via": "cli",
+        "detail": {}
+      },
+      {
+        "id": 22,
+        "at": "2026-10-16T09:00:00Z",
+        "lane": "",
+        "task": "task-0106",
+        "pipeline": "build",
+        "kind": "merged",
+        "stage": "done",
+        "from_stage": "",
+        "outcome": "",
+        "via": "",
+        "detail": {}
+      },
+      {
+        "id": 21,
+        "at": "2026-10-16T08:50:00Z",
+        "lane": "",
+        "task": "task-0102",
+        "pipeline": "build",
+        "kind": "registered",
+        "stage": "implement",
+        "from_stage": "",
+        "outcome": "",
+        "via": "",
+        "detail": {}
+      }
+    ],
+    "meta": {
+      "total": 25,
+      "limit": 5,
+      "offset": 0,
+      "latest_id": 25,
+      "kinds": [
+        "abandoned",
+        "approved",
+        "blocked",
+        "closed",
+        "continued",
+        "gate",
+        "merged",
+        "parked",
+        "paused",
+        "registered",
+        "rejected",
+        "resumed",
+        "transition"
+      ]
+    }
+  }
+}
