@@ -54,8 +54,8 @@ export const kindPaint = (kind: string): KindPaint => KIND_PAINT[kind] ?? FALLBA
 /** Every custom property the canvas reads, so the palette can be resolved in one pass. */
 export const PAINT_TOKENS: readonly string[] = [
   ...new Set([...Object.values(KIND_PAINT), FALLBACK_PAINT].flatMap((paint) => [paint.fill, paint.stroke])),
-  "--border-strong",
   "--ring",
   "--foreground",
   "--background",
+  "--muted",
 ];

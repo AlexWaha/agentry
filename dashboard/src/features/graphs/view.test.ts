@@ -4,7 +4,7 @@ import type { GraphEdge, GraphNode } from "@/types/api";
 
 import { FIT_MAX_SCALE, LABEL_ZOOM_THRESHOLD, ZOOM_MAX, ZOOM_MIN } from "./config";
 import { buildScene, type SimNode } from "./layout";
-import { centredTransform, clampScale, fitTransform, labelledNodes, nearestInDirection, nodeAtPoint, toGraph, toScreen } from "./view";
+import { centredTransform, clampScale, fitTransform, labelledNodes, nearestInDirection, nodeAtPoint, placeLabels, toGraph, toScreen, type LabelBox } from "./view";
 
 const SIZE = { width: 800, height: 600 };
 const placedNode = (id: string, x: number, y: number, r = 8): SimNode => ({ id, kind: "lesson", label: id, degree: 1, r, x, y });
@@ -115,12 +115,24 @@ describe("labelledNodes", () => {
   });
   const centred = (k: number) => ({ x: SIZE.width / 2, y: SIZE.height / 2, k });
 
-  it("labels the hubs and the highlighted nodes when zoomed out", () => {
-    const labelled = labelledNodes(scene, centred(1), SIZE, new Set(["n13"])).map((n) => n.id);
+  it("labels the hubs when zoomed out and nothing is highlighted", () => {
+    const labelled = labelledNodes(scene, centred(1), SIZE, null).map((n) => n.id);
 
     expect(labelled).toContain("n0");
-    expect(labelled).toContain("n13");
     expect(labelled.length).toBeLessThan(scene.nodes.length);
+  });
+
+  it("labels only the highlighted and forced nodes while one is highlighted, so the dimmed rest has no labels", () => {
+    const labelled = labelledNodes(scene, centred(LABEL_ZOOM_THRESHOLD), SIZE, new Set(["n0", "n13"]), new Set(["n5"])).map((n) => n.id);
+
+    expect(labelled.sort()).toEqual(["n0", "n13", "n5"]);
+  });
+
+  it("orders forced nodes first, then highlighted ones, then hubs, then the rest by degree", () => {
+    const labelled = labelledNodes(scene, centred(LABEL_ZOOM_THRESHOLD), SIZE, null, new Set(["n7"])).map((n) => n.id);
+
+    expect(labelled[0]).toBe("n7");
+    expect(labelled[1]).toBe("n0");
   });
 
   it("labels every node in view once zoomed past the threshold", () => {
@@ -131,5 +143,48 @@ describe("labelledNodes", () => {
     const panned = { x: -5000, y: SIZE.height / 2, k: LABEL_ZOOM_THRESHOLD };
 
     expect(labelledNodes(scene, panned, SIZE, new Set(scene.nodes.map((n) => n.id)))).toHaveLength(0);
+  });
+});
+
+describe("placeLabels", () => {
+  const box = (id: string, x: number, y: number, forced = false): LabelBox => ({ id, x, y, width: 60, height: 13, forced });
+
+  it("keeps every label when none overlaps", () => {
+    const kept = placeLabels([box("a", 100, 100), box("b", 300, 100), box("c", 100, 200)]);
+
+    expect(kept.map((b) => b.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("drops a label that overlaps one placed before it, so priority order decides", () => {
+    const kept = placeLabels([box("first", 100, 100), box("second", 110, 104), box("third", 400, 100)]);
+
+    expect(kept.map((b) => b.id)).toEqual(["first", "third"]);
+  });
+
+  it("treats labels on neighbouring lines as overlapping only when they touch, gap included", () => {
+    expect(placeLabels([box("a", 100, 100), box("b", 100, 113)], 0).map((b) => b.id)).toEqual(["a", "b"]);
+    expect(placeLabels([box("a", 100, 100), box("b", 100, 113)], 4).map((b) => b.id)).toEqual(["a"]);
+    expect(placeLabels([box("a", 100, 100), box("b", 100, 118)], 4).map((b) => b.id)).toEqual(["a", "b"]);
+  });
+
+  it("always keeps a forced label, even over another", () => {
+    const kept = placeLabels([box("first", 100, 100), box("active", 105, 102, true)]);
+
+    expect(kept.map((b) => b.id)).toEqual(["first", "active"]);
+  });
+
+  it("never leaves two kept, unforced labels overlapping in a crowd", () => {
+    const crowd = Array.from({ length: 60 }, (_, i) => box(`n${i}`, 200 + (i % 10) * 17, 200 + Math.floor(i / 10) * 5));
+
+    const kept = placeLabels(crowd, 4);
+
+    expect(kept.length).toBeGreaterThan(0);
+    expect(kept.length).toBeLessThan(crowd.length);
+    for (let i = 0; i < kept.length; i += 1) {
+      for (let j = i + 1; j < kept.length; j += 1) {
+        const apart = Math.abs(kept[i].x - kept[j].x) >= 60 + 4 || Math.abs(kept[i].y - kept[j].y) >= 13 + 4;
+        expect(apart).toBe(true);
+      }
+    }
   });
 });

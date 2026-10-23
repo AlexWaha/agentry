@@ -1,6 +1,6 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ROUTES } from "@/config/routes";
 import { bytes } from "@/lib/format";
@@ -13,8 +13,21 @@ import { installCanvasStub, type CanvasStub } from "@/test/utils/canvas";
 import { setReducedMotion } from "@/test/utils/match-media";
 import { renderWithApp } from "@/test/utils/render";
 
+import { createGraph3D } from "./graph3d";
 import { GraphsPage } from "./GraphsPage";
 import { validateGraphsSearch } from "./search";
+
+vi.mock("./graph3d", () => ({
+  createGraph3D: vi.fn(() => ({
+    fit: vi.fn(),
+    reset: vi.fn(),
+    zoomBy: vi.fn(),
+    setView: vi.fn(),
+    move: vi.fn(() => null),
+    reveal: vi.fn(),
+    destroy: vi.fn(),
+  })),
+}));
 
 const MEMORY_GRAPH = memoryGraph.body.data;
 const NEVER = (): Promise<Response> => new Promise<Response>(() => undefined);
@@ -186,6 +199,122 @@ describe("Graphs page, memory graph drawing", () => {
     await userEvent.click(screen.getByRole("button", { name: "Show as graph" }));
 
     expect(await drawing(/Memory graph/)).toBeInTheDocument();
+  });
+});
+
+describe("Graphs page, 2D and 3D mode", () => {
+  const modeButton = (name: "2D" | "3D") => screen.getByRole("button", { name });
+
+  it("defaults to 2D when the OS asks for reduced motion and starts no 3D scene", async () => {
+    mockApi({ "/api/v1/graphs/memory": ok(MEMORY_GRAPH) });
+    await renderGraphs();
+
+    const view = await drawing(/Memory graph/);
+
+    expect(view.tagName).toBe("CANVAS");
+    expect(modeButton("2D")).toHaveAttribute("aria-pressed", "true");
+    expect(modeButton("3D")).toHaveAttribute("aria-pressed", "false");
+    expect(createGraph3D).not.toHaveBeenCalled();
+  });
+
+  it("defaults to 3D without reduced motion and loads the 3D scene", async () => {
+    setReducedMotion(false);
+    mockApi({ "/api/v1/graphs/memory": ok(MEMORY_GRAPH) });
+    await renderGraphs();
+
+    const view = await drawing(/Memory graph/);
+
+    expect(view).toHaveAttribute("data-mode", "3d");
+    expect(modeButton("3D")).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() => expect(createGraph3D).toHaveBeenCalledTimes(1));
+  });
+
+  it("shows 3D for ?mode=3d even under reduced motion, and 2D for ?mode=2d without it", async () => {
+    mockApi({ "/api/v1/graphs/memory": ok(MEMORY_GRAPH) });
+    await renderGraphs("/graphs?mode=3d");
+    expect(await drawing(/Memory graph/)).toHaveAttribute("data-mode", "3d");
+  });
+
+  it("keeps 2D for ?mode=2d when motion is not reduced", async () => {
+    setReducedMotion(false);
+    mockApi({ "/api/v1/graphs/memory": ok(MEMORY_GRAPH) });
+    await renderGraphs("/graphs?mode=2d");
+
+    expect((await drawing(/Memory graph/)).tagName).toBe("CANVAS");
+    expect(createGraph3D).not.toHaveBeenCalled();
+  });
+
+  it("switches mode with the buttons and records the choice in the URL", async () => {
+    mockApi({ "/api/v1/graphs/memory": ok(MEMORY_GRAPH) });
+    const { router } = await renderGraphs();
+    await drawing(/Memory graph/);
+
+    await userEvent.click(modeButton("3D"));
+
+    expect(router.state.location.search).toEqual({ mode: "3d" });
+    expect(await drawing(/Memory graph/)).toHaveAttribute("data-mode", "3d");
+    await userEvent.click(modeButton("2D"));
+
+    expect(router.state.location.search).toEqual({ mode: "2d" });
+    expect((await drawing(/Memory graph/)).tagName).toBe("CANVAS");
+  });
+
+  it("drops an unknown mode from the URL and keeps the default", async () => {
+    mockApi({ "/api/v1/graphs/memory": ok(MEMORY_GRAPH) });
+    const { router } = await renderGraphs("/graphs?mode=4d");
+
+    expect((await drawing(/Memory graph/)).tagName).toBe("CANVAS");
+    expect(router.state.location.search).toEqual({});
+  });
+
+  it("keeps the chosen mode when the view changes to the code graph", async () => {
+    mockApi({ "/api/v1/graphs/memory": ok(MEMORY_GRAPH), ...codeRoutes() });
+    const { router } = await renderGraphs("/graphs?mode=3d");
+    await drawing(/Memory graph/);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Code graph" }));
+
+    expect(await drawing(/Modules of root/)).toHaveAttribute("data-mode", "3d");
+    expect(router.state.location.search).toEqual({ view: "code", mode: "3d" });
+  });
+
+  it("falls back to 2D with a notice when the 3D scene cannot start, and tries 3D again on request", async () => {
+    vi.mocked(createGraph3D).mockImplementationOnce(() => {
+      throw new Error("Error creating WebGL context");
+    });
+    mockApi({ "/api/v1/graphs/memory": ok(MEMORY_GRAPH) });
+    await renderGraphs("/graphs?mode=3d");
+
+    expect(await screen.findByText(/The 3D view is not available in this browser/)).toBeInTheDocument();
+    expect((await drawing(/Memory graph/)).tagName).toBe("CANVAS");
+    expect(modeButton("2D")).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(modeButton("3D"));
+
+    expect(await drawing(/Memory graph/)).toHaveAttribute("data-mode", "3d");
+    expect(screen.queryByText(/The 3D view is not available in this browser/)).not.toBeInTheDocument();
+  });
+
+  it("lists nodes and edges in Show as table whichever mode is chosen", async () => {
+    mockApi({ "/api/v1/graphs/memory": ok(MEMORY_GRAPH) });
+    await renderGraphs("/graphs?mode=3d");
+    await drawing(/Memory graph/);
+
+    await userEvent.click(screen.getByRole("button", { name: "Show as table" }));
+
+    expect(within(screen.getByRole("table", { name: "Nodes" })).getAllByRole("row")).toHaveLength(MEMORY_GRAPH.nodes.length + 1);
+  });
+
+  it("has no axe violation with the mode switch in both modes", async () => {
+    mockApi({ "/api/v1/graphs/memory": ok(MEMORY_GRAPH) });
+    const { container } = await renderGraphs("/graphs?mode=3d");
+    await drawing(/Memory graph/);
+    await expectNoAxeViolations(container);
+
+    await userEvent.click(modeButton("2D"));
+    await drawing(/Memory graph/);
+
+    await expectNoAxeViolations(container);
   });
 });
 

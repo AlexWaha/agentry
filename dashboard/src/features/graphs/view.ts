@@ -1,4 +1,4 @@
-import { FIT_MAX_SCALE, FIT_PADDING, HIT_SLACK_PX, LABEL_ZOOM_THRESHOLD, MAX_RADIUS, ZOOM_MAX, ZOOM_MIN } from "./config";
+import { FIT_MAX_SCALE, FIT_PADDING, HIT_SLACK_PX, LABEL_GAP_PX, LABEL_ZOOM_THRESHOLD, MAX_RADIUS, ZOOM_MAX, ZOOM_MIN } from "./config";
 import type { Scene, SimNode } from "./layout";
 
 /** A pan and zoom: a graph point `p` is drawn at `p * k + (x, y)`. */
@@ -81,10 +81,10 @@ export function nodeAtPoint(nodes: readonly SimNode[], transform: ViewTransform,
  * The node an arrow key moves to: among nodes strictly on that side of the current one, the nearest, where
  * sideways distance counts double so the move follows the row or column rather than jumping diagonally.
  */
-export function nearestInDirection(nodes: readonly SimNode[], from: SimNode, direction: Direction): SimNode | undefined {
+export function nearestInDirection<T extends { x?: number; y?: number }>(nodes: readonly T[], from: T, direction: Direction): T | undefined {
   const horizontal = direction === "left" || direction === "right";
   const sign = direction === "right" || direction === "down" ? 1 : -1;
-  let best: SimNode | undefined;
+  let best: T | undefined;
   let bestScore = Infinity;
   for (const node of nodes) {
     if (node === from || node.x === undefined || node.y === undefined) continue;
@@ -107,15 +107,53 @@ export const inView = (x: number, y: number, size: Size, margin: number): boolea
   x >= -margin && y >= -margin && x <= size.width + margin && y <= size.height + margin;
 
 /**
- * Which nodes get a label: the highlighted ones always, the hubs at every zoom, and every node in view once
- * the scale reaches the threshold. A node outside the canvas is never labelled.
+ * Which nodes may get a label, in the order they should be placed: the forced ones (active, selected, focused),
+ * then the highlighted, then the hubs, then the rest, each group by degree. The forced and highlighted nodes always
+ * qualify; while a node is highlighted nothing else does, so the dimmed rest carries no labels; otherwise the hubs
+ * qualify at every zoom and every node once the scale reaches the threshold. A node outside the canvas never does.
+ * Whether a label really fits is decided by `placeLabels`.
  */
-export function labelledNodes(scene: Scene, transform: ViewTransform, size: Size, highlighted: ReadonlySet<string> | null): SimNode[] {
+export function labelledNodes(
+  scene: Scene,
+  transform: ViewTransform,
+  size: Size,
+  highlighted: ReadonlySet<string> | null,
+  forced: ReadonlySet<string> = new Set(),
+): SimNode[] {
   const zoomedIn = transform.k >= LABEL_ZOOM_THRESHOLD;
-  return scene.nodes.filter((node) => {
-    if (node.x === undefined || node.y === undefined) return false;
-    const [sx, sy] = toScreen(transform, node.x, node.y);
-    if (!inView(sx, sy, size, MAX_RADIUS)) return false;
-    return Boolean(highlighted?.has(node.id)) || scene.hubs.has(node.id) || zoomedIn;
-  });
+  const rank = (node: SimNode): number => (forced.has(node.id) ? 0 : highlighted?.has(node.id) ? 1 : scene.hubs.has(node.id) ? 2 : 3);
+  return scene.nodes
+    .filter((node) => {
+      if (node.x === undefined || node.y === undefined) return false;
+      const [sx, sy] = toScreen(transform, node.x, node.y);
+      if (!inView(sx, sy, size, MAX_RADIUS)) return false;
+      if (forced.has(node.id) || highlighted?.has(node.id)) return true;
+      return highlighted === null && (scene.hubs.has(node.id) || zoomedIn);
+    })
+    .sort((a, b) => rank(a) - rank(b) || b.degree - a.degree || a.id.localeCompare(b.id));
+}
+
+/** A label to place: `x` is the centre of its text and `y` its baseline, in screen pixels. */
+export interface LabelBox {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** A forced label (the active node) is kept even when it overlaps another. */
+  forced: boolean;
+}
+
+/** True when two boxes, each with its baseline at `y`, are closer than `gap` on both axes. */
+const overlaps = (a: LabelBox, b: LabelBox, gap: number): boolean =>
+  Math.abs(a.x - b.x) < (a.width + b.width) / 2 + gap &&
+  Math.abs(a.y - a.height / 2 - (b.y - b.height / 2)) < (a.height + b.height) / 2 + gap;
+
+/** The labels that fit: boxes are taken in the order given and one that overlaps a kept box is dropped. */
+export function placeLabels(boxes: readonly LabelBox[], gap = LABEL_GAP_PX): LabelBox[] {
+  const kept: LabelBox[] = [];
+  for (const box of boxes) {
+    if (box.forced || !kept.some((other) => overlaps(box, other, gap))) kept.push(box);
+  }
+  return kept;
 }

@@ -68,8 +68,11 @@ export function capGraph(nodes: readonly GraphNode[], edges: readonly GraphEdge[
   const adjacent = new Map<string, string[]>();
   for (const edge of edges) {
     if (!byId.has(edge.source) || !byId.has(edge.target) || edge.source === edge.target) continue;
-    adjacent.set(edge.source, [...(adjacent.get(edge.source) ?? []), edge.target]);
-    adjacent.set(edge.target, [...(adjacent.get(edge.target) ?? []), edge.source]);
+    for (const [from, to] of [[edge.source, edge.target], [edge.target, edge.source]]) {
+      const list = adjacent.get(from);
+      if (list) list.push(to);
+      else adjacent.set(from, [to]);
+    }
   }
   const heavier = (a: GraphNode, b: GraphNode): number => b.weight - a.weight || a.id.localeCompare(b.id);
   const ranked = [...nodes].sort(heavier);

@@ -40,13 +40,19 @@ The LICENSE holder, the plugin author in `plugin.json` and the marketplace owner
   committed in `plugin/tools/dashboard/dist/`, so a user needs no Node; the server checks
   the build against a manifest before it binds a port (task-0142).
 - The dashboard Graphs page draws the memory graph and the code graph as a live force
-  simulation on a canvas, as Obsidian does: wheel and pinch zoom, background pan, drag a
-  node (it is pinned while held and the layout reheats), hover highlighting of a node and
-  its neighbours, labels on hover and when zoomed in, Fit to view and Reset view, and a
-  details strip with a link for task nodes. A graph over the node cap keeps its most
-  linked nodes together with the nodes that connect them instead of a disconnected set.
-  The canvas is one tab stop with arrow-key node navigation, "Show as table" stays, and
-  prefers-reduced-motion settles the layout without animation (task-0152).
+  simulation, in 3D by default (three.js, a lazy chunk fetched only when a 3D graph opens:
+  orbit rotation, zoom, node drag) with a 2D/3D switch kept in the address; 2D is the
+  default under prefers-reduced-motion and the fallback when WebGL is missing or the 3D code
+  cannot be loaded. Hovering or selecting a node lights it and its neighbours with rings and
+  thick accent links (particles in 3D) and strongly dims the rest; labels are placed so they
+  do not overlap one another, except that the labels of the active node itself are always
+  shown. Fit to view and Reset view controls, and a details strip with a link for task nodes.
+  A graph over the node cap keeps its most linked nodes together with the nodes that connect
+  them. The view is one tab stop with the same keys in 2D and 3D (arrow keys, Home, End,
+  PageUp and PageDown walk the nodes, Enter selects, Shift with an arrow key orbits the 3D
+  camera), a selection is announced to screen readers, "Show as table" stays, and the
+  JavaScript gzip budget is two numbers: 204800 bytes for the app and 256000 bytes for the 3D
+  chunk (task-0152).
 - User page `docs/dashboard.md`: start, stop, security model, SSH tunnel note and
   troubleshooting, with the measured behaviour of the server on stop and on session end
   (task-0143).

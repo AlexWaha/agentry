@@ -6,7 +6,6 @@ red test, not a surprise at release time, and it serves the real dist to prove t
 
 from __future__ import annotations
 
-import gzip
 import json
 import re
 import sys
@@ -17,6 +16,7 @@ import tmproot
 
 TESTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS_DIR))
+import dashboard_budget as budget  # noqa: E402
 import dashboard_sandbox as sandbox  # noqa: E402
 
 DASHBOARD_PY = TESTS_DIR.parent / "dashboard"
@@ -24,12 +24,7 @@ sys.path.insert(0, str(DASHBOARD_PY))
 import dist_manifest  # noqa: E402
 
 DIST = DASHBOARD_PY / "dist"
-JS_GZIP_BUDGET = 204_800
 ICO_SIZES = [16, 32, 48]
-
-
-def gzip_size(path: Path) -> int:
-    return len(gzip.compress(path.read_bytes(), compresslevel=9, mtime=0))
 
 
 class ShippedDistTest(unittest.TestCase):
@@ -61,9 +56,44 @@ class ShippedDistTest(unittest.TestCase):
         self.assertNotIn("version", text)
 
     def test_javascript_gzip_total_is_within_the_budget(self):
-        total = sum(gzip_size(path) for path in (DIST / "assets").glob("*.js"))
+        rest, _ = budget.gzip_totals(DIST / "assets")
 
-        self.assertLessEqual(total, JS_GZIP_BUDGET, f"{total} bytes gzip, budget {JS_GZIP_BUDGET}")
+        limit = budget.JS_GZIP_BUDGET
+        self.assertLessEqual(rest, limit, f"{rest} bytes gzip, budget {limit}")
+
+    def test_the_3d_chunk_is_within_its_own_budget(self):
+        _, three = budget.gzip_totals(DIST / "assets")
+
+        self.assertGreater(three, 0, "no graph3d chunk: the 3D view is not built, or the chunk was renamed")
+        limit = budget.GRAPH3D_GZIP_BUDGET
+        self.assertLessEqual(three, limit, f"{three} bytes gzip, budget {limit}")
+
+    def test_the_3d_chunk_loads_only_on_demand(self):
+        scripts = list((DIST / "assets").glob("*.js"))
+        three = [p for p in scripts if budget.is_graph3d(p)]
+        self.assertEqual(len(three), 1, [p.name for p in three])
+
+        others = [p for p in scripts if not budget.is_graph3d(p)]
+        importers = [p.name for p in others if three[0].name in p.read_text(encoding="utf-8")]
+
+        self.assertEqual(len(importers), 1, importers)
+        self.assertTrue(importers[0].startswith("GraphsPage-"), importers)
+        # Reached through a dynamic import( only: a static import would load three.js with the Graphs page.
+        text = (DIST / "assets" / importers[0]).read_text(encoding="utf-8")
+        name = re.escape(three[0].name)
+        dynamic = rf"import\(\s*[`\"']\./{name}[`\"']\s*\)"
+        self.assertRegex(text, dynamic, "no dynamic import( of the 3D chunk")
+        self.assertNotRegex(text, rf"from\s*[\"']\./{name}[\"']", "a static import of the 3D chunk")
+        self.assertNotRegex(text, rf"^\s*import\s*[\"']\./{name}", "a bare static import of the 3D chunk")
+        html = (DIST / "index.html").read_text(encoding="utf-8")
+        self.assertNotIn("graph3d", html, "the 3D chunk is preloaded")
+
+    def test_three_js_is_not_in_any_other_chunk(self):
+        for path in (DIST / "assets").glob("*.js"):
+            if budget.is_graph3d(path):
+                continue
+            with self.subTest(chunk=path.name):
+                self.assertNotIn("WebGLRenderer", path.read_text(encoding="utf-8"))
 
     def test_index_html_has_a_script_src_in_head_and_nothing_inline_or_external(self):
         html = (DIST / "index.html").read_text(encoding="utf-8")

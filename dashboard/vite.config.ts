@@ -10,7 +10,13 @@ const target = process.env.DASHBOARD_ORIGIN ?? "http://127.0.0.1:41000";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  resolve: { alias: { "@": path.resolve(import.meta.dirname, "src") } },
+  resolve: {
+    alias: {
+      "@": path.resolve(import.meta.dirname, "src"),
+      // The 3D view never uses WebGPU; the real module would add about a megabyte to its chunk.
+      "three/webgpu": path.resolve(import.meta.dirname, "src/features/graphs/webgpu-stub.ts"),
+    },
+  },
   server: {
     proxy: {
       "/api": { target, changeOrigin: true, headers: { Origin: target } },

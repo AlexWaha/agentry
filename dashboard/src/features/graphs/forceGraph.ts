@@ -14,6 +14,7 @@ import {
   ZOOM_MIN,
 } from "./config";
 import { paint, readFontFamily, readPalette } from "./draw";
+import type { EngineOptions, GraphEngine } from "./engine";
 import { createSimulation, settle, type Scene, type SimNode } from "./layout";
 import {
   centredTransform,
@@ -24,35 +25,13 @@ import {
   nodeAtPoint,
   toGraph,
   toScreen,
-  type Direction,
   type Size,
   type ViewTransform,
 } from "./view";
 
-export interface EngineOptions {
-  /** Run the layout to rest before the first frame and never animate (prefers-reduced-motion). */
-  reducedMotion: boolean;
-  /** A click on a node (its id) or on the background (null). */
-  onSelect: (id: string | null) => void;
-}
-
-export interface EngineView {
-  selected: string | null;
-  /** The node the keyboard is on; null when the canvas has no keyboard focus. */
-  focused: string | null;
-}
-
-export interface GraphEngine {
-  fit: () => void;
-  reset: () => void;
-  zoomBy: (factor: number) => void;
-  setView: (view: EngineView) => void;
-  /** The id of the nearest node in that direction from `fromId`, brought into view; null when there is none. */
-  move: (fromId: string, direction: Direction) => string | null;
-  reveal: (id: string) => void;
+export interface Engine2D extends GraphEngine {
   transform: () => ViewTransform;
   isAnimating: () => boolean;
-  destroy: () => void;
 }
 
 /** What d3-drag carries for a gesture that started on a node: the node's screen position and the node. */
@@ -76,7 +55,7 @@ const easeOut = (p: number): number => 1 - (1 - p) ** 3;
  * the layout reheats). The loop runs only while something moves, so an idle graph costs nothing. With reduced
  * motion the layout is settled before the first frame and views change without animation.
  */
-export function createGraphEngine(canvas: HTMLCanvasElement, scene: Scene, options: EngineOptions): GraphEngine {
+export function createGraphEngine(canvas: HTMLCanvasElement, scene: Scene, options: EngineOptions): Engine2D {
   const context = canvas.getContext("2d");
   const simulation = createSimulation(scene);
   const view = select(canvas);

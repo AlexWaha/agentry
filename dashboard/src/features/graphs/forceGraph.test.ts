@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import memoryGraph from "@/test/fixtures/memory/graph-memory.json";
 import { installCanvasStub, type CanvasStub } from "@/test/utils/canvas";
 
-import { FALLBACK_HEIGHT, FALLBACK_WIDTH, ZOOM_MAX } from "./config";
-import { createGraphEngine, type GraphEngine } from "./forceGraph";
+import { DIM_NODE_ALPHA, FALLBACK_HEIGHT, FALLBACK_WIDTH, ZOOM_MAX } from "./config";
+import { createGraphEngine, type Engine2D } from "./forceGraph";
 import { buildScene, type SimNode } from "./layout";
 import { centredTransform, fitTransform, nodeAtPoint, toGraph, toScreen } from "./view";
 
@@ -16,7 +16,7 @@ let queue: Map<number, FrameRequestCallback>;
 let clock = 0;
 let nextId = 0;
 let stub: CanvasStub;
-const engines: GraphEngine[] = [];
+const engines: Engine2D[] = [];
 const canvases: HTMLCanvasElement[] = [];
 
 function pump(frames = 1): void {
@@ -28,7 +28,7 @@ function pump(frames = 1): void {
   }
 }
 
-function pumpUntilIdle(engine: GraphEngine, limit = 5000): number {
+function pumpUntilIdle(engine: Engine2D, limit = 5000): number {
   let frames = 0;
   while (engine.isAnimating() && frames < limit) {
     pump();
@@ -273,7 +273,30 @@ describe("createGraphEngine, pointer and keyboard helpers", () => {
     expect(engine.isAnimating()).toBe(false);
   });
 
-  it("lights a hovered node's neighbourhood and labels it, then goes back", () => {
+  it("lights a hovered node's neighbourhood, labels only it and strongly dims the rest, then goes back", () => {
+    const { canvas, engine, node, screenOf } = setup(true, STAR);
+    engine.reset();
+    pump();
+    stub.clear();
+    const [x, y] = screenOf(node("leaf5"));
+
+    canvas.dispatchEvent(mouse("pointermove", x, y));
+    pump();
+
+    expect(canvas.dataset.hover).toBe("true");
+    expect(stub.labels().sort()).toEqual(["hub", "leaf5"]);
+    expect(stub.assigned("globalAlpha")).toContain(DIM_NODE_ALPHA);
+    stub.clear();
+    canvas.dispatchEvent(mouse("pointerleave", x, y));
+    pump();
+
+    expect(canvas.dataset.hover).toBe("false");
+    expect(stub.labels()).toContain("hub");
+    expect(stub.labels()).not.toContain("leaf29");
+    expect(stub.assigned("globalAlpha")).not.toContain(DIM_NODE_ALPHA);
+  });
+
+  it("labels a crowded neighbourhood without overlap: some labels give way to others", () => {
     const { canvas, engine, node, screenOf } = setup(true, STAR);
     engine.reset();
     pump();
@@ -283,15 +306,10 @@ describe("createGraphEngine, pointer and keyboard helpers", () => {
     canvas.dispatchEvent(mouse("pointermove", x, y));
     pump();
 
-    expect(canvas.dataset.hover).toBe("true");
-    expect(stub.labels()).toEqual(expect.arrayContaining(["hub", "leaf29", "leaf2"]));
-    stub.clear();
-    canvas.dispatchEvent(mouse("pointerleave", x, y));
-    pump();
-
-    expect(canvas.dataset.hover).toBe("false");
-    expect(stub.labels()).toContain("hub");
-    expect(stub.labels()).not.toContain("leaf29");
+    const drawn = stub.labelsDrawn();
+    expect(drawn.map((label) => label.text)).toContain("hub");
+    expect(drawn.length).toBeGreaterThan(1);
+    expect(drawn.length).toBeLessThan(31);
   });
 
   it("labels the selected and the keyboard-focused node", () => {

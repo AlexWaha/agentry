@@ -1,27 +1,33 @@
-import { LABEL_FONT_PX } from "./config";
+import {
+  ACTIVE_RING_PX,
+  BASE_LINK_ALPHA,
+  BASE_LINK_PX,
+  DIM_LINK_ALPHA,
+  DIM_NODE_ALPHA,
+  LABEL_FONT_PX,
+  LABEL_GAP_PX,
+  LIT_LINK_PX,
+  RING_PX,
+} from "./config";
+import { isLitLink, litNodes } from "./highlight";
 import { kindPaint, PAINT_TOKENS } from "./kinds";
 import type { Scene, SimNode } from "./layout";
-import { labelledNodes, toScreen, type Size, type ViewTransform } from "./view";
+import { labelledNodes, placeLabels, toScreen, type LabelBox, type Size, type ViewTransform } from "./view";
 
 /** Custom property name to its resolved colour for the current theme. */
 export type Palette = Record<string, string>;
 
 const FALLBACK_COLOUR = "currentColor";
 const FALLBACK_FONT = "sans-serif";
-const EDGE_ALPHA = 0.55;
-const DIMMED_ALPHA = 0.1;
-const DIMMED_NODE_ALPHA = 0.3;
-const RING_PX = 3;
 const HALO_PX = 3;
-const LABEL_GAP_PX = 5;
 
 /** Resolves every token the drawing uses against the canvas element, so it follows the theme class. */
-export function readPalette(canvas: HTMLCanvasElement): Palette {
+export function readPalette(canvas: HTMLElement): Palette {
   const style = getComputedStyle(canvas);
   return Object.fromEntries(PAINT_TOKENS.map((token) => [token, style.getPropertyValue(token).trim() || FALLBACK_COLOUR]));
 }
 
-export function readFontFamily(canvas: HTMLCanvasElement): string {
+export function readFontFamily(canvas: HTMLElement): string {
   return getComputedStyle(canvas).fontFamily || FALLBACK_FONT;
 }
 
@@ -33,7 +39,7 @@ export interface Frame {
   palette: Palette;
   fontFamily: string;
   scene: Scene;
-  /** The node whose neighbourhood is lit (hovered, else selected); the rest is dimmed. */
+  /** The node whose neighbourhood is lit (hovered, else selected); the rest is strongly dimmed. */
   active: SimNode | undefined;
   selected: SimNode | undefined;
   /** The node the keyboard is on, drawn with a ring and a label. */
@@ -42,46 +48,59 @@ export interface Frame {
 
 const colour = (palette: Palette, token: string): string => palette[token] ?? FALLBACK_COLOUR;
 
-/** Paints one frame: edges, then nodes, then the labels at a constant screen size. */
+/**
+ * Paints one frame (FR-108). Without an active node every link is clearly visible. With one, the node and its
+ * neighbours keep full strength and get a ring, the links that touch the node are thick and in the accent colour,
+ * and everything else is strongly dimmed. Labels come last, at a constant screen size, and never overlap.
+ */
 export function paint(ctx: CanvasRenderingContext2D, frame: Frame): void {
   const { size, ratio, transform, palette, scene, active, selected, focused } = frame;
-  const lit = active ? new Set([active.id, ...(scene.neighbours.get(active.id) ?? [])]) : null;
+  const lit = litNodes(scene, active?.id);
+  const k = transform.k;
 
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   ctx.clearRect(0, 0, size.width, size.height);
   ctx.save();
   ctx.translate(transform.x, transform.y);
-  ctx.scale(transform.k, transform.k);
+  ctx.scale(k, k);
+  ctx.lineCap = "round";
 
-  ctx.lineWidth = 1.5 / transform.k;
-  ctx.strokeStyle = colour(palette, "--border-strong");
-  for (const dimmedPass of active ? [true, false] : [false]) {
-    ctx.globalAlpha = dimmedPass ? DIMMED_ALPHA : active ? 1 : EDGE_ALPHA;
+  const strokeLinks = (pick: (touches: boolean) => boolean, style: string, alpha: number, widthPx: number): void => {
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = style;
+    ctx.lineWidth = widthPx / k;
     ctx.beginPath();
     for (const link of scene.links) {
-      const touches = !active || link.source === active || link.target === active;
-      if (touches === dimmedPass) continue;
+      if (!pick(isLitLink(active?.id, link.source.id, link.target.id))) continue;
       ctx.moveTo(link.source.x ?? 0, link.source.y ?? 0);
       ctx.lineTo(link.target.x ?? 0, link.target.y ?? 0);
     }
     ctx.stroke();
+  };
+  if (active) {
+    strokeLinks((touches) => !touches, colour(palette, "--muted-foreground"), DIM_LINK_ALPHA, BASE_LINK_PX);
+    strokeLinks((touches) => touches, colour(palette, "--ring"), 1, LIT_LINK_PX);
+  } else {
+    strokeLinks(() => true, colour(palette, "--muted-foreground"), BASE_LINK_ALPHA, BASE_LINK_PX);
   }
 
   for (const node of scene.nodes) {
     const dimmed = lit !== null && !lit.has(node.id);
     const looks = kindPaint(node.kind);
-    ctx.globalAlpha = dimmed ? DIMMED_NODE_ALPHA : 1;
+    ctx.globalAlpha = dimmed ? DIM_NODE_ALPHA : 1;
     ctx.beginPath();
     ctx.arc(node.x ?? 0, node.y ?? 0, node.r, 0, Math.PI * 2);
     ctx.fillStyle = colour(palette, looks.fill);
     ctx.fill();
-    ctx.lineWidth = looks.strokeWidth / transform.k;
+    ctx.lineWidth = looks.strokeWidth / k;
     ctx.strokeStyle = colour(palette, looks.stroke);
     ctx.stroke();
-    if (node === selected || node === focused) {
+    const strong = node === active || node === selected || node === focused;
+    if (strong || (lit !== null && lit.has(node.id))) {
+      const ring = (strong ? ACTIVE_RING_PX : RING_PX) / k;
       ctx.beginPath();
-      ctx.arc(node.x ?? 0, node.y ?? 0, node.r + RING_PX / transform.k, 0, Math.PI * 2);
-      ctx.lineWidth = RING_PX / transform.k;
+      ctx.arc(node.x ?? 0, node.y ?? 0, node.r + ring, 0, Math.PI * 2);
+      ctx.lineWidth = ring;
       ctx.strokeStyle = colour(palette, "--ring");
       ctx.stroke();
     }
@@ -95,16 +114,25 @@ export function paint(ctx: CanvasRenderingContext2D, frame: Frame): void {
   ctx.textBaseline = "alphabetic";
   ctx.lineJoin = "round";
   ctx.lineWidth = HALO_PX;
-  const shown = new Set<string>(lit ?? []);
-  if (focused) shown.add(focused.id);
-  for (const node of labelledNodes(scene, transform, size, shown)) {
+  const forced = new Set<string>();
+  for (const node of [active, selected, focused]) if (node) forced.add(node.id);
+  const boxes: LabelBox[] = labelledNodes(scene, transform, size, lit, forced).map((node) => {
     const [sx, sy] = toScreen(transform, node.x ?? 0, node.y ?? 0);
-    const y = sy - node.r * transform.k - LABEL_GAP_PX;
-    ctx.globalAlpha = lit !== null && !lit.has(node.id) ? DIMMED_NODE_ALPHA : 1;
-    ctx.strokeStyle = colour(palette, "--background");
-    ctx.strokeText(node.label, sx, y);
-    ctx.fillStyle = colour(palette, "--foreground");
-    ctx.fillText(node.label, sx, y);
-  }
+    return {
+      id: node.id,
+      x: sx,
+      y: sy - node.r * k - LABEL_GAP_PX - 1,
+      width: ctx.measureText(node.label).width,
+      height: LABEL_FONT_PX + 2,
+      forced: forced.has(node.id),
+    };
+  });
   ctx.globalAlpha = 1;
+  for (const box of placeLabels(boxes)) {
+    const label = scene.byId.get(box.id)?.label ?? "";
+    ctx.strokeStyle = colour(palette, "--background");
+    ctx.strokeText(label, box.x, box.y);
+    ctx.fillStyle = colour(palette, "--foreground");
+    ctx.fillText(label, box.x, box.y);
+  }
 }

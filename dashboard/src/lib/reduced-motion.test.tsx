@@ -7,6 +7,8 @@ import { usePrefersReducedMotion } from "./reduced-motion";
 
 describe("usePrefersReducedMotion", () => {
   it("is false when the OS does not ask for reduced motion", () => {
+    setReducedMotion(false);
+
     const { result } = renderHook(() => usePrefersReducedMotion());
 
     expect(result.current).toBe(false);
