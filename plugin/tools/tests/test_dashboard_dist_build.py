@@ -11,7 +11,6 @@ On a machine without Node the whole module is skipped: end users never build (NF
 
 from __future__ import annotations
 
-import gzip
 import json
 import os
 import shutil
@@ -20,6 +19,7 @@ import sys
 import unittest
 from pathlib import Path
 
+import dashboard_budget as budget
 import tmproot
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -28,7 +28,6 @@ DASHBOARD = REPO / "dashboard"
 MANIFEST_SCRIPT = REPO / "plugin" / "tools" / "dashboard" / "dist_manifest.py"
 NPM = shutil.which("npm")
 HAVE_NODE = NPM is not None and (DASHBOARD / "node_modules").is_dir()
-JS_GZIP_BUDGET = 204_800
 BUILD_TIMEOUT = 300
 
 
@@ -129,13 +128,14 @@ class DistBuildTest(unittest.TestCase):
         self.assertEqual(self.manifest_bytes(), manifest, "manifest rewritten after a failed build")
         self.assertEqual((self.dist / "index.html").read_bytes(), index, "vite did not run after tsc failed")
 
-    def test_the_javascript_stays_within_the_gzip_budget(self):
+    def test_the_javascript_stays_within_the_gzip_budgets(self):
         self.assertEqual(self.build().returncode, 0)
 
-        scripts = (self.dist / "assets").glob("*.js")
-        total = sum(len(gzip.compress(path.read_bytes(), compresslevel=9, mtime=0)) for path in scripts)
+        rest, three = budget.gzip_totals(self.dist / "assets")
 
-        self.assertLessEqual(total, JS_GZIP_BUDGET)
+        self.assertLessEqual(rest, budget.JS_GZIP_BUDGET)
+        self.assertGreater(three, 0)
+        self.assertLessEqual(three, budget.GRAPH3D_GZIP_BUDGET)
 
 
 if __name__ == "__main__":

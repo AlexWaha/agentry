@@ -179,6 +179,17 @@ describe("TaskPage", () => {
       expect(skipped).toHaveTextContent("skipped");
     });
 
+    it("shows the final step of an abandoned run as Abandoned, not Merged", async () => {
+      const stages: Stage[] = detail.stages.map((stage) => ({ ...stage, state: "done" }));
+      const run = { ...(detail.run as NonNullable<TaskDetail["run"]>), stage: "done", stage_status: "abandoned", needs_you: null };
+      mockApi({ [route("task-0104")]: withDetail({ stages, run }) });
+      await render("task-0104");
+
+      await screen.findByRole("heading", { name: "Pipeline" });
+      expect(within(document.querySelector("ol > li:last-child") as HTMLElement).getByText("Abandoned")).toBeInTheDocument();
+      expect(document.querySelector('li[aria-current="step"]')).toBeNull();
+    });
+
     it("shows a gate with its result and duration and a rejection with its reason", async () => {
       mockApi({ [route("task-0104")]: fromFixture(detailFixture) });
       await render("task-0104");

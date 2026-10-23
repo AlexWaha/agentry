@@ -15,7 +15,14 @@ export function TaskPipeline({ task }: { task: TaskDetail }) {
         right={t("task.pipeline.summary", { gates: task.gate_runs, failed: task.gate_failures, rejections: task.rejections })}
       />
       <Card className="grid gap-4 px-4 py-3.5">
-        {task.run ? <Stepper stages={task.stages} blocked={task.run.stage_status === "blocked"} needsYou={task.run.needs_you !== null} /> : null}
+        {task.run ? (
+          <Stepper
+            stages={task.stages}
+            blocked={task.run.stage_status === "blocked"}
+            needsYou={task.run.needs_you !== null}
+            abandoned={task.run.stage_status === "abandoned"}
+          />
+        ) : null}
         <div>
           <h3 className="mb-1 text-xs font-semibold text-muted-foreground">{t("task.pipeline.history")}</h3>
           {task.events.length > 0 ? (

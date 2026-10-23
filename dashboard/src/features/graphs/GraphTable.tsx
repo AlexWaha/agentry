@@ -7,11 +7,11 @@ import { t } from "@/i18n";
 import { lastPage } from "@/lib/search-params";
 import type { GraphEdge, GraphNode } from "@/types/api";
 
+import { TABLE_PAGE_SIZE } from "./config";
 import { kindLabel } from "./kinds";
 
 const TABLE_CLASS = "w-full min-w-96 border-collapse text-left";
 const HEAD_CELL = "px-3 py-2 font-medium";
-const TABLE_PAGE_SIZE = 100;
 const CELL = "px-3 py-1.5 align-top wrap-anywhere";
 
 /** The "Show as table" alternative of a graph (FR-108): every node and every edge as text. */

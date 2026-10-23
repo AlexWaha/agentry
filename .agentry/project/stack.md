@@ -39,7 +39,7 @@ gates run and this file is the one that is wrong.
 | Testing | `unittest` (stdlib), suite in `plugin/tools/tests/` (4266 tests, 2026-10-16) | ACTIVE |
 | Lint | `ruff` (dev dependency only, version recorded in `pyproject.toml` as 0.16.1), rule set in `pyproject.toml` | ACTIVE |
 | Formatter | None configured. `pyproject.toml` has no `[tool.ruff.format]` section and no gate runs a formatter | n/a |
-| Frontend | The dashboard SPA in `dashboard/`: React 19, strict TypeScript, Vite, TanStack Router and Query, Tailwind v4, shadcn/ui, lucide icons, d3-force (graph feature only). Dev-time Node dependencies for `dashboard/` sources only (spec-0002 D4); the built output is committed under `plugin/tools/dashboard/dist/` and the runtime adds no dependency. Details and exact versions: [Dashboard SPA](#dashboard-spa) | ACTIVE |
+| Frontend | The dashboard SPA in `dashboard/`: React 19, strict TypeScript, Vite, TanStack Router and Query, Tailwind v4, shadcn/ui, lucide icons, and for the graph feature only d3-force, d3-zoom, d3-drag, d3-selection and 3d-force-graph (three.js). Dev-time Node dependencies for `dashboard/` sources only (spec-0002 D4); the built output is committed under `plugin/tools/dashboard/dist/` and the runtime adds no dependency. Details and exact versions: [Dashboard SPA](#dashboard-spa) | ACTIVE |
 | Containers and CI | None. There is no `Dockerfile`, compose file or `.github/` directory | n/a |
 
 ## Token values
@@ -175,26 +175,35 @@ Drop the alias when typescript-eslint supports TypeScript 7.
 
 | Package | Version | Kind | Role |
 |---|---|---|---|
+| `3d-force-graph` | 1.80.1 | runtime (bundled, lazy chunk) | The 3D graph view on three.js, loaded only when a 3D graph is opened (task-0152) |
 | `@radix-ui/react-slot` | 1.5.0 | runtime (bundled) | `asChild` for shadcn/ui Button |
 | `@tanstack/react-query` | 5.104.3 | runtime (bundled) | Server-state cache (staleTime Infinity, WebSocket invalidation) |
 | `@tanstack/react-router` | 1.170.45 | runtime (bundled) | Router (code-based routes, browser history) |
 | `class-variance-authority` | 0.7.1 | runtime (bundled) | Component variants (shadcn/ui) |
 | `clsx` | 2.1.1 | runtime (bundled) | Class name joining |
-| `d3-force` | 3.0.0 | runtime (bundled) | Force layout, graph feature only (task-0146) |
+| `d3-drag` | 3.0.0 | runtime (bundled) | Dragging a node, graph feature only (task-0152) |
+| `d3-force` | 3.0.0 | runtime (bundled) | Live force simulation, graph feature only (task-0146, task-0152) |
+| `d3-selection` | 3.0.0 | runtime (bundled) | Selection and pointer helpers d3-zoom and d3-drag work on, graph feature only (task-0152) |
+| `d3-zoom` | 3.0.0 | runtime (bundled) | Wheel, pinch and pan, graph feature only (task-0152) |
 | `lucide-react` | 1.58.0 | runtime (bundled) | Icons |
 | `react` | 19.3.1 | runtime (bundled) | UI library |
 | `react-dom` | 19.3.1 | runtime (bundled) | DOM renderer |
 | `tailwind-merge` | 3.7.0 | runtime (bundled) | Tailwind class conflict resolution |
+| `three` | 0.186.1 | runtime (bundled, lazy chunk) | WebGL engine under 3d-force-graph (peer dependency, installed directly) |
 | `@eslint/js` | 10.0.1 | dev | ESLint base rules |
 | `@tailwindcss/vite` | 4.3.3 | dev | Tailwind v4 Vite plugin |
 | `@testing-library/dom` | 10.4.2 | dev | Testing Library core |
 | `@testing-library/jest-dom` | 7.0.1 | dev | DOM matchers |
 | `@testing-library/react` | 16.3.3 | dev | Component tests |
 | `@testing-library/user-event` | 14.6.8 | dev | User input in tests |
+| `@types/d3-drag` | 3.0.7 | dev | Types |
 | `@types/d3-force` | 3.0.10 | dev | Types |
+| `@types/d3-selection` | 3.0.12 | dev | Types |
+| `@types/d3-zoom` | 3.0.9 | dev | Types |
 | `@types/node` | 26.6.5 | dev | Types (Node APIs in tests and config) |
 | `@types/react` | 19.3.0 | dev | Types |
 | `@types/react-dom` | 19.3.0 | dev | Types |
+| `@types/three` | 0.186.0 | dev | Types |
 | `@vitejs/plugin-react` | 6.1.2 | dev | React transform for Vite |
 | `axe-core` | 4.14.0 | dev | Accessibility check in tests |
 | `eslint` | 10.13.0 | dev | Linter |
@@ -207,6 +216,13 @@ Drop the alias when typescript-eslint supports TypeScript 7.
 | `typescript-native` | 7.0.2 | dev | TypeScript 7 compiler, aliased from `typescript@7`; runs `typecheck` and `build` |
 | `vite` | 8.3.4 | dev | Dev server and bundler |
 | `vitest` | 5.0.5 | dev | Test runner |
+
+JavaScript size budget (NFR-1, amended by task-0152): two numbers, both gzip level 9 over
+`dist/assets/*.js` and asserted by `test_dashboard_assets.py`. Every chunk except the Graphs 3D
+chunk has 204800 bytes; the 3D chunk (`graph3d-<hash>.js`, three.js and 3d-force-graph, fetched only
+when a 3D graph is opened and never preloaded) has 256000 bytes. `vite.config.ts` aliases
+`three/webgpu` to a stub (`features/graphs/webgpu-stub.ts`): the dashboard only uses WebGL, and the
+real WebGPU module would add about a megabyte to the 3D chunk.
 
 Layout and rules: `dashboard/src/` follows `plugin/skills/frontend-standards`
 (`app/`, `config/`, `i18n/`, `styles/`, `lib/`, `components/ui`, `components/shared`,

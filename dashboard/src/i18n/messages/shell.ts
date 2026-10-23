@@ -62,6 +62,7 @@ const shell: Record<string, string> = {
   "shell.stepper.inProgress": "In progress",
   "shell.stepper.approved": "Approved",
   "shell.stepper.merged": "Merged",
+  "shell.stepper.abandoned": "Abandoned",
   "shell.stepper.gates": "{pass} ok",
   "shell.stepper.gatesWithFailures": "{pass} ok, {fail} failed",
 

@@ -39,6 +39,20 @@ The LICENSE holder, the plugin author in `plugin.json` and the marketplace owner
 - The dashboard front end (`dashboard/`: React, TypeScript, Vite) with its built output
   committed in `plugin/tools/dashboard/dist/`, so a user needs no Node; the server checks
   the build against a manifest before it binds a port (task-0142).
+- The dashboard Graphs page draws the memory graph and the code graph as a live force
+  simulation, in 3D by default (three.js, a lazy chunk fetched only when a 3D graph opens:
+  orbit rotation, zoom, node drag) with a 2D/3D switch kept in the address; 2D is the
+  default under prefers-reduced-motion and the fallback when WebGL is missing or the 3D code
+  cannot be loaded. Hovering or selecting a node lights it and its neighbours with rings and
+  thick accent links (particles in 3D) and strongly dims the rest; labels are placed so they
+  do not overlap one another, except that the labels of the active node itself are always
+  shown. Fit to view and Reset view controls, and a details strip with a link for task nodes.
+  A graph over the node cap keeps its most linked nodes together with the nodes that connect
+  them. The view is one tab stop with the same keys in 2D and 3D (arrow keys, Home, End,
+  PageUp and PageDown walk the nodes, Enter selects, Shift with an arrow key orbits the 3D
+  camera), a selection is announced to screen readers, "Show as table" stays, and the
+  JavaScript gzip budget is two numbers: 204800 bytes for the app and 256000 bytes for the 3D
+  chunk (task-0152).
 - User page `docs/dashboard.md`: start, stop, security model, SSH tunnel note and
   troubleshooting, with the measured behaviour of the server on stop and on session end
   (task-0143).
@@ -76,6 +90,11 @@ The LICENSE holder, the plugin author in `plugin.json` and the marketplace owner
 
 - The test suite no longer appends to the host session's `CLAUDE_ENV_FILE`
   (task-0039).
+- The dashboard showed every finished run as "Done - In progress" with a pulsing ring: a
+  run at the last stage with nothing awaited now has no current stage, and the Overview
+  lists only runs in flight (task-0151).
+- The dashboard stepper of an abandoned run read "Merged" and "Approved"; it now reads
+  "Abandoned" and claims neither (task-0152).
 
 [Unreleased]: https://github.com/AlexWaha/agentry/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/AlexWaha/agentry/releases/tag/v0.2.0
