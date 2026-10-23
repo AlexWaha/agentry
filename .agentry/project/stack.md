@@ -33,10 +33,10 @@ gates run and this file is the one that is wrong.
 | Framework | None | n/a |
 | State store | SQLite via stdlib `sqlite3`: `.agentry/state/run.db` (pipeline runs, one extra file per lane) and `.agentry/state/events.db` (append-only event journal, WAL mode, a report: only `supervisor.progress_at` reads it, and only to veto a relaunch (recent gate evidence keeps a run HEALTHY); no gate reads it; replaces the retired `gate_log` table) | ACTIVE |
 | Memory store | SQLite with an FTS5 index: `.agentry/memory/memory.db` | ACTIVE |
-| Host | Claude Code (hooks: PreToolUse, PostToolUse, SessionStart, SubagentStart, SubagentStop, Stop; measured against build 2.1.295) | ACTIVE |
+| Host | Claude Code (hooks on 8 events: PreToolUse, PostToolUse, SessionStart, SubagentStart, SubagentStop, Stop, PreCompact, UserPromptSubmit; measured against build 2.1.295) | ACTIVE |
 | Cache or queue | None | n/a |
 | Auth | None. Authority is the recorded approval in `run.db`, not a user identity | n/a |
-| Testing | `unittest` (stdlib), suite in `plugin/tools/tests/` (4266 tests, 2026-10-16) | ACTIVE |
+| Testing | `unittest` (stdlib), suite in `plugin/tools/tests/` (4336 tests, 2026-10-23) | ACTIVE |
 | Lint | `ruff` (dev dependency only, version recorded in `pyproject.toml` as 0.16.1), rule set in `pyproject.toml` | ACTIVE |
 | Formatter | None configured. `pyproject.toml` has no `[tool.ruff.format]` section and no gate runs a formatter | n/a |
 | Frontend | The dashboard SPA in `dashboard/`: React 19, strict TypeScript, Vite, TanStack Router and Query, Tailwind v4, shadcn/ui, lucide icons, and for the graph feature only d3-force, d3-zoom, d3-drag, d3-selection and 3d-force-graph (three.js). Dev-time Node dependencies for `dashboard/` sources only (spec-0002 D4); the built output is committed under `plugin/tools/dashboard/dist/` and the runtime adds no dependency. Details and exact versions: [Dashboard SPA](#dashboard-spa) | ACTIVE |
@@ -90,8 +90,8 @@ task or changes state, so it was deliberately left unexecuted.
 | Command | What it does | Source | Exit status |
 |---|---|---|---|
 | `python -m compileall -q plugin/tools` | Build: byte-compiles every script, fails on a syntax error. The `implement` exit gate | `pipelines.build` stage `implement`, `repos.agentry.stages.implement` | 0 |
-| `python -m unittest discover -s plugin/tools && python {plugin}/tools/pipeline/ui_evidence.py --task {task}` | Test: full suite, then the UI-evidence check for the task. The `test` exit gate; `{task}` and `{plugin}` are filled in by the gate (`{plugin}` is the plugin root, task-0137 replaced the frozen `{root}/.claude/tools` copy) | `pipelines.build` stage `test` | 0 (4266 tests, 2026-10-16; the last full green run was measured at 1711 on 2026-10-12) |
-| `python -m unittest discover -s plugin/tools` | The suite alone, for the orchestrator or CI. Dev agents are barred from running it (`gates.dev_forbidden_commands`); they run named modules from `plugin/tools/tests`, for example `python -m unittest test_lanes test_lane_routing`, or let the `test` exit gate run the whole suite | derived from the row above | 4266 tests (2026-10-16) |
+| `python -m unittest discover -s plugin/tools && python {plugin}/tools/pipeline/ui_evidence.py --task {task}` | Test: full suite, then the UI-evidence check for the task. The `test` exit gate; `{task}` and `{plugin}` are filled in by the gate (`{plugin}` is the plugin root, task-0137 replaced the frozen `{root}/.claude/tools` copy) | `pipelines.build` stage `test` | 0 (4336 tests, 2026-10-23; the last full green run was measured at 1711 on 2026-10-12) |
+| `python -m unittest discover -s plugin/tools` | The suite alone, for the orchestrator or CI. Dev agents are barred from running it (`gates.dev_forbidden_commands`); they run named modules from `plugin/tools/tests`, for example `python -m unittest test_lanes test_lane_routing`, or let the `test` exit gate run the whole suite | derived from the row above | 4336 tests (2026-10-23) |
 | `ruff check plugin/tools` | Lint. The `review` exit gate | `pipelines.build` stage `review`, `repos.agentry.stages.review` | 0 |
 | `ruff check --fix plugin/tools` | Applies the safe lint fixes. This is the nearest thing to a formatter; no gate runs it | `pyproject.toml` rule set | not run (mutating) |
 | `python scripts/test_docs_preview.py` and `ruff check scripts` | `scripts/` is a dev tool (the local docs preview server), checked by these two commands outside the pipeline gates; no stage runs them | `scripts/docs_preview.py` | 0 |

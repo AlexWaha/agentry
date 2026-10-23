@@ -8,6 +8,7 @@ This page explains what you see and what you decide while a task moves through A
 - [The build pipeline](#the-build-pipeline)
 - [The plan pipeline](#the-plan-pipeline)
 - [How a checkpoint works](#how-a-checkpoint-works)
+- [Where waiting checkpoints show up](#where-waiting-checkpoints-show-up)
 - [The three dials](#the-three-dials)
 - [Workflow mode: solo or pr](#workflow-mode-solo-or-pr)
 - [Swarm](#swarm)
@@ -68,6 +69,29 @@ Three rules sit behind that diagram:
 - The model never writes a transition. Only the scripts do, after reading a real exit code.
 - A hook denies `git commit` until the approval is recorded, and `git push` until its own approval is recorded. Asking nicely in chat is not enough, because the hook checks the record.
 - You can reject at the commit checkpoint. The task returns to `implement` and your comments are attached to it.
+
+## Where waiting checkpoints show up
+
+A run that waits for you (a plan, commit, push or merge approval, or a task that needs an unblock) shows up in three places, so it cannot sit unnoticed. A run you paused does not count: you set it aside.
+
+| Where | What you see | Covers |
+|---|---|---|
+| Status line | A first segment, `Needs you: 2 (task-0128 plan)`: how many runs wait and the oldest one with its checkpoint. The segment is absent when nothing waits | Every lane |
+| Your next prompt | A short "Harness pipeline reminder" in Claude's context, one line per waiting run (at most 5), asking Claude to raise each as an `AskUserQuestion` card in that turn. Nothing is added when nothing waits | Every lane, main conversation only |
+| Dashboard | The "Needs you" list, read-only | Every lane |
+
+The status line is the only one of the three you set up yourself, because a plugin cannot ship a status line. Add this to your own `.claude/settings.json` (or `settings.local.json`), with the path of the installed plugin (`echo $AGENTRY_ROOT` inside a session prints it), and restart the session:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "python \"<plugin root>/tools/hooks/status_line.py\""
+  }
+}
+```
+
+The reminder needs no setup: the plugin registers it on `UserPromptSubmit`. Both read the run stores read-only and take about 30 to 45 ms more than starting Python itself. If something goes wrong the reminder adds nothing and the status line falls back to a degraded line (`run.db unreadable` or `pipeline status unavailable`), never an error. In a supervisor-driven unattended session the reminder stays silent, because nobody is there to answer a card.
 
 ## The three dials
 

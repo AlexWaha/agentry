@@ -19,7 +19,7 @@ The LICENSE holder, the plugin author in `plugin.json` and the marketplace owner
 
 - Plugin layout: the pipeline tools, skills and hook registration now live under
   `plugin/` (`plugin/tools`, `plugin/skills` with 43 skills,
-  `plugin/hooks/hooks.json` with all 46 hooks, `plugin/.claude-plugin/plugin.json`)
+  `plugin/hooks/hooks.json` with all 47 hooks, `plugin/.claude-plugin/plugin.json`)
   (task-0038).
 - GitHub marketplace manifest `.claude-plugin/marketplace.json`: marketplace
   `agentry` serving the plugin `agentry` from `./plugin`, installable with
@@ -29,6 +29,14 @@ The LICENSE holder, the plugin author in `plugin.json` and the marketplace owner
 - Record of the two green phase-7 entry cycles,
   `docs/technical/phase7-entry-cycles.md` (task-0037).
 - Release notes for this version, `docs/release/v0.2.0.md`, and this changelog.
+- Runs that wait for the User are no longer easy to miss: the status line starts with
+  `Needs you: N (task-XXXX checkpoint)` over every lane while any run waits, and a new
+  `UserPromptSubmit` hook (`plugin/tools/hooks/needs_you_reminder.py`) puts one line per
+  waiting run in front of the orchestrator on every prompt, asking for an `AskUserQuestion`
+  card. Both read the run stores read-only, fail open, and skip paused runs. The rule for
+  "this run owes the User" moved to `plugin/tools/pipeline/waiting.py`, shared with the Stop
+  hook. A plugin cannot ship a status line, so enabling it is a `statusLine` entry in your own
+  settings, documented in `docs/pipeline.md` (task-0153).
 - Add `docs/extending.md`, a user guide page on adding agents, rules and skills and on
   running beside other plugins (task-0148).
 - Read-only local dashboard: the command `/agentry:dashboard` starts a stdlib Python

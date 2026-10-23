@@ -100,6 +100,7 @@ runs as its own process (a hook or a CLI). There are no packages and no
 
 | Module | Responsibility |
 |---|---|
+| `waiting.py` | Which runs wait for the User, across every lane (`needs_you`, `owed_reason`, `waiting_runs`); standard library only, read-only, shared by `stop_gate.owed_to_ceo`, the status line and the reminder |
 | `state.py` | Run state in SQLite, lane resolution (`PIPELINE_LANE`), paths to the task folders, `is_paused` and `is_parked`. Every other pipeline script reads and writes through it |
 | `advance.py` | Registers a task and advances it one stage by running the stage's exit gate |
 | `gate.py` | Runs an exit-gate command and logs the result |
@@ -125,7 +126,8 @@ runs as its own process (a hook or a CLI). There are no packages and no
 | `session_start.py` | SessionStart wiring |
 | `main_thread_rules.py`, `inject_rules.py` | Deliver rule files to the main thread and to agents |
 | `subagent_stop.py` | Reminds the orchestrator to record lessons when a subagent ends |
-| `status_line.py` | Prints the one-line pipeline status (read-only access to `run.db`) |
+| `status_line.py` | Prints the one-line pipeline status (read-only access to `run.db`), led by `Needs you: N (task checkpoint)` while any run in any lane waits for the User |
+| `needs_you_reminder.py` | `UserPromptSubmit` hook: one line per waiting run, across lanes, asking the orchestrator to raise an `AskUserQuestion` card; main thread only, read-only, fail-open |
 | `refusal_notice.py` | Turns an `advance.py` refusal into a message the human sees |
 | `dangerous_patterns.py` | Shared command patterns used by the gates |
 

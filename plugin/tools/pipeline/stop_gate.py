@@ -81,6 +81,7 @@ import mode
 import pretool_gate
 import state
 import swarm
+import waiting
 import worktree
 
 DEPENDS_RE = re.compile(r"^depends_on:\s*\[(.*?)\]", re.MULTILINE)
@@ -1097,9 +1098,6 @@ OWED_TEXT = {
     "merge": "merge the pull request into main",
 }
 OWED_EVENT = {"commit": "commit", "push": "push"}
-# Once the approval is recorded nothing is owed; the git action is the agent's.
-APPROVED_FLAG = {"commit": "commit_approved", "push": "push_approved",
-                 "plan": "plan_approved"}
 
 
 def owed_to_ceo(runs: list[dict]) -> list[tuple[str, str | None]]:
@@ -1112,16 +1110,11 @@ def owed_to_ceo(runs: list[dict]) -> list[tuple[str, str | None]]:
     branch does not carry the task yet), so skipping done would skip the only
     place it exists. And it is the human's only in `pr` mode, where the User merges the
     pull request; in `solo` the pipeline merges locally and nothing is owed."""
+    solo = pretool_gate.workflow_mode() == pretool_gate.WORKFLOW_SOLO
     owed = []
     for r in runs:
-        aw = r["awaiting_human"]
-        if state.is_paused(r):
-            continue  # set aside by the User: nothing is owed until resume
-        if not aw or aw == AWAITING_BLOCKED or r.get(APPROVED_FLAG.get(aw, "")):
-            continue
-        if r["stage"] == "done" and aw != "merge":
-            continue
-        if aw == "merge" and pretool_gate.workflow_mode() == pretool_gate.WORKFLOW_SOLO:
+        aw = waiting.owed_reason(r, solo)
+        if not aw:
             continue
         what = OWED_TEXT.get(aw, f"resolve '{aw}'")
         sentence = f"{r['task']} is parked at stage '{r['stage']}'. Owed by you: {what}."

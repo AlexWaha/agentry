@@ -323,7 +323,12 @@ The template registers no status line: a plugin cannot ship one, and `AGENTRY_RO
 reaches the Bash tool through the env file, so it is not known to be set for a
 status line command. To get the line (`task | stage | owed | lane | mode | approvals
 | swarm`), add a `statusLine` command to your own settings that runs the installed
-plugin's `tools/hooks/status_line.py` by absolute path, and restart the session.
+plugin's `tools/hooks/status_line.py` by absolute path, and restart the session. While
+any run in any lane waits for the User, the line starts with `Needs you: N (task-XXXX
+checkpoint)`; the plugin also registers a `UserPromptSubmit` hook
+(`tools/hooks/needs_you_reminder.py`) that puts one line per waiting run in front of
+the orchestrator on every prompt. The snippet and the rules are in
+`docs/pipeline.md#where-waiting-checkpoints-show-up`.
 
 ## Version history
 

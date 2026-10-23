@@ -77,8 +77,8 @@ class SixFieldsTest(StatusLineCase):
         swarm.write("on")
         plain = self.line().replace(status_line.YELLOW, "").replace(status_line.RESET, "")
         self.assertEqual(
-            "task-0900 | stage ready | owed: commit approval | lane default [agentry] "
-            "| mode build | approvals auto | swarm on", plain)
+            "Needs you: 1 (task-0900 commit) | task-0900 | stage ready | owed: commit approval "
+            "| lane default [agentry] | mode build | approvals auto | swarm on", plain)
 
     def test_the_owed_action_is_highlighted_only_when_something_is_owed(self):
         self.add_run("task-0900", "ready", awaiting="commit")
@@ -117,18 +117,61 @@ class SixFieldsTest(StatusLineCase):
         self.assertIn("something-new", self.line())
 
 
+class NeedsYouSegmentTest(StatusLineCase):
+    """task-0153: a first segment while any run in any lane waits for the User."""
+
+    def plain(self):
+        return self.line().replace(status_line.YELLOW, "").replace(status_line.RESET, "")
+
+    def test_the_segment_names_the_count_and_the_oldest_waiting_run(self):
+        self.add_run("task-0200", "ready", awaiting="commit")
+        self.add_run("task-0128", "plan-approval", awaiting="plan")
+        conn = sqlite3.connect(self.db)
+        conn.execute("UPDATE runs SET updated = '2026-10-22T09:00:00Z' WHERE task = 'task-0128'")
+        conn.execute("UPDATE runs SET updated = '2026-10-22T12:00:00Z' WHERE task = 'task-0200'")
+        conn.commit()
+        conn.close()
+        self.assertTrue(self.plain().startswith("Needs you: 2 (task-0128 plan) | "), self.plain())
+
+    def test_the_segment_is_absent_when_nothing_waits(self):
+        self.add_run("task-0100", "implement")
+        self.add_run("task-0101", "plan-approval", status="paused", awaiting="plan")
+        self.assertNotIn("Needs you", self.line())
+
+    def test_a_blocked_run_counts_as_waiting(self):
+        self.add_run("task-0900", "review", status="blocked", awaiting="blocked")
+        self.assertIn("Needs you: 1 (task-0900 unblock)", self.plain())
+
+    def test_a_run_in_another_lane_store_is_counted_too(self):
+        self.add_run("task-0100", "implement")
+        conn = sqlite3.connect(self.tmp / "run.docs.db")
+        state.init_db(conn)
+        conn.execute("INSERT INTO runs (task, type, stage, stage_status, awaiting_human, pipeline, "
+                     "updated) VALUES ('task-0128', 'feature', 'plan-approval', 'in_progress', "
+                     "'plan', 'build', 'now')")
+        conn.commit()
+        conn.close()
+        self.assertIn("Needs you: 1 (task-0128 plan)", self.plain())
+
+    def test_a_failing_segment_does_not_stop_the_rest_of_the_line(self):
+        self.add_run("task-0900", "ready", awaiting="commit")
+        with unittest.mock.patch.object(status_line, "needs_you_segment", side_effect=RuntimeError("boom")):
+            line = self.plain()
+        self.assertTrue(line.startswith("task-0900 | stage ready"), line)
+
+
 class FocalRunTest(StatusLineCase):
 
     def test_a_run_parked_on_the_ceo_is_shown_before_a_run_being_driven(self):
         self.add_run("task-0100", "implement")
         self.add_run("task-0200", "ready", awaiting="commit")
         line = self.line()
-        self.assertTrue(line.startswith("task-0200 +1 | stage ready"), line)
+        self.assertIn(status_line.RESET + " | task-0200 +1 | stage ready", line)
 
     def test_a_blocked_run_needs_the_ceo_so_it_comes_before_a_run_being_driven(self):
         self.add_run("task-0100", "implement")
         self.add_run("task-0200", "review", status="blocked", awaiting="blocked")
-        self.assertTrue(self.line().startswith("task-0200 +1 | stage review (blocked)"))
+        self.assertIn(status_line.RESET + " | task-0200 +1 | stage review (blocked)", self.line())
 
     def test_a_run_being_driven_is_shown_before_a_paused_one(self):
         self.add_run("task-0100", "review", status="paused")

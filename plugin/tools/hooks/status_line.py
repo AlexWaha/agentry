@@ -10,6 +10,11 @@ task, stage and owed action come from the run the User should look at first: a
 run parked on the User, else a run being driven, else any run that is not done. With
 nothing in flight the line says so and still shows the dials.
 
+While any run in ANY lane waits for the User (a checkpoint approval or an unblock; a
+paused run does not count), a first segment names the count and the oldest waiting
+run, `Needs you: 2 (task-0128 plan)`, and is absent otherwise (task-0153). The
+rules live in `waiting.py`, shared with the Stop hook and the per-prompt reminder.
+
 Fails open (NFR-4): the line is cosmetic, so nothing here may raise or print to
 stderr. run.db is opened read-only (`mode=ro`) and never created, so a status
 refresh cannot hold a write lock against the pipeline scripts or invent a store.
@@ -28,18 +33,24 @@ from pathlib import Path
 HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1] / "pipeline"))
 
+import waiting  # noqa: E402  (after the sys.path insert)
+
 SEP = " | "
 YELLOW = "\x1b[1;33m"
 RESET = "\x1b[0m"
 
-# Short names for what a parked run waits on. An unlisted reason is shown as it
-# is stored, so a new park reason is visible rather than dropped.
-OWED_LABEL = {
-    "commit": "commit approval",
-    "push": "push approval",
-    "plan": "plan approval",
-    "merge": "merge the PR",
-}
+OWED_LABEL = waiting.LABEL
+
+# pipeline.json is read once per render, not once per run the sort key looks at.
+_SOLO: dict[str, bool] = {}
+
+
+def solo() -> bool:
+    import state
+
+    if "solo" not in _SOLO:
+        _SOLO["solo"] = waiting.is_solo(state.PIPELINE_PATH)
+    return _SOLO["solo"]
 
 
 def read_runs() -> list[dict] | None:
@@ -63,25 +74,22 @@ def read_runs() -> list[dict] | None:
 
 def owed_label(run: dict) -> str:
     """What the User owes this run, or '' when nothing. The rules for when a park
-    lives in stop_gate.owed_to_ceo; asking it keeps the line and the Stop
-    hook from disagreeing. A paused run owes nothing: the User set it aside and
-    the stage shows (paused)."""
+    is owed live in waiting.py, shared with the Stop hook (stop_gate.owed_to_ceo),
+    so the line and the hook cannot disagree. A paused run owes nothing: the User
+    set it aside and the stage shows (paused)."""
+    kind = waiting.needs_you(run, solo())
+    return OWED_LABEL.get(kind, kind)
+
+
+def needs_you_segment() -> str:
+    """`Needs you: N (task-0128 plan)` over every lane, or '' when nothing waits."""
     import state
 
-    if state.is_paused(run):
+    runs = waiting.waiting_runs(state.DB_PATH.parent, solo())
+    if not runs:
         return ""
-    if run.get("stage_status") == state.ST_BLOCKED:
-        return "unblock"
-    if not run.get("awaiting_human"):
-        return ""
-    try:
-        import stop_gate
-
-        if not stop_gate.owed_to_ceo([run]):
-            return ""
-    except Exception:
-        pass  # the checker is unavailable: show the stored reason as it is
-    return OWED_LABEL.get(run["awaiting_human"], run["awaiting_human"])
+    first = runs[0]
+    return f"{YELLOW}Needs you: {len(runs)} ({first['task']} {first['kind']}){RESET}"
 
 
 def focal_run(runs: list[dict]) -> tuple[dict, int] | None:
@@ -148,6 +156,7 @@ def dial_fields() -> list[str]:
 
 
 def render() -> str:
+    _SOLO.clear()
     try:
         runs = read_runs()
     except Exception:
@@ -156,7 +165,11 @@ def render() -> str:
         head = run_fields(runs)
     except Exception:
         head = ["run state unavailable"]
-    return SEP.join(head + dial_fields())
+    try:
+        head = [needs_you_segment(), *head]
+    except Exception:
+        pass  # cosmetic: the rest of the line still renders
+    return SEP.join([f for f in head if f] + dial_fields())
 
 
 def main() -> int:
