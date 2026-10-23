@@ -247,6 +247,7 @@ class HooksJsonTest(unittest.TestCase):
                              "hooks/main_thread_rules.py\" --index"],
             "PreToolUse": ["pipeline/pretool_gate.py", "pipeline/agent_gate.py"],
             "Stop": ["pipeline/stop_gate.py"],
+            "UserPromptSubmit": ["hooks/needs_you_reminder.py"],
             "SubagentStart": ["memory/inject.py", "hooks/inject_rules.py\" --index",
                               "pipeline/handoff.py\" --inject"],
             "SubagentStop": ["hooks/subagent_stop.py"],

@@ -194,7 +194,7 @@ Not measured: a bare name that exists in both the project and the plugin.
 
 Every hook registration moves from `settings.json` to `plugin/hooks/hooks.json`
 (the plan counted 43 settings hooks plus two plugin-level entries, 45 in total;
-`hooks.json` now holds 46 command entries across 7 events, counted on 2026-10-14).
+`hooks.json` now holds 47 command entries across 8 events, counted on 2026-10-23; it held 46 across 7 on 2026-10-14, before task-0153 added `UserPromptSubmit`).
 The two new entries replace the `hooks:` blocks in agent frontmatter, which cannot
 use `${CLAUDE_PLUGIN_ROOT}`:
 

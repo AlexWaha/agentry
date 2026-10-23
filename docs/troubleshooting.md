@@ -50,6 +50,7 @@ Edits are also denied outside `.agentry/` while a task waits at `plan-approval`.
 | Claude will not start the next task | The previous one still owes a handoff note or a memory review | Let it finish both. They are checked at registration and by the stop hook |
 | Claude refuses to implement while you are in plan or talk mode | Those modes write no product code | Switch with `/pipeline-build` or a more specific build command |
 | A task will not register | It has no file in `backlog/` or `active/`, its acceptance criteria are empty, or its spec is not approved | Fix the task file or approve the spec |
+| You do not see which task waits for you | The status line is not set up, or the session was not restarted after setting it up | Add the `statusLine` snippet from [Where waiting checkpoints show up](pipeline.md#where-waiting-checkpoints-show-up), restart, and look for `Needs you: N`. The reminder on your next prompt works without it |
 | You want to drop a task | | Ask Claude to abandon it. It closes the run and moves the file to `done/` |
 
 To see what happened to a task, run `python "$AGENTRY_ROOT/tools/pipeline/events.py" --task <task>`. It prints the journal of transitions, gate results and approvals.
