@@ -28,24 +28,98 @@ claude plugin install agentry@agentry --scope local
 claude plugin list
 ```
 
-`claude plugin list` should show `agentry@agentry`, scope `local`, status `enabled`. Restart Claude Code, because `hooks.json` is read at session start. On start, the plugin exports `AGENTRY_ROOT` (the cached plugin copy) and `CLAUDE_PROJECT_DIR` into every Bash call.
+`claude plugin list` should show `agentry@agentry`, scope `local`, status `enabled`. A local install belongs to one project, so the same plugin appears once per project where you installed it. Two projects give two `agentry@agentry` rows. Restart Claude Code, because `hooks.json` is read at session start. On start, the plugin exports `AGENTRY_ROOT` (the cached plugin copy) and `CLAUDE_PROJECT_DIR` into every Bash call.
+
+Claude Code lists plugin skills with the plugin name as a prefix, for example `/agentry:pipeline-show`. The prefix is optional when the skill name is unique, so `/pipeline-show` and `/agentry:pipeline-show` both work. This guide uses the short form. The dashboard works the same way: `/dashboard` and `/agentry:dashboard` both start it. Use the prefixed form if another plugin has a skill with the same name. Type slash commands inside the Claude Code session. If you pass one as a shell argument in Git Bash on Windows, the shell rewrites a leading `/pipeline-show` into a path such as `C:/Program Files/Git/pipeline-show`.
 
 The clone is anonymous HTTPS, so the install needs no login. If you have no SSH key for GitHub, set `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` before the first command.
 
-Status: measured on Claude Code 2.1.299 with HTTPS forced. To install a specific release instead of the latest `main`, see [Upgrade, pin and roll back](upgrade.md).
+Status: measured on Claude Code 2.1.312 with HTTPS forced. To install a specific release instead of the latest `main`, see [Upgrade, pin and roll back](upgrade.md).
 
 ## Onboard your project
 
 The plugin carries the tools, skills and hooks. The agents, rules and pipeline config come from this repository and are tailored to your stack once.
 
-1. Clone this repository somewhere outside your project. Copy `.claude/`, `.agentry/` and `CLAUDE.md` into your project root. Back up any `CLAUDE.md` you already have.
-2. Open Claude Code at your project root.
+1. Clone this repository somewhere outside your project, then copy `.claude/`, `.agentry/` and `CLAUDE.md` into your project root as shown below.
+2. Open Claude Code at your project root and accept the workspace trust dialog. Until you accept it, Claude Code ignores the `permissions.allow` entries from the copied `.claude/settings.json` and prints `Ignoring 22 permissions.allow entries from .claude/settings.json: this workspace has not been trusted`.
 3. Paste the prompt from `.claude/_init-prompt.md`. It runs in two phases. Phase A detects your language, framework, test, format and build commands, database and CI, and fills in the placeholders. Phase B is an interview that sets the stages, their exit commands, the retry budget and which checkpoints you want to approve yourself.
 4. Follow `.claude/_onboarding.md` for what the prompt did not cover: optional rules, permissions in `settings.json`, and the codegraph check.
 
+> **Merge into `.claude/`, never replace it.** The install already created `.claude/` in your project. It holds `settings.local.json`, which carries the plugin enablement. Delete or replace the folder and the plugin is no longer enabled for this project. The copy below also overwrites files of the same name: an existing `.claude/settings.json`, any agent or rule file, and `.agentry/pipeline.json`. Back those up first. `CLAUDE.md` is copied only when you have none.
+
+Run these from your project root. `CLONE` is the folder where you cloned this repository. First, check the four files most likely to exist already. No output means none of them do. Agents and rule files of the same name can still be overwritten, as the box above says. Bash:
+
+```bash
+CLONE=/path/to/agentry
+for f in .claude/settings.json .agentry/pipeline.json CLAUDE.md .mcp.json; do [ -e "$f" ] && echo "exists: $f"; done
+```
+
+PowerShell:
+
+```powershell
+$Clone = "C:\path\to\agentry"
+".claude\settings.json", ".agentry\pipeline.json", "CLAUDE.md", ".mcp.json" | Where-Object { Test-Path $_ } | ForEach-Object { "exists: $_" }
+```
+
+Then copy. Bash (the trailing `/.` includes dotfiles such as `.claude/.gitignore`):
+
+```bash
+mkdir -p .claude .agentry
+cp -R "$CLONE/.claude/." .claude/
+cp -R "$CLONE/.agentry/." .agentry/
+[ -e CLAUDE.md ] || cp "$CLONE/CLAUDE.md" CLAUDE.md
+```
+
+PowerShell (`-Force` is what copies hidden files):
+
+```powershell
+New-Item -ItemType Directory -Force .claude, .agentry | Out-Null
+Copy-Item "$Clone\.claude\*" .claude -Recurse -Force
+Copy-Item "$Clone\.agentry\*" .agentry -Recurse -Force
+if (-not (Test-Path CLAUDE.md)) { Copy-Item "$Clone\CLAUDE.md" CLAUDE.md }
+```
+
+If a `CLAUDE.md` already existed, the commands left it alone, and you can leave it that way. The orchestrator document is already in `.claude/CLAUDE.md`, which the copy brought in. The root template only adds placeholder blocks for your project facts: product, stack, commands, environment variables and routes. If you want them, paste those blocks into your own `CLAUDE.md` and fill them in.
+
+Neither copy removes anything, and the clone has no `settings.local.json`, so yours stays. Confirm it still enables the plugin. Bash:
+
+```bash
+grep agentry@agentry .claude/settings.local.json
+```
+
+PowerShell:
+
+```powershell
+Select-String -Path .claude\settings.local.json -Pattern 'agentry@agentry'
+```
+
+`.mcp.json` is optional. It wires the codegraph MCP server (`codegraph serve --mcp`), so copy it only if you installed codegraph. Without it, agents fall back to Grep and Glob. If your project already has a `.mcp.json`, add the `codegraph` entry by hand instead of copying. Bash:
+
+```bash
+[ -e .mcp.json ] || cp "$CLONE/.mcp.json" .mcp.json
+```
+
+PowerShell:
+
+```powershell
+if (-not (Test-Path .mcp.json)) { Copy-Item "$Clone\.mcp.json" .mcp.json }
+```
+
 > **Check four keys before you trust the gates.** This repository ships with its own values in `pipeline.json`, so a search for leftover `{{...}}` tokens finds nothing. Four keys still need yours: `main_branch` and the exit commands of `implement`, `test` and `review`. If you keep the shipped ones, your `implement` gate compiles this harness instead of building your code. It passes and proves nothing. "Decision 2: gates per repository" in `.claude/_onboarding.md` lists each key with its shipped value.
 
-After onboarding, `/pipeline-show` should print three lines, one per dial: mode, approvals and swarm.
+After step 4, `/pipeline-show` prints three lines, one per dial (mode, approvals and swarm), as soon as the plugin works. It prints them on a project that was only copied and never onboarded, so it does not prove onboarding ran. To check that, search for the shipped gate commands. Bash:
+
+```bash
+grep -n "dashboard_gate\|plugin/tools" .agentry/pipeline.json
+```
+
+PowerShell:
+
+```powershell
+Select-String -Path .agentry\pipeline.json -Pattern 'dashboard_gate','plugin/tools'
+```
+
+Onboarding ran when this prints nothing. Any match means a gate still runs this repository's commands. Then confirm the four keys from the box above, and that `.agentry/project/stack.md` describes your stack.
 
 ## Your first task
 
@@ -73,6 +147,8 @@ This walk-through uses the default build flow. Words in `code` are stages or com
 The task reaches `done` only when git confirms the branch is merged. The file moves to `done/`.
 
 **8. Let the handoff run.** Before the next task can start, the previous one needs a short handoff note and a memory review. Claude writes both, so you only need to know why the next task starts a little late.
+
+**9. Open the dashboard (optional).** Type `/agentry:dashboard`. Claude starts the read-only server in the background, opens your browser and gives you one URL of the form `http://127.0.0.1:<port>/#token=<token>`. The token belongs to this launch, so treat the URL like a password. The page shows the task you just ran. Type `/agentry:dashboard stop` to end it. See [Dashboard](dashboard.md).
 
 ## What to read next
 

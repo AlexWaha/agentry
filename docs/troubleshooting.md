@@ -19,6 +19,7 @@
 | The marketplace landed in `~/.claude/settings.json` | `--scope local` was left off | Remove the marketplace (it cascades, see [Roll back](upgrade.md#roll-back)) and add it again with `--scope local` |
 | `Remote branch <sha> not found` while pinning | A commit SHA cannot be a pin | Use a tag or a branch name after `#` |
 | `refusing {plugin}` (or `refusing {root}`) in a gate result | The plugin path holds a space or a non-ASCII character, for example a Windows user name with a space. Gate commands splice the path in unquoted, so only `A-Z a-z 0-9 _ . / : -` are allowed | Install where the path is plain ASCII without spaces, or point `CLAUDE_CODE_PLUGIN_CACHE_DIR` at such a folder and install again |
+| `Ignoring N permissions.allow entries from .claude/settings.json: this workspace has not been trusted` | You have not accepted the workspace trust dialog, so the copied `settings.json` permissions do not apply | Open Claude Code interactively in the project root once and accept the dialog |
 | Gates pass but prove nothing | `pipeline.json` still has this repository's gate commands | Set `main_branch` and the exit commands of `implement`, `test` and `review`. See [Configuration](configuration.md#stage-exit-gates) |
 
 ## Hook denies in plain words

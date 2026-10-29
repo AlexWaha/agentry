@@ -1,6 +1,6 @@
 # Commands
 
-Every command on this page is a skill. 43 ship in the plugin, and `verify` lives in the project's `.claude/skills/`. Claude Code lists plugin skills with the plugin name as a prefix, for example `agentry:pipeline-show`. This page uses the short form, as the skills do in their own docs.
+Every command on this page is a skill. 43 ship in the plugin, and `verify` lives in the project's `.claude/skills/`. Claude Code lists plugin skills with the plugin name as a prefix, for example `agentry:pipeline-show`. The prefix is optional when the skill name is unique, so `/pipeline-show` and `/agentry:pipeline-show` both work. This page uses the short form, as the skills do in their own docs.
 
 ## Table of contents
 
