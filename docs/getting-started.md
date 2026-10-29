@@ -47,21 +47,14 @@ The plugin carries the tools, skills and hooks. The agents, rules and pipeline c
 
 > **Merge into `.claude/`, never replace it.** The install already created `.claude/` in your project. It holds `settings.local.json`, which carries the plugin enablement. Delete or replace the folder and the plugin is no longer enabled for this project. The copy below also overwrites files of the same name: an existing `.claude/settings.json`, any agent or rule file, and `.agentry/pipeline.json`. Back those up first. `CLAUDE.md` is copied only when you have none.
 
-Run these from your project root. `CLONE` is the folder where you cloned this repository. First, check the four files most likely to exist already. No output means none of them do. Agents and rule files of the same name can still be overwritten, as the box above says. Bash:
+Run these from your project root in a bash shell (Git Bash on Windows, which Claude Code uses). `CLONE` is the folder where you cloned this repository. First, check the four files most likely to exist already. No output means none of them do. Agents and rule files of the same name can still be overwritten, as the box above says.
 
 ```bash
 CLONE=/path/to/agentry
 for f in .claude/settings.json .agentry/pipeline.json CLAUDE.md .mcp.json; do [ -e "$f" ] && echo "exists: $f"; done
 ```
 
-PowerShell:
-
-```powershell
-$Clone = "C:\path\to\agentry"
-".claude\settings.json", ".agentry\pipeline.json", "CLAUDE.md", ".mcp.json" | Where-Object { Test-Path $_ } | ForEach-Object { "exists: $_" }
-```
-
-Then copy. Bash (the trailing `/.` includes dotfiles such as `.claude/.gitignore`):
+Then copy. The trailing `/.` includes dotfiles such as `.claude/.gitignore`:
 
 ```bash
 mkdir -p .claude .agentry
@@ -70,53 +63,26 @@ cp -R "$CLONE/.agentry/." .agentry/
 [ -e CLAUDE.md ] || cp "$CLONE/CLAUDE.md" CLAUDE.md
 ```
 
-PowerShell (`-Force` is what copies hidden files):
-
-```powershell
-New-Item -ItemType Directory -Force .claude, .agentry | Out-Null
-Copy-Item "$Clone\.claude\*" .claude -Recurse -Force
-Copy-Item "$Clone\.agentry\*" .agentry -Recurse -Force
-if (-not (Test-Path CLAUDE.md)) { Copy-Item "$Clone\CLAUDE.md" CLAUDE.md }
-```
-
 If a `CLAUDE.md` already existed, the commands left it alone, and you can leave it that way. The orchestrator document is already in `.claude/CLAUDE.md`, which the copy brought in. The root template only adds placeholder blocks for your project facts: product, stack, commands, environment variables and routes. If you want them, paste those blocks into your own `CLAUDE.md` and fill them in.
 
-Neither copy removes anything, and the clone has no `settings.local.json`, so yours stays. Confirm it still enables the plugin. Bash:
+Neither copy removes anything, and the clone has no `settings.local.json`, so yours stays. Confirm it still enables the plugin.
 
 ```bash
 grep agentry@agentry .claude/settings.local.json
 ```
 
-PowerShell:
-
-```powershell
-Select-String -Path .claude\settings.local.json -Pattern 'agentry@agentry'
-```
-
-`.mcp.json` is optional. It wires the codegraph MCP server (`codegraph serve --mcp`), so copy it only if you installed codegraph. Without it, agents fall back to Grep and Glob. If your project already has a `.mcp.json`, add the `codegraph` entry by hand instead of copying. Bash:
+`.mcp.json` is optional. It wires the codegraph MCP server (`codegraph serve --mcp`), so copy it only if you installed codegraph. Without it, agents fall back to Grep and Glob. If your project already has a `.mcp.json`, add the `codegraph` entry by hand instead of copying.
 
 ```bash
 [ -e .mcp.json ] || cp "$CLONE/.mcp.json" .mcp.json
 ```
 
-PowerShell:
-
-```powershell
-if (-not (Test-Path .mcp.json)) { Copy-Item "$Clone\.mcp.json" .mcp.json }
-```
-
 > **Check four keys before you trust the gates.** This repository ships with its own values in `pipeline.json`, so a search for leftover `{{...}}` tokens finds nothing. Four keys still need yours: `main_branch` and the exit commands of `implement`, `test` and `review`. If you keep the shipped ones, your `implement` gate compiles this harness instead of building your code. It passes and proves nothing. "Decision 2: gates per repository" in `.claude/_onboarding.md` lists each key with its shipped value.
 
-After step 4, `/pipeline-show` prints three lines, one per dial (mode, approvals and swarm), as soon as the plugin works. It prints them on a project that was only copied and never onboarded, so it does not prove onboarding ran. To check that, search for the shipped gate commands. Bash:
+After step 4, `/pipeline-show` prints three lines, one per dial (mode, approvals and swarm), as soon as the plugin works. It prints them on a project that was only copied and never onboarded, so it does not prove onboarding ran. To check that, search for the shipped gate commands.
 
 ```bash
 grep -n "dashboard_gate\|plugin/tools" .agentry/pipeline.json
-```
-
-PowerShell:
-
-```powershell
-Select-String -Path .agentry\pipeline.json -Pattern 'dashboard_gate','plugin/tools'
 ```
 
 Onboarding ran when this prints nothing. Any match means a gate still runs this repository's commands. Then confirm the four keys from the box above, and that `.agentry/project/stack.md` describes your stack.
