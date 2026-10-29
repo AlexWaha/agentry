@@ -42,7 +42,7 @@ claude plugin list
 
 The plugin carries the tools, skills and hooks. Agents, rules and the pipeline config live in your project, and a one-time onboarding sets them up:
 
-1. Merge-copy `.claude/` and `.agentry/` from a clone of this repository into your project, and copy `CLAUDE.md` only if you have none. Do not replace the existing `.claude/` folder, it holds your plugin enablement. Exact commands for bash and PowerShell: [Onboard your project](docs/getting-started.md#onboard-your-project).
+1. Merge-copy `.claude/` and `.agentry/` from a clone of this repository into your project, and copy `CLAUDE.md` only if you have none. Do not replace the existing `.claude/` folder, it holds your plugin enablement. Exact commands: [Onboard your project](docs/getting-started.md#onboard-your-project).
 2. Open Claude Code at the project root and paste the prompt from `.claude/_init-prompt.md`.
 3. Answer its questions. It detects your stack and asks which commands gate each stage.
 
